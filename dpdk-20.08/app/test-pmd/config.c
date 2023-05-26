@@ -622,7 +622,7 @@ port_infos_display(portid_t port_id)
 	printf("\nConnect to socket: %u", port->socket_id);
 
 	if (port_numa[port_id] != NUMA_NO_CONFIG) {
-		mp = mbuf_pool_find(port_numa[port_id]);
+		mp = mbuf_pool_find(port_numa[port_id], 0);
 		if (mp)
 			printf("\nmemory allocation on the socket: %d",
 							port_numa[port_id]);
@@ -903,6 +903,15 @@ port_offload_cap_display(portid_t port_id)
 		printf("RX offload security:           ");
 		if (ports[port_id].dev_conf.rxmode.offloads &
 		    DEV_RX_OFFLOAD_SECURITY)
+			printf("on\n");
+		else
+			printf("off\n");
+	}
+
+	if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_BUFFER_SPLIT) {
+		printf("RX offload buffer split:       ");
+		if (ports[port_id].dev_conf.rxmode.offloads &
+		    DEV_RX_OFFLOAD_BUFFER_SPLIT)
 			printf("on\n");
 		else
 			printf("off\n");
@@ -2968,6 +2977,51 @@ set_tx_pkt_split(const char *name)
 }
 
 void
+show_rx_pkt_segments(void)
+{
+	uint32_t i, n;
+
+	n = rx_pkt_nb_segs;
+	printf("Number of segments: %u\n", n);
+	if (n) {
+		printf("Segment sizes: ");
+		for (i = 0; i != n - 1; i++)
+			printf("%hu,", rx_pkt_seg_lengths[i]);
+		printf("%hu\n", rx_pkt_seg_lengths[i]);
+	}
+}
+
+void
+set_rx_pkt_segments(unsigned int *seg_lengths, unsigned int nb_segs)
+{
+	unsigned int i;
+
+	if (nb_segs >= MAX_SEGS_BUFFER_SPLIT) {
+		printf("nb segments per RX packets=%u >= "
+		       "MAX_SEGS_BUFFER_SPLIT - ignored\n", nb_segs);
+		return;
+	}
+
+	/*
+	 * No extra check here, the segment
+	 * length will be checked by PMD
+	 * in the extended queue setup.
+	 **/
+	for (i = 0; i < nb_segs; i++) {
+		if (seg_lengths[i] >= UINT16_MAX) {
+			printf("length[%u]=%u > UINT16_MAX - give up\n",
+			       i, seg_lengths[i]);
+			return;
+		}
+	}
+
+	for (i = 0; i < nb_segs; i++)
+		rx_pkt_seg_lengths[i] = (uint16_t) seg_lengths[i];
+
+	rx_pkt_nb_segs = (uint8_t) nb_segs;
+}
+
+void
 show_tx_pkt_segments(void)
 {
 	uint32_t i, n;
@@ -3005,9 +3059,9 @@ set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs)
 	 */
 	tx_pkt_len = 0;
 	for (i = 0; i < nb_segs; i++) {
-		if (seg_lengths[i] > (unsigned) mbuf_data_size) {
+		if (seg_lengths[i] > mbuf_data_size[0]) {
 			printf("length[%u]=%u > mbuf_data_size=%u - give up\n",
-			       i, seg_lengths[i], (unsigned) mbuf_data_size);
+			       i, seg_lengths[i], mbuf_data_size[0]);
 			return;
 		}
 		tx_pkt_len = (uint16_t)(tx_pkt_len + seg_lengths[i]);

@@ -272,6 +272,15 @@ typedef int (*eth_tx_queue_setup_t)(struct rte_eth_dev *dev,
 				    const struct rte_eth_txconf *tx_conf);
 /**< @internal Setup a transmit queue of an Ethernet device. */
 
+typedef int (*eth_rx_queue_setup_ex_t)(struct rte_eth_dev *dev,
+				       uint16_t rx_queue_id,
+				       uint16_t nb_rx_desc,
+				       unsigned int socket_id,
+				       const struct rte_eth_rxconf *rx_conf,
+				       const struct rte_eth_rxseg *rx_seg,
+				       uint16_t n_seg);
+/**< @internal extended Set up a receive queue of an Ethernet device. */
+
 typedef int (*eth_rx_enable_intr_t)(struct rte_eth_dev *dev,
 				    uint16_t rx_queue_id);
 /**< @internal Enable interrupt of a receive queue of an Ethernet device. */
@@ -296,6 +305,9 @@ typedef int (*eth_rx_descriptor_status_t)(void *rxq, uint16_t offset);
 typedef int (*eth_tx_descriptor_status_t)(void *txq, uint16_t offset);
 /**< @internal Check the status of a Tx descriptor */
 
+typedef int (*eth_tx_descriptors_used_t)(void *txq);
+/**< @internal Check the status of a Tx descriptor */
+
 typedef int (*eth_fw_version_get_t)(struct rte_eth_dev *dev,
 				     char *fw_version, size_t fw_size);
 /**< @internal Get firmware information of an Ethernet device. */
@@ -305,6 +317,10 @@ typedef int (*eth_tx_done_cleanup_t)(void *txq, uint32_t free_cnt);
 
 typedef void (*eth_rxq_info_get_t)(struct rte_eth_dev *dev,
 	uint16_t rx_queue_id, struct rte_eth_rxq_info *qinfo);
+
+typedef int (*eth_txq_set_post_callback)(struct rte_eth_dev *dev,
+	uint16_t tx_queue_id,
+	rte_post_tx_callback_fn fn, void *user_param);
 
 typedef void (*eth_txq_info_get_t)(struct rte_eth_dev *dev,
 	uint16_t tx_queue_id, struct rte_eth_txq_info *qinfo);
@@ -603,6 +619,13 @@ typedef int (*eth_tx_hairpin_queue_setup_t)
 	 uint16_t nb_tx_desc,
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
 
+typedef int (*eth_memcpy_to_dm_t)
+	(struct rte_eth_dev *dev, void *,
+	 int off, size_t len);
+typedef int (*eth_memcpy_from_dm_t)
+	(struct rte_eth_dev *dev, void *,
+	 int off, size_t len);
+
 /**
  * @internal A structure containing the functions exported by an Ethernet driver.
  */
@@ -640,6 +663,8 @@ struct eth_dev_ops {
 	eth_dev_infos_get_t        dev_infos_get; /**< Get device info. */
 	eth_rxq_info_get_t         rxq_info_get; /**< retrieve RX queue information. */
 	eth_txq_info_get_t         txq_info_get; /**< retrieve TX queue information. */
+	eth_txq_set_post_callback  txq_set_post_send_cb; /**<set TX queue post send callback. */
+
 	eth_burst_mode_get_t       rx_burst_mode_get; /**< Get RX burst mode */
 	eth_burst_mode_get_t       tx_burst_mode_get; /**< Get TX burst mode */
 	eth_fw_version_get_t       fw_version_get; /**< Get firmware version. */
@@ -659,6 +684,7 @@ struct eth_dev_ops {
 	eth_queue_start_t          tx_queue_start;/**< Start TX for a queue. */
 	eth_queue_stop_t           tx_queue_stop; /**< Stop TX for a queue. */
 	eth_rx_queue_setup_t       rx_queue_setup;/**< Set up device RX queue. */
+	eth_rx_queue_setup_ex_t    rx_queue_setup_ex;/**< Extended RX setup. */
 	eth_queue_release_t        rx_queue_release; /**< Release RX queue. */
 	eth_rx_queue_count_t       rx_queue_count;
 	/**< Get the number of used RX descriptors. */
@@ -667,6 +693,7 @@ struct eth_dev_ops {
 	/**< Check the status of a Rx descriptor. */
 	eth_tx_descriptor_status_t tx_descriptor_status;
 	/**< Check the status of a Tx descriptor. */
+	eth_tx_descriptors_used_t tx_descriptors_used;
 	/*
 	 * Static inline functions use functions ABOVE this comment.
 	 * New dev_ops functions should be added BELOW to avoid breaking ABI.
@@ -752,6 +779,9 @@ struct eth_dev_ops {
 	/**< Set up device RX hairpin queue. */
 	eth_tx_hairpin_queue_setup_t tx_hairpin_queue_setup;
 	/**< Set up device TX hairpin queue. */
+
+	eth_memcpy_to_dm_t memcpy_to_dm;
+	eth_memcpy_from_dm_t memcpy_from_dm;
 };
 
 /**

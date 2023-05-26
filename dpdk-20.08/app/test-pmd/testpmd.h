@@ -42,6 +42,13 @@
  */
 #define RTE_MAX_SEGS_PER_PKT 255 /**< nb_segs is a 8-bit unsigned char. */
 
+/*
+ * The maximum number of segments per packet is used to configure
+ * buffer split feature, also specifies the maximum amount of
+ * optional Rx pools to allocate mbufs to split.
+ */
+#define MAX_SEGS_BUFFER_SPLIT 8 /**< nb_segs is a 8-bit unsigned char. */
+
 #define MAX_PKT_BURST 512
 #define DEF_PKT_BURST 32
 
@@ -397,7 +404,9 @@ extern uint64_t noisy_lkup_num_reads_writes;
 extern uint8_t dcb_config;
 extern uint8_t dcb_test;
 
-extern uint16_t mbuf_data_size; /**< Mbuf data space size. */
+extern uint32_t mbuf_data_size_n;
+extern uint16_t mbuf_data_size[MAX_SEGS_BUFFER_SPLIT];
+/**< Mbuf data space size. */
 extern uint32_t param_total_num_mbufs;
 
 extern uint16_t stats_period;
@@ -413,6 +422,13 @@ extern uint8_t bitrate_enabled;
 #endif
 
 extern struct rte_fdir_conf fdir_conf;
+
+/*
+ * Configuration of packet segments used to scatter received packets
+ * if some of split features is configured.
+ */
+extern uint16_t rx_pkt_seg_lengths[MAX_SEGS_BUFFER_SPLIT];
+extern uint8_t  rx_pkt_nb_segs; /**< Number of segments to split */
 
 /*
  * Configuration of packet segments used by the "txonly" processing engine.
@@ -608,17 +624,22 @@ current_fwd_lcore(void)
 
 /* Mbuf Pools */
 static inline void
-mbuf_poolname_build(unsigned int sock_id, char* mp_name, int name_size)
+mbuf_poolname_build(unsigned int sock_id, char *mp_name,
+		    int name_size, unsigned int idx)
 {
-	snprintf(mp_name, name_size, "mbuf_pool_socket_%u", sock_id);
+	if (!idx)
+		snprintf(mp_name, name_size, "mbuf_pool_socket_%u", sock_id);
+	else
+		snprintf(mp_name, name_size, "mbuf_pool_socket_%u_%u",
+			 sock_id, idx);
 }
 
 static inline struct rte_mempool *
-mbuf_pool_find(unsigned int sock_id)
+mbuf_pool_find(unsigned int sock_id, unsigned int idx)
 {
 	char pool_name[RTE_MEMPOOL_NAMESIZE];
 
-	mbuf_poolname_build(sock_id, pool_name, sizeof(pool_name));
+	mbuf_poolname_build(sock_id, pool_name, sizeof(pool_name), idx);
 	return rte_mempool_lookup((const char *)pool_name);
 }
 
@@ -775,6 +796,8 @@ void set_xstats_hide_zero(uint8_t on_off);
 void set_verbose_level(uint16_t vb_level);
 void set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs);
 void show_tx_pkt_segments(void);
+void show_rx_pkt_segments(void);
+void set_rx_pkt_segments(unsigned int *seg_lengths, unsigned int nb_segs);
 void set_tx_pkt_times(unsigned int *tx_times);
 void show_tx_pkt_times(void);
 void set_tx_pkt_split(const char *name);
@@ -817,6 +840,12 @@ void port_rss_reta_info(portid_t port_id,
 			uint16_t nb_entries);
 
 void set_vf_traffic(portid_t port_id, uint8_t is_rx, uint16_t vf, uint8_t on);
+
+int
+rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
+	       uint16_t nb_rx_desc, unsigned int socket_id,
+	       const struct rte_eth_rxconf *rx_conf,
+	       struct rte_mempool *mp);
 
 int set_queue_rate_limit(portid_t port_id, uint16_t queue_idx, uint16_t rate);
 int set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate,

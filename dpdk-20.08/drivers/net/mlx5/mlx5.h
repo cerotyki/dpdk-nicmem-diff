@@ -164,6 +164,9 @@ struct mlx5_stats_ctrl {
 /* Maximal size of aggregated LRO packet. */
 #define MLX5_MAX_LRO_SIZE (UINT8_MAX * MLX5_LRO_SEG_CHUNK_SIZE)
 
+/* Maximal number of segments to split. */
+#define MLX5_MAX_RXQ_NSEG (1u << MLX5_MAX_LOG_RQ_SEGS)
+
 /* LRO configurations structure. */
 struct mlx5_lro_config {
 	uint32_t supported:1; /* Whether LRO is supported. */
@@ -597,6 +600,8 @@ struct mlx5_flex_parser_profiles {
 	void *obj;		/* Flex parser node object. */
 };
 
+#define MLX5_DM_OFF (0x1000)
+
 /*
  * Shared Infiniband device context for Master/Representors
  * which belong to same IB device with multiple IB ports.
@@ -608,6 +613,8 @@ struct mlx5_dev_ctx_shared {
 	uint32_t max_port; /* Maximal IB device port index. */
 	void *ctx; /* Verbs/DV/DevX context. */
 	void *pd; /* Protection Domain. */
+	int dm_size; /* Device memory size. */
+	void *dm; /* Device memory. */
 	uint32_t pdn; /* Protection Domain number. */
 	uint32_t tdn; /* Transport Domain number. */
 	char ibdev_name[DEV_SYSFS_NAME_MAX]; /* SYSFS dev name. */
@@ -1010,7 +1017,8 @@ int mlx5_os_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 void mlx5_os_dev_shared_handler_install(struct mlx5_dev_ctx_shared *sh);
 void mlx5_os_dev_shared_handler_uninstall(struct mlx5_dev_ctx_shared *sh);
 void mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb,
-			   mlx5_dereg_mr_t *dereg_mr_cb);
+			   mlx5_dereg_mr_t *dereg_mr_cb,
+			   mlx5_reg_dm_mr_t *reg_dm_mr_cb);
 void mlx5_os_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index);
 int mlx5_os_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac,
 			 uint32_t index);
@@ -1020,6 +1028,8 @@ int mlx5_os_vf_mac_addr_modify(struct mlx5_priv *priv, unsigned int iface_idx,
 int mlx5_os_set_promisc(struct rte_eth_dev *dev, int enable);
 int mlx5_os_set_allmulti(struct rte_eth_dev *dev, int enable);
 int mlx5_os_set_nonblock_channel_fd(int fd);
+int mlx5_memcpy_to_dm(struct rte_eth_dev *dev, void *src, int off, size_t len);
+int mlx5_memcpy_from_dm(struct rte_eth_dev *dev, void *src, int off, size_t len);
 
 /* mlx5_txpp.c */
 

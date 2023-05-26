@@ -938,6 +938,16 @@ struct rte_eth_txmode {
 };
 
 /**
+ * A structure used to configure an RX packet segment to split.
+ */
+struct rte_eth_rxseg {
+	struct rte_mempool *mp; /**< Memory pools to allocate segment from */
+	uint16_t length; /**< Segment maximal data length */
+	uint16_t offset; /**< Data offset from beggining of mbuf data buffer */
+	uint32_t reserved; /**< Reserved field */
+};
+
+/**
  * A structure used to configure an RX ring of an Ethernet port.
  */
 struct rte_eth_rxconf {
@@ -973,7 +983,9 @@ struct rte_eth_txconf {
 	 */
 	uint64_t offloads;
 
-	uint64_t reserved_64s[2]; /**< Reserved for future fields */
+	uint32_t inline_min;
+	uint32_t reserved_32s[1];
+	uint64_t reserved_64s[1]; /**< Reserved for future fields */
 	void *reserved_ptrs[2];   /**< Reserved for future fields */
 };
 
@@ -1228,6 +1240,7 @@ struct rte_eth_conf {
 #define DEV_RX_OFFLOAD_SCTP_CKSUM	0x00020000
 #define DEV_RX_OFFLOAD_OUTER_UDP_CKSUM  0x00040000
 #define DEV_RX_OFFLOAD_RSS_HASH		0x00080000
+#define DEV_RX_OFFLOAD_BUFFER_SPLIT     0x00100000
 
 #define DEV_RX_OFFLOAD_CHECKSUM (DEV_RX_OFFLOAD_IPV4_CKSUM | \
 				 DEV_RX_OFFLOAD_UDP_CKSUM | \
@@ -1589,6 +1602,9 @@ typedef uint16_t (*rte_rx_callback_fn)(uint16_t port_id, uint16_t queue,
  */
 typedef uint16_t (*rte_tx_callback_fn)(uint16_t port_id, uint16_t queue,
 	struct rte_mbuf *pkts[], uint16_t nb_pkts, void *user_param);
+
+typedef uint16_t (*rte_post_tx_callback_fn)(struct rte_mbuf *pkts[],
+					    uint16_t nb_pkts, void *user_param);
 
 /**
  * Possible states of an ethdev port.
@@ -1987,6 +2003,11 @@ int rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		uint16_t nb_rx_desc, unsigned int socket_id,
 		const struct rte_eth_rxconf *rx_conf,
 		struct rte_mempool *mb_pool);
+
+int rte_eth_rx_queue_setup_ex(uint16_t port_id, uint16_t rx_queue_id,
+		uint16_t nb_rx_desc, unsigned int socket_id,
+		const struct rte_eth_rxconf *rx_conf,
+		const struct rte_eth_rxseg *rx_seg, uint16_t n_seg);
 
 /**
  * @warning
@@ -3801,6 +3822,10 @@ const struct rte_eth_rxtx_callback *
 rte_eth_add_tx_callback(uint16_t port_id, uint16_t queue_id,
 		rte_tx_callback_fn fn, void *user_param);
 
+int
+rte_eth_post_tx_callback_set(uint16_t port_id, uint16_t queue_id,
+			     rte_post_tx_callback_fn fn, void *user_param);
+
 /**
  * Remove an RX packet callback from a given port and queue.
  *
@@ -4692,6 +4717,28 @@ static inline int rte_eth_tx_descriptor_status(uint16_t port_id,
 	return (*dev->dev_ops->tx_descriptor_status)(txq, offset);
 }
 
+
+static inline int rte_eth_tx_descriptors_used(uint16_t port_id,
+	uint16_t queue_id)
+{
+	struct rte_eth_dev *dev;
+	void *txq;
+
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+#endif
+	dev = &rte_eth_devices[port_id];
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	if (queue_id >= dev->data->nb_tx_queues)
+		return -ENODEV;
+#endif
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_descriptor_status, -ENOTSUP);
+	txq = dev->data->tx_queues[queue_id];
+
+	return (*dev->dev_ops->tx_descriptors_used)(txq);
+}
+
+
 /**
  * Send a burst of output packets on a transmit queue of an Ethernet device.
  *
@@ -4982,6 +5029,40 @@ rte_eth_tx_buffer(uint16_t port_id, uint16_t queue_id,
 		return 0;
 
 	return rte_eth_tx_buffer_flush(port_id, queue_id, buffer);
+}
+
+static __rte_always_inline int
+rte_eth_memcpy_to_dm(uint16_t port_id, void *src, int off, size_t size)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, 0);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->tx_pkt_burst, 0);
+
+	if (queue_id >= dev->data->nb_tx_queues) {
+		RTE_ETHDEV_LOG(ERR, "Invalid TX queue_id=%u\n", queue_id);
+		return 0;
+	}
+#endif
+	return (*dev->dev_ops->memcpy_to_dm)(dev, src, off, size);
+}
+
+static __rte_always_inline int
+rte_eth_memcpy_from_dm(uint16_t port_id, void *dst, int off, size_t size)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, 0);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->tx_pkt_burst, 0);
+
+	if (queue_id >= dev->data->nb_tx_queues) {
+		RTE_ETHDEV_LOG(ERR, "Invalid TX queue_id=%u\n", queue_id);
+		return 0;
+	}
+#endif
+	return (*dev->dev_ops->memcpy_from_dm)(dev, dst, off, size);
 }
 
 #ifdef __cplusplus
