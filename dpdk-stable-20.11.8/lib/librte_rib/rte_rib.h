@@ -18,6 +18,9 @@
  * Level compressed tree implementation for IPv4 Longest Prefix Match
  */
 
+#include <stdlib.h>
+#include <stdint.h>
+
 #include <rte_compat.h>
 
 #ifdef __cplusplus
@@ -279,8 +282,6 @@ rte_rib_find_existing(const char *name);
  *
  * @param rib
  *   RIB object handle
- * @return
- *   None
  */
 __rte_experimental
 void

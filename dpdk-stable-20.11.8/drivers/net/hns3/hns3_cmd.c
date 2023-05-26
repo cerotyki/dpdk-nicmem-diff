@@ -1,22 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
-#include <errno.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/queue.h>
-#include <inttypes.h>
-#include <unistd.h>
-#include <rte_bus_pci.h>
-#include <rte_common.h>
-#include <rte_cycles.h>
-#include <rte_dev.h>
-#include <rte_eal.h>
-#include <rte_ether.h>
-#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_io.h>
 
@@ -24,10 +9,6 @@
 #include "hns3_regs.h"
 #include "hns3_intr.h"
 #include "hns3_logs.h"
-
-#define hns3_is_csq(ring) ((ring)->flag & HNS3_TYPE_CSQ)
-
-#define cmq_ring_to_dev(ring)   (&(ring)->dev->pdev->dev)
 
 static int
 hns3_ring_space(struct hns3_cmq_ring *ring)
@@ -63,10 +44,12 @@ static int
 hns3_allocate_dma_mem(struct hns3_hw *hw, struct hns3_cmq_ring *ring,
 		      uint64_t size, uint32_t alignment)
 {
+	static uint64_t hns3_dma_memzone_id;
 	const struct rte_memzone *mz = NULL;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 
-	snprintf(z_name, sizeof(z_name), "hns3_dma_%" PRIu64, rte_rand());
+	snprintf(z_name, sizeof(z_name), "hns3_dma_%" PRIu64,
+		__atomic_fetch_add(&hns3_dma_memzone_id, 1, __ATOMIC_RELAXED));
 	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY,
 					 RTE_MEMZONE_IOVA_CONTIG, alignment,
 					 RTE_PGSIZE_2M);
@@ -210,13 +193,14 @@ hns3_cmd_csq_clean(struct hns3_hw *hw)
 {
 	struct hns3_cmq_ring *csq = &hw->cmq.csq;
 	uint32_t head;
+	uint32_t addr;
 	int clean;
 
 	head = hns3_read_dev(hw, HNS3_CMDQ_TX_HEAD_REG);
-
-	if (!is_valid_csq_clean_head(csq, head)) {
-		hns3_err(hw, "wrong cmd head (%u, %u-%u)", head,
-			    csq->next_to_use, csq->next_to_clean);
+	addr = hns3_read_dev(hw, HNS3_CMDQ_TX_ADDR_L_REG);
+	if (!is_valid_csq_clean_head(csq, head) || addr == 0) {
+		hns3_err(hw, "wrong cmd addr(%0x) head (%u, %u-%u)", addr, head,
+			 csq->next_to_use, csq->next_to_clean);
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 			rte_atomic16_set(&hw->reset.disable_cmd, 1);
 			hns3_schedule_delayed_reset(HNS3_DEV_HW_TO_ADAPTER(hw));
@@ -426,8 +410,46 @@ hns3_cmd_send(struct hns3_hw *hw, struct hns3_cmd_desc *desc, int num)
 	return retval;
 }
 
-static enum hns3_cmd_status
-hns3_cmd_query_firmware_version(struct hns3_hw *hw, uint32_t *version)
+static void hns3_parse_capability(struct hns3_hw *hw,
+				  struct hns3_query_version_cmd *cmd)
+{
+	uint32_t caps = rte_le_to_cpu_32(cmd->caps[0]);
+
+	if (hns3_get_bit(caps, HNS3_CAPS_UDP_GSO_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_UDP_GSO_B, 1);
+	if (hns3_get_bit(caps, HNS3_CAPS_FD_QUEUE_REGION_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B,
+			     1);
+	if (hns3_get_bit(caps, HNS3_CAPS_PTP_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_PTP_B, 1);
+	if (hns3_get_bit(caps, HNS3_CAPS_TX_PUSH_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_TX_PUSH_B, 1);
+	/*
+	 * Currently, the query of link status and link info on copper ports
+	 * are not supported. So it is necessary for driver to set the copper
+	 * capability bit to zero when the firmware supports the configuration
+	 * of the PHY.
+	 */
+	if (hns3_get_bit(caps, HNS3_CAPS_PHY_IMP_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_COPPER_B, 0);
+	if (hns3_get_bit(caps, HNS3_CAPS_TQP_TXRX_INDEP_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_INDEP_TXRX_B, 1);
+	if (hns3_get_bit(caps, HNS3_CAPS_STASH_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_STASH_B, 1);
+}
+
+static uint32_t
+hns3_build_api_caps(void)
+{
+	uint32_t api_caps = 0;
+
+	hns3_set_bit(api_caps, HNS3_API_CAP_FLEX_RSS_TBL_B, 1);
+
+	return rte_cpu_to_le_32(api_caps);
+}
+
+static int
+hns3_cmd_query_firmware_version_and_capability(struct hns3_hw *hw)
 {
 	struct hns3_query_version_cmd *resp;
 	struct hns3_cmd_desc desc;
@@ -435,13 +457,17 @@ hns3_cmd_query_firmware_version(struct hns3_hw *hw, uint32_t *version)
 
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_QUERY_FW_VER, 1);
 	resp = (struct hns3_query_version_cmd *)desc.data;
+	resp->api_caps = hns3_build_api_caps();
 
 	/* Initialize the cmd function */
 	ret = hns3_cmd_send(hw, &desc, 1);
-	if (ret == 0)
-		*version = rte_le_to_cpu_32(resp->firmware);
+	if (ret)
+		return ret;
 
-	return ret;
+	hw->fw_version = rte_le_to_cpu_32(resp->firmware);
+	hns3_parse_capability(hw, resp);
+
+	return 0;
 }
 
 int
@@ -519,13 +545,13 @@ hns3_cmd_init(struct hns3_hw *hw)
 	}
 	rte_atomic16_clear(&hw->reset.disable_cmd);
 
-	ret = hns3_cmd_query_firmware_version(hw, &version);
+	ret = hns3_cmd_query_firmware_version_and_capability(hw);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "firmware version query failed %d", ret);
 		goto err_cmd_init;
 	}
 
-	hw->fw_version = version;
+	version = hw->fw_version;
 	PMD_INIT_LOG(INFO, "The firmware version is %lu.%lu.%lu.%lu",
 		     hns3_get_field(version, HNS3_FW_VERSION_BYTE3_M,
 				    HNS3_FW_VERSION_BYTE3_S),
@@ -563,9 +589,21 @@ hns3_cmd_destroy_queue(struct hns3_hw *hw)
 void
 hns3_cmd_uninit(struct hns3_hw *hw)
 {
+	rte_atomic16_set(&hw->reset.disable_cmd, 1);
+
+	/*
+	 * A delay is added to ensure that the register cleanup operations
+	 * will not be performed concurrently with the firmware command and
+	 * ensure that all the reserved commands are executed.
+	 * Concurrency may occur in two scenarios: asynchronous command and
+	 * timeout command. If the command fails to be executed due to busy
+	 * scheduling, the command will be processed in the next scheduling
+	 * of the firmware.
+	 */
+	rte_delay_ms(HNS3_CMDQ_CLEAR_WAIT_TIME);
+
 	rte_spinlock_lock(&hw->cmq.csq.lock);
 	rte_spinlock_lock(&hw->cmq.crq.lock);
-	rte_atomic16_set(&hw->reset.disable_cmd, 1);
 	hns3_cmd_clear_regs(hw);
 	rte_spinlock_unlock(&hw->cmq.crq.lock);
 	rte_spinlock_unlock(&hw->cmq.csq.lock);

@@ -13,6 +13,7 @@
 #include <rte_kvargs.h>
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
+#include <rte_security_driver.h>
 #include <rte_string_fns.h>
 #include <rte_time.h>
 
@@ -50,6 +51,8 @@
 /* ETH_HLEN+ETH_FCS+2*VLAN_HLEN */
 #define NIX_L2_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + 8)
+#define NIX_L2_MAX_LEN \
+	(RTE_ETHER_MTU + NIX_L2_OVERHEAD)
 
 /* HW config of frame size doesn't include FCS */
 #define NIX_MAX_HW_FRS			9212
@@ -119,7 +122,8 @@
 #define NIX_RSS_OFFLOAD		(ETH_RSS_PORT | ETH_RSS_IP | ETH_RSS_UDP |\
 				 ETH_RSS_TCP | ETH_RSS_SCTP | \
 				 ETH_RSS_TUNNEL | ETH_RSS_L2_PAYLOAD | \
-				 NIX_RSS_L3_L4_SRC_DST)
+				 NIX_RSS_L3_L4_SRC_DST | ETH_RSS_LEVEL_MASK | \
+				 ETH_RSS_C_VLAN)
 
 #define NIX_TX_OFFLOAD_CAPA ( \
 	DEV_TX_OFFLOAD_MBUF_FAST_FREE	| \
@@ -171,6 +175,14 @@ enum nix_q_size_e {
 	nix_q_size_256K,
 	nix_q_size_1M,	/* Million entries */
 	nix_q_size_max
+};
+
+enum nix_lso_tun_type {
+	NIX_LSO_TUN_V4V4,
+	NIX_LSO_TUN_V4V6,
+	NIX_LSO_TUN_V6V4,
+	NIX_LSO_TUN_V6V6,
+	NIX_LSO_TUN_MAX,
 };
 
 struct otx2_qint {
@@ -267,7 +279,9 @@ struct otx2_eth_dev {
 	uint8_t tx_chan_cnt;
 	uint8_t lso_tsov4_idx;
 	uint8_t lso_tsov6_idx;
-	uint8_t lso_base_idx;
+	uint8_t lso_udp_tun_idx[NIX_LSO_TUN_MAX];
+	uint8_t lso_tun_idx[NIX_LSO_TUN_MAX];
+	uint64_t lso_tun_fmt;
 	uint8_t mac_addr[RTE_ETHER_ADDR_LEN];
 	uint8_t mkex_pfl_name[MKEX_NAME_LEN];
 	uint8_t max_mac_entries;
@@ -350,6 +364,7 @@ struct otx2_eth_txq {
 	rte_iova_t fc_iova;
 	uint16_t sqes_per_sqb_log2;
 	int16_t nb_sqb_bufs_adj;
+	uint64_t lso_tun_fmt;
 	RTE_MARKER slow_path_start;
 	uint16_t nb_sqb_bufs;
 	uint16_t sq;
@@ -437,6 +452,8 @@ int otx2_nix_set_mc_addr_list(struct rte_eth_dev *eth_dev,
 /* MTU */
 int otx2_nix_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu);
 int otx2_nix_recalc_mtu(struct rte_eth_dev *eth_dev);
+void otx2_nix_enable_mseg_on_jumbo(struct otx2_eth_rxq *rxq);
+
 
 /* Link */
 void otx2_nix_toggle_flag_link_cfg(struct otx2_eth_dev *dev, bool set);

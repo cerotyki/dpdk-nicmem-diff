@@ -109,7 +109,7 @@ static inline int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
 	struct rte_eth_conf port_conf = port_conf_default;
-	const uint16_t rxRings = 1, txRings = rte_lcore_count() - 1;
+	const uint16_t rxRings = 1, txRings = 1;
 	int retval;
 	uint16_t q;
 	uint16_t nb_rxd = RX_RING_SIZE;
@@ -265,8 +265,8 @@ lcore_rx(struct lcore_params *p)
  * packets are then send straight to the tx core.
  */
 #if 0
-	rte_distributor_process(d, bufs, nb_rx);
-	const uint16_t nb_ret = rte_distributor_returned_pktsd,
+		rte_distributor_process(p->d, bufs, nb_rx);
+		const uint16_t nb_ret = rte_distributor_returned_pkts(p->d,
 			bufs, BURST_SIZE*2);
 
 		app_stats.rx.returned_pkts += nb_ret;
@@ -612,7 +612,7 @@ static int
 init_power_library(void)
 {
 	int ret = 0, lcore_id;
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		/* init power management library */
 		ret = rte_power_init(lcore_id);
 		if (ret) {
@@ -805,7 +805,7 @@ main(int argc, char *argv[])
 		 * available, the higher frequency cores will go to the
 		 * distributor first, then rx, then tx.
 		 */
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 
 			rte_power_get_capabilities(lcore_id, &lcore_cap);
 
@@ -838,7 +838,7 @@ main(int argc, char *argv[])
 	 * after the high performing core assignment above, pre-assign
 	 * them here.
 	 */
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (lcore_id == (unsigned int)distr_core_id ||
 				lcore_id == (unsigned int)rx_core_id ||
 				lcore_id == (unsigned int)tx_core_id)
@@ -869,7 +869,7 @@ main(int argc, char *argv[])
 	 * Kick off all the worker threads first, avoiding the pre-assigned
 	 * lcore_ids for tx, rx and distributor workloads.
 	 */
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (lcore_id == (unsigned int)distr_core_id ||
 				lcore_id == (unsigned int)rx_core_id ||
 				lcore_id == (unsigned int)tx_core_id)
@@ -922,7 +922,7 @@ main(int argc, char *argv[])
 		usleep(1000);
 	}
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
@@ -931,6 +931,9 @@ main(int argc, char *argv[])
 
 	rte_free(pd);
 	rte_free(pr);
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

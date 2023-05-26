@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2014 Intel Corporation
 
@@ -12,13 +13,16 @@ import pexpect
 def default_autotest(child, test_name):
     child.sendline(test_name)
     result = child.expect(["Test OK", "Test Failed",
-                           "Command not found", pexpect.TIMEOUT], timeout=900)
+                           "Command not found", pexpect.TIMEOUT,
+                           "Test Skipped"], timeout=900)
     if result == 1:
         return -1, "Fail"
     elif result == 2:
         return -1, "Fail [Not found]"
     elif result == 3:
         return -1, "Fail [Timeout]"
+    elif result == 4:
+        return 0, "Skipped [Not Run]"
     return 0, "Success"
 
 # autotest used to run dump commands
@@ -102,7 +106,7 @@ def rwlock_autotest(child, test_name):
         index = child.expect(["Test OK",
                               "Test Failed",
                               "Hello from core ([0-9]*) !",
-                              "Global write lock taken on master "
+                              "Global write lock taken on main "
                               "core ([0-9]*)",
                               pexpect.TIMEOUT], timeout=10)
         # ok

@@ -212,8 +212,30 @@ eth_af_packet_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 
 		/* point at the next incoming frame */
-		if ((ppd->tp_status != TP_STATUS_AVAILABLE) &&
-		    (poll(&pfd, 1, -1) < 0))
+		if (ppd->tp_status != TP_STATUS_AVAILABLE) {
+			if (poll(&pfd, 1, -1) < 0)
+				break;
+
+			/* poll() can return POLLERR if the interface is down */
+			if (pfd.revents & POLLERR)
+				break;
+		}
+
+		/*
+		 * poll() will almost always return POLLOUT, even if there
+		 * are no extra buffers available
+		 *
+		 * This happens, because packet_poll() calls datagram_poll()
+		 * which checks the space left in the socket buffer and,
+		 * in the case of packet_mmap, the default socket buffer length
+		 * doesn't match the requested size for the tx_ring.
+		 * As such, there is almost always space left in socket buffer,
+		 * which doesn't seem to be correlated to the requested size
+		 * for the tx_ring in packet_mmap.
+		 *
+		 * This results in poll() returning POLLOUT.
+		 */
+		if (ppd->tp_status != TP_STATUS_AVAILABLE)
 			break;
 
 		/* copy the tx frame data */
@@ -272,7 +294,7 @@ eth_dev_start(struct rte_eth_dev *dev)
 /*
  * This function gets called when the current port gets stopped.
  */
-static void
+static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
 	unsigned i;
@@ -296,6 +318,7 @@ eth_dev_stop(struct rte_eth_dev *dev)
 	}
 
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+	return 0;
 }
 
 static int
@@ -376,9 +399,34 @@ eth_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
-eth_dev_close(struct rte_eth_dev *dev __rte_unused)
+static int
+eth_dev_close(struct rte_eth_dev *dev)
 {
+	struct pmd_internals *internals;
+	struct tpacket_req *req;
+	unsigned int q;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
+	PMD_LOG(INFO, "Closing AF_PACKET ethdev on NUMA socket %u",
+		rte_socket_id());
+
+	internals = dev->data->dev_private;
+	req = &internals->req;
+	for (q = 0; q < internals->nb_queues; q++) {
+		munmap(internals->rx_queue[q].map,
+			2 * req->tp_block_size * req->tp_block_nr);
+		rte_free(internals->rx_queue[q].rd);
+		rte_free(internals->tx_queue[q].rd);
+	}
+	free(internals->if_name);
+	rte_free(internals->rx_queue);
+	rte_free(internals->tx_queue);
+
+	/* mac_addrs must not be freed alone because part of dev_private */
+	dev->data->mac_addrs = NULL;
+	return 0;
 }
 
 static void
@@ -834,6 +882,7 @@ rte_pmd_init_internals(struct rte_vdev_device *dev,
 	data->nb_tx_queues = (uint16_t)nb_queues;
 	data->dev_link = pmd_link;
 	data->mac_addrs = &(*internals)->eth_addr;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	(*eth_dev)->dev_ops = &ops;
 
@@ -1032,13 +1081,7 @@ exit:
 static int
 rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 {
-	struct rte_eth_dev *eth_dev = NULL;
-	struct pmd_internals *internals;
-	struct tpacket_req *req;
-	unsigned q;
-
-	PMD_LOG(INFO, "Closing AF_PACKET ethdev on numa socket %u",
-		rte_socket_id());
+	struct rte_eth_dev *eth_dev;
 
 	if (dev == NULL)
 		return -1;
@@ -1046,26 +1089,9 @@ rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 	/* find the ethdev entry */
 	eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(dev));
 	if (eth_dev == NULL)
-		return -1;
+		return 0; /* port already released */
 
-	/* mac_addrs must not be freed alone because part of dev_private */
-	eth_dev->data->mac_addrs = NULL;
-
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return rte_eth_dev_release_port(eth_dev);
-
-	internals = eth_dev->data->dev_private;
-	req = &internals->req;
-	for (q = 0; q < internals->nb_queues; q++) {
-		munmap(internals->rx_queue[q].map,
-			2 * req->tp_block_size * req->tp_block_nr);
-		rte_free(internals->rx_queue[q].rd);
-		rte_free(internals->tx_queue[q].rd);
-	}
-	free(internals->if_name);
-	rte_free(internals->rx_queue);
-	rte_free(internals->tx_queue);
-
+	eth_dev_close(eth_dev);
 	rte_eth_dev_release_port(eth_dev);
 
 	return 0;

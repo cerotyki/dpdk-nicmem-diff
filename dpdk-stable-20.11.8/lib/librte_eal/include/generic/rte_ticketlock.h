@@ -48,7 +48,6 @@ typedef union {
  * @param tl
  *   A pointer to the ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_init(rte_ticketlock_t *tl)
 {
@@ -61,7 +60,6 @@ rte_ticketlock_init(rte_ticketlock_t *tl)
  * @param tl
  *   A pointer to the ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_lock(rte_ticketlock_t *tl)
 {
@@ -75,7 +73,6 @@ rte_ticketlock_lock(rte_ticketlock_t *tl)
  * @param tl
  *   A pointer to the ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_unlock(rte_ticketlock_t *tl)
 {
@@ -91,17 +88,16 @@ rte_ticketlock_unlock(rte_ticketlock_t *tl)
  * @return
  *   1 if the lock is successfully taken; 0 otherwise.
  */
-__rte_experimental
 static inline int
 rte_ticketlock_trylock(rte_ticketlock_t *tl)
 {
-	rte_ticketlock_t old, new;
-	old.tickets = __atomic_load_n(&tl->tickets, __ATOMIC_RELAXED);
-	new.tickets = old.tickets;
-	new.s.next++;
-	if (old.s.next == old.s.current) {
-		if (__atomic_compare_exchange_n(&tl->tickets, &old.tickets,
-		    new.tickets, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+	rte_ticketlock_t oldl, newl;
+	oldl.tickets = __atomic_load_n(&tl->tickets, __ATOMIC_RELAXED);
+	newl.tickets = oldl.tickets;
+	newl.s.next++;
+	if (oldl.s.next == oldl.s.current) {
+		if (__atomic_compare_exchange_n(&tl->tickets, &oldl.tickets,
+		    newl.tickets, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
 			return 1;
 	}
 
@@ -116,7 +112,6 @@ rte_ticketlock_trylock(rte_ticketlock_t *tl)
  * @return
  *   1 if the lock is currently taken; 0 otherwise.
  */
-__rte_experimental
 static inline int
 rte_ticketlock_is_locked(rte_ticketlock_t *tl)
 {
@@ -148,7 +143,6 @@ typedef struct {
  * @param tlr
  *   A pointer to the recursive ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_recursive_init(rte_ticketlock_recursive_t *tlr)
 {
@@ -163,7 +157,6 @@ rte_ticketlock_recursive_init(rte_ticketlock_recursive_t *tlr)
  * @param tlr
  *   A pointer to the recursive ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_recursive_lock(rte_ticketlock_recursive_t *tlr)
 {
@@ -182,7 +175,6 @@ rte_ticketlock_recursive_lock(rte_ticketlock_recursive_t *tlr)
  * @param tlr
  *   A pointer to the recursive ticketlock.
  */
-__rte_experimental
 static inline void
 rte_ticketlock_recursive_unlock(rte_ticketlock_recursive_t *tlr)
 {
@@ -201,7 +193,6 @@ rte_ticketlock_recursive_unlock(rte_ticketlock_recursive_t *tlr)
  * @return
  *   1 if the lock is successfully taken; 0 otherwise.
  */
-__rte_experimental
 static inline int
 rte_ticketlock_recursive_trylock(rte_ticketlock_recursive_t *tlr)
 {

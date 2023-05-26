@@ -25,9 +25,6 @@ add_ether(struct rte_flow_item *items,
 	static struct rte_flow_item_eth eth_spec;
 	static struct rte_flow_item_eth eth_mask;
 
-	memset(&eth_spec, 0, sizeof(struct rte_flow_item_eth));
-	memset(&eth_mask, 0, sizeof(struct rte_flow_item_eth));
-
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_ETH;
 	items[items_counter].spec = &eth_spec;
 	items[items_counter].mask = &eth_mask;
@@ -38,16 +35,12 @@ add_vlan(struct rte_flow_item *items,
 	uint8_t items_counter,
 	__rte_unused struct additional_para para)
 {
-	static struct rte_flow_item_vlan vlan_spec;
-	static struct rte_flow_item_vlan vlan_mask;
-
-	uint16_t vlan_value = VLAN_VALUE;
-
-	memset(&vlan_spec, 0, sizeof(struct rte_flow_item_vlan));
-	memset(&vlan_mask, 0, sizeof(struct rte_flow_item_vlan));
-
-	vlan_spec.tci = RTE_BE16(vlan_value);
-	vlan_mask.tci = RTE_BE16(0xffff);
+	static struct rte_flow_item_vlan vlan_spec = {
+		.tci = RTE_BE16(VLAN_VALUE),
+	};
+	static struct rte_flow_item_vlan vlan_mask = {
+		.tci = RTE_BE16(0xffff),
+	};
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_VLAN;
 	items[items_counter].spec = &vlan_spec;
@@ -61,10 +54,7 @@ add_ipv4(struct rte_flow_item *items,
 	static struct rte_flow_item_ipv4 ipv4_spec;
 	static struct rte_flow_item_ipv4 ipv4_mask;
 
-	memset(&ipv4_spec, 0, sizeof(struct rte_flow_item_ipv4));
-	memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
-
-	ipv4_spec.hdr.src_addr = para.src_ip;
+	ipv4_spec.hdr.src_addr = RTE_BE32(para.src_ip);
 	ipv4_mask.hdr.src_addr = RTE_BE32(0xffffffff);
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -79,9 +69,6 @@ add_ipv6(struct rte_flow_item *items,
 {
 	static struct rte_flow_item_ipv6 ipv6_spec;
 	static struct rte_flow_item_ipv6 ipv6_mask;
-
-	memset(&ipv6_spec, 0, sizeof(struct rte_flow_item_ipv6));
-	memset(&ipv6_mask, 0, sizeof(struct rte_flow_item_ipv6));
 
 	/** Set ipv6 src **/
 	memset(&ipv6_spec.hdr.src_addr, para.src_ip,
@@ -104,9 +91,6 @@ add_tcp(struct rte_flow_item *items,
 	static struct rte_flow_item_tcp tcp_spec;
 	static struct rte_flow_item_tcp tcp_mask;
 
-	memset(&tcp_spec, 0, sizeof(struct rte_flow_item_tcp));
-	memset(&tcp_mask, 0, sizeof(struct rte_flow_item_tcp));
-
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_TCP;
 	items[items_counter].spec = &tcp_spec;
 	items[items_counter].mask = &tcp_mask;
@@ -119,9 +103,6 @@ add_udp(struct rte_flow_item *items,
 {
 	static struct rte_flow_item_udp udp_spec;
 	static struct rte_flow_item_udp udp_mask;
-
-	memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
-	memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_UDP;
 	items[items_counter].spec = &udp_spec;
@@ -140,9 +121,6 @@ add_vxlan(struct rte_flow_item *items,
 	uint8_t i;
 
 	vni_value = VNI_VALUE;
-
-	memset(&vxlan_spec, 0, sizeof(struct rte_flow_item_vxlan));
-	memset(&vxlan_mask, 0, sizeof(struct rte_flow_item_vxlan));
 
 	/* Set standard vxlan vni */
 	for (i = 0; i < 3; i++) {
@@ -171,9 +149,6 @@ add_vxlan_gpe(struct rte_flow_item *items,
 
 	vni_value = VNI_VALUE;
 
-	memset(&vxlan_gpe_spec, 0, sizeof(struct rte_flow_item_vxlan_gpe));
-	memset(&vxlan_gpe_mask, 0, sizeof(struct rte_flow_item_vxlan_gpe));
-
 	/* Set vxlan-gpe vni */
 	for (i = 0; i < 3; i++) {
 		vxlan_gpe_spec.vni[2 - i] = vni_value >> (i * 8);
@@ -193,18 +168,12 @@ add_gre(struct rte_flow_item *items,
 	uint8_t items_counter,
 	__rte_unused struct additional_para para)
 {
-	static struct rte_flow_item_gre gre_spec;
-	static struct rte_flow_item_gre gre_mask;
-
-	uint16_t proto;
-
-	proto = RTE_ETHER_TYPE_TEB;
-
-	memset(&gre_spec, 0, sizeof(struct rte_flow_item_gre));
-	memset(&gre_mask, 0, sizeof(struct rte_flow_item_gre));
-
-	gre_spec.protocol = RTE_BE16(proto);
-	gre_mask.protocol = RTE_BE16(0xffff);
+	static struct rte_flow_item_gre gre_spec = {
+		.protocol = RTE_BE16(RTE_ETHER_TYPE_TEB),
+	};
+	static struct rte_flow_item_gre gre_mask = {
+		.protocol = RTE_BE16(0xffff),
+	};
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_GRE;
 	items[items_counter].spec = &gre_spec;
@@ -224,9 +193,6 @@ add_geneve(struct rte_flow_item *items,
 
 	vni_value = VNI_VALUE;
 
-	memset(&geneve_spec, 0, sizeof(struct rte_flow_item_geneve));
-	memset(&geneve_mask, 0, sizeof(struct rte_flow_item_geneve));
-
 	for (i = 0; i < 3; i++) {
 		geneve_spec.vni[2 - i] = vni_value >> (i * 8);
 		geneve_mask.vni[2 - i] = 0xff;
@@ -242,18 +208,12 @@ add_gtp(struct rte_flow_item *items,
 	uint8_t items_counter,
 	__rte_unused struct additional_para para)
 {
-	static struct rte_flow_item_gtp gtp_spec;
-	static struct rte_flow_item_gtp gtp_mask;
-
-	uint32_t teid_value;
-
-	teid_value = TEID_VALUE;
-
-	memset(&gtp_spec, 0, sizeof(struct rte_flow_item_gtp));
-	memset(&gtp_mask, 0, sizeof(struct rte_flow_item_gtp));
-
-	gtp_spec.teid = RTE_BE32(teid_value);
-	gtp_mask.teid = RTE_BE32(0xffffffff);
+	static struct rte_flow_item_gtp gtp_spec = {
+		.teid = RTE_BE32(TEID_VALUE),
+	};
+	static struct rte_flow_item_gtp gtp_mask = {
+		.teid = RTE_BE32(0xffffffff),
+	};
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_GTP;
 	items[items_counter].spec = &gtp_spec;
@@ -265,18 +225,12 @@ add_meta_data(struct rte_flow_item *items,
 	uint8_t items_counter,
 	__rte_unused struct additional_para para)
 {
-	static struct rte_flow_item_meta meta_spec;
-	static struct rte_flow_item_meta meta_mask;
-
-	uint32_t data;
-
-	data = META_DATA;
-
-	memset(&meta_spec, 0, sizeof(struct rte_flow_item_meta));
-	memset(&meta_mask, 0, sizeof(struct rte_flow_item_meta));
-
-	meta_spec.data = RTE_BE32(data);
-	meta_mask.data = RTE_BE32(0xffffffff);
+	static struct rte_flow_item_meta meta_spec = {
+		.data = RTE_BE32(META_DATA),
+	};
+	static struct rte_flow_item_meta meta_mask = {
+		.data = RTE_BE32(0xffffffff),
+	};
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_META;
 	items[items_counter].spec = &meta_spec;
@@ -289,33 +243,52 @@ add_meta_tag(struct rte_flow_item *items,
 	uint8_t items_counter,
 	__rte_unused struct additional_para para)
 {
-	static struct rte_flow_item_tag tag_spec;
-	static struct rte_flow_item_tag tag_mask;
-	uint32_t data;
-	uint8_t index;
-
-	data = META_DATA;
-	index = TAG_INDEX;
-
-	memset(&tag_spec, 0, sizeof(struct rte_flow_item_tag));
-	memset(&tag_mask, 0, sizeof(struct rte_flow_item_tag));
-
-	tag_spec.data = RTE_BE32(data);
-	tag_mask.data = RTE_BE32(0xffffffff);
-	tag_spec.index = index;
-	tag_mask.index = 0xff;
+	static struct rte_flow_item_tag tag_spec = {
+		.data = RTE_BE32(META_DATA),
+		.index = TAG_INDEX,
+	};
+	static struct rte_flow_item_tag tag_mask = {
+		.data = RTE_BE32(0xffffffff),
+		.index = 0xff,
+	};
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_TAG;
 	items[items_counter].spec = &tag_spec;
 	items[items_counter].mask = &tag_mask;
 }
 
+static void
+add_icmpv4(struct rte_flow_item *items,
+	uint8_t items_counter,
+	__rte_unused struct additional_para para)
+{
+	static struct rte_flow_item_icmp icmpv4_spec;
+	static struct rte_flow_item_icmp icmpv4_mask;
+
+	items[items_counter].type = RTE_FLOW_ITEM_TYPE_ICMP;
+	items[items_counter].spec = &icmpv4_spec;
+	items[items_counter].mask = &icmpv4_mask;
+}
+
+static void
+add_icmpv6(struct rte_flow_item *items,
+	uint8_t items_counter,
+	__rte_unused struct additional_para para)
+{
+	static struct rte_flow_item_icmp6 icmpv6_spec;
+	static struct rte_flow_item_icmp6 icmpv6_mask;
+
+	items[items_counter].type = RTE_FLOW_ITEM_TYPE_ICMP6;
+	items[items_counter].spec = &icmpv6_spec;
+	items[items_counter].mask = &icmpv6_mask;
+}
+
 void
 fill_items(struct rte_flow_item *items,
-	uint64_t flow_items, uint32_t outer_ip_src)
+	uint64_t *flow_items, uint32_t outer_ip_src)
 {
 	uint8_t items_counter = 0;
-	uint8_t i;
+	uint8_t i, j;
 	struct additional_para additional_para_data = {
 		.src_ip = outer_ip_src,
 	};
@@ -328,7 +301,7 @@ fill_items(struct rte_flow_item *items,
 			uint8_t items_counter,
 			struct additional_para para
 			);
-	} flows_items[] = {
+	} items_list[] = {
 		{
 			.mask = RTE_FLOW_ITEM_TYPE_META,
 			.funct = add_meta_data,
@@ -381,16 +354,29 @@ fill_items(struct rte_flow_item *items,
 			.mask = RTE_FLOW_ITEM_TYPE_GTP,
 			.funct = add_gtp,
 		},
-
+		{
+			.mask = RTE_FLOW_ITEM_TYPE_ICMP,
+			.funct = add_icmpv4,
+		},
+		{
+			.mask = RTE_FLOW_ITEM_TYPE_ICMP6,
+			.funct = add_icmpv6,
+		},
 	};
 
-	for (i = 0; i < RTE_DIM(flows_items); i++) {
-		if ((flow_items & FLOW_ITEM_MASK(flows_items[i].mask)) == 0)
-			continue;
-		flows_items[i].funct(
-			items, items_counter++,
-			additional_para_data
-		);
+	for (j = 0; j < MAX_ITEMS_NUM; j++) {
+		if (flow_items[j] == 0)
+			break;
+		for (i = 0; i < RTE_DIM(items_list); i++) {
+			if ((flow_items[j] &
+				FLOW_ITEM_MASK(items_list[i].mask)) == 0)
+				continue;
+			items_list[i].funct(
+				items, items_counter++,
+				additional_para_data
+			);
+			break;
+		}
 	}
 
 	items[items_counter].type = RTE_FLOW_ITEM_TYPE_END;

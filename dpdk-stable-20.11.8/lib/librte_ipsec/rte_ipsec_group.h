@@ -7,7 +7,6 @@
 
 /**
  * @file rte_ipsec_group.h
- * @b EXPERIMENTAL: this API may change without prior notice
  *
  * RTE IPsec support.
  * It is not recommended to include this file directly,
@@ -42,7 +41,6 @@ struct rte_ipsec_group {
  * @return
  *   The pointer to the related *rte_ipsec_session* structure.
  */
-__rte_experimental
 static inline struct rte_ipsec_session *
 rte_ipsec_ses_from_crypto(const struct rte_crypto_op *cop)
 {
@@ -51,10 +49,10 @@ rte_ipsec_ses_from_crypto(const struct rte_crypto_op *cop)
 
 	if (cop->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
 		ss = cop->sym[0].sec_session;
-		return (void *)(uintptr_t)ss->opaque_data;
+		return (struct rte_ipsec_session *)(uintptr_t)ss->opaque_data;
 	} else if (cop->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 		cs = cop->sym[0].session;
-		return (void *)(uintptr_t)cs->opaque_data;
+		return (struct rte_ipsec_session *)(uintptr_t)cs->opaque_data;
 	}
 	return NULL;
 }
@@ -79,7 +77,6 @@ rte_ipsec_ses_from_crypto(const struct rte_crypto_op *cop)
  * @return
  *   Number of filled elements in *grp* array.
  */
-__rte_experimental
 static inline uint16_t
 rte_ipsec_pkt_crypto_group(const struct rte_crypto_op *cop[],
 	struct rte_mbuf *mb[], struct rte_ipsec_group grp[], uint16_t num)

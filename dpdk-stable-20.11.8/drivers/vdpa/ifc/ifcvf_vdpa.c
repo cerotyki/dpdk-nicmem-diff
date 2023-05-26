@@ -357,6 +357,8 @@ vdpa_enable_vfio_intr(struct ifcvf_internal *internal, bool m_rx)
 	vring.callfd = -1;
 
 	nr_vring = rte_vhost_get_vring_num(internal->vid);
+	if (nr_vring > IFCVF_MAX_QUEUES * 2)
+		return -1;
 
 	irq_set = (struct vfio_irq_set *)irq_set_buf;
 	irq_set->argsz = sizeof(irq_set_buf);
@@ -840,6 +842,8 @@ ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 	vdpa_ifcvf_stop(internal);
 	vdpa_disable_vfio_intr(internal);
 
+	rte_atomic32_set(&internal->running, 0);
+
 	ret = rte_vhost_host_notifier_ctrl(vid, RTE_VHOST_QUEUE_ALL, false);
 	if (ret && ret != -ENOTSUP)
 		goto error;
@@ -892,7 +896,12 @@ ifcvf_dev_config(int vid)
 	internal = list->internal;
 	internal->vid = vid;
 	rte_atomic32_set(&internal->dev_attached, 1);
-	update_datapath(internal);
+	if (update_datapath(internal) < 0) {
+		DRV_LOG(ERR, "failed to update datapath for vDPA device %s",
+			vdev->device->name);
+		rte_atomic32_set(&internal->dev_attached, 0);
+		return -1;
+	}
 
 	if (rte_vhost_host_notifier_ctrl(vid, RTE_VHOST_QUEUE_ALL, true) != 0)
 		DRV_LOG(NOTICE, "vDPA (%s): software relay is used.",
@@ -934,7 +943,12 @@ ifcvf_dev_close(int vid)
 		internal->sw_fallback_running = false;
 	} else {
 		rte_atomic32_set(&internal->dev_attached, 0);
-		update_datapath(internal);
+		if (update_datapath(internal) < 0) {
+			DRV_LOG(ERR, "failed to update datapath for vDPA device %s",
+				vdev->device->name);
+			internal->configured = 0;
+			return -1;
+		}
 	}
 
 	internal->configured = 0;
@@ -1241,6 +1255,11 @@ ifcvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			goto error;
 	}
 	internal->sw_lm = sw_fallback_lm;
+	if (!internal->sw_lm && !internal->hw.lm_cfg) {
+		DRV_LOG(ERR, "Device %s does not support HW assist live migration, please enable sw-live-migration!",
+			pci_dev->name);
+		goto error;
+	}
 
 	internal->vdev = rte_vdpa_register_device(&pci_dev->device, &ifcvf_ops);
 	if (internal->vdev == NULL) {
@@ -1253,7 +1272,15 @@ ifcvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	pthread_mutex_unlock(&internal_list_lock);
 
 	rte_atomic32_set(&internal->started, 1);
-	update_datapath(internal);
+	if (update_datapath(internal) < 0) {
+		DRV_LOG(ERR, "failed to update datapath %s", pci_dev->name);
+		rte_atomic32_set(&internal->started, 0);
+		rte_vdpa_unregister_device(internal->vdev);
+		pthread_mutex_lock(&internal_list_lock);
+		TAILQ_REMOVE(&internal_list, list, next);
+		pthread_mutex_unlock(&internal_list_lock);
+		goto error;
+	}
 
 	rte_kvargs_free(kvlist);
 	return 0;
@@ -1282,7 +1309,8 @@ ifcvf_pci_remove(struct rte_pci_device *pci_dev)
 
 	internal = list->internal;
 	rte_atomic32_set(&internal->started, 0);
-	update_datapath(internal);
+	if (update_datapath(internal) < 0)
+		DRV_LOG(ERR, "failed to update datapath %s", pci_dev->name);
 
 	rte_pci_unmap_device(internal->pdev);
 	rte_vfio_container_destroy(internal->vfio_container_fd);

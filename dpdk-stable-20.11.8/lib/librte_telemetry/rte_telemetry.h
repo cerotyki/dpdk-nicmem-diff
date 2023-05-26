@@ -3,13 +3,21 @@
  */
 
 #include <stdint.h>
+#include <sched.h>
+
 #include <rte_compat.h>
+#include <rte_os.h>
 
 #ifndef _RTE_TELEMETRY_H_
 #define _RTE_TELEMETRY_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Maximum number of telemetry callbacks. */
 #define TELEMETRY_MAX_CALLBACKS 64
+
 /** Maximum length for string used in object. */
 #define RTE_TEL_MAX_STRING_LEN 64
 /** Maximum length of string. */
@@ -46,6 +54,7 @@ enum rte_tel_value_type {
 	RTE_TEL_STRING_VAL, /** a string value */
 	RTE_TEL_INT_VAL,    /** a signed 32-bit int value */
 	RTE_TEL_U64_VAL,    /** an unsigned 64-bit int value */
+	RTE_TEL_CONTAINER, /** a container struct */
 };
 
 /**
@@ -137,6 +146,28 @@ int
 rte_tel_data_add_array_u64(struct rte_tel_data *d, uint64_t x);
 
 /**
+ * Add a container to an array. A container is an existing telemetry data
+ * array. The array the container is to be added to must have been started by
+ * rte_tel_data_start_array() with RTE_TEL_CONTAINER as the type parameter.
+ * The container type must be an array of type uint64_t/int/string.
+ *
+ * @param d
+ *   The data structure passed to the callback
+ * @param val
+ *   The pointer to the container to be stored in the array.
+ * @param keep
+ *   Flag to indicate that the container memory should not be automatically
+ *   freed by the telemetry library once it has finished with the data.
+ *   1 = keep, 0 = free.
+ * @return
+ *   0 on success, negative errno on error
+ */
+__rte_experimental
+int
+rte_tel_data_add_array_container(struct rte_tel_data *d,
+		struct rte_tel_data *val, int keep);
+
+/**
  * Add a string value to a dictionary.
  * The dict must have been started by rte_tel_data_start_dict().
  *
@@ -191,6 +222,30 @@ rte_tel_data_add_dict_u64(struct rte_tel_data *d,
 		const char *name, uint64_t val);
 
 /**
+ * Add a container to a dictionary. A container is an existing telemetry data
+ * array. The dict the container is to be added to must have been started by
+ * rte_tel_data_start_dict(). The container must be an array of type
+ * uint64_t/int/string.
+ *
+ * @param d
+ *   The data structure passed to the callback
+ * @param name
+ *   The name the value is to be stored under in the dict.
+ * @param val
+ *   The pointer to the container to be stored in the dict.
+ * @param keep
+ *   Flag to indicate that the container memory should not be automatically
+ *   freed by the telemetry library once it has finished with the data.
+ *   1 = keep, 0 = free.
+ * @return
+ *   0 on success, negative errno on error
+ */
+__rte_experimental
+int
+rte_tel_data_add_dict_container(struct rte_tel_data *d, const char *name,
+		struct rte_tel_data *val, int keep);
+
+/**
  * This telemetry callback is used when registering a telemetry command.
  * It handles getting and formatting information to be returned to telemetry
  * when requested.
@@ -242,6 +297,8 @@ __rte_experimental
 int
 rte_telemetry_register_cmd(const char *cmd, telemetry_cb fn, const char *help);
 
+#ifdef RTE_HAS_CPUSET
+
 /**
  * @internal
  * Initialize Telemetry.
@@ -263,5 +320,34 @@ __rte_experimental
 int
 rte_telemetry_init(const char *runtime_dir, rte_cpuset_t *cpuset,
 		const char **err_str);
+
+#endif /* RTE_HAS_CPUSET */
+
+/**
+ * Get a pointer to a container with memory allocated. The container is to be
+ * used embedded within an existing telemetry dict/array.
+ *
+ * @return
+ *  Pointer to a container.
+ */
+__rte_experimental
+struct rte_tel_data *
+rte_tel_data_alloc(void);
+
+/**
+ * @internal
+ * Free a container that has memory allocated.
+ *
+ * @param data
+ *  Pointer to container.
+ *.
+ */
+__rte_experimental
+void
+rte_tel_data_free(struct rte_tel_data *data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

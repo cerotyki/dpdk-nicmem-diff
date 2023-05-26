@@ -9,10 +9,6 @@
 
 #include <rte_compat.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* Status field in FD is updated on Rx side by FMAN with following information.
  * Refer to field description in FM BG.
  */
@@ -111,6 +107,7 @@ __rte_internal
 int fman_if_set_fc_quanta(struct fman_if *fm_if, u16 pause_quanta);
 
 /* Set default error fqid on specific interface */
+__rte_internal
 void fman_if_set_err_fqid(struct fman_if *fm_if, uint32_t err_fqid);
 
 /* Get IC transfer params */
@@ -150,6 +147,10 @@ void fman_if_set_dnia(struct fman_if *fm_if, uint32_t nia);
 /* discard error packets on rx */
 __rte_internal
 void fman_if_discard_rx_errors(struct fman_if *fm_if);
+
+__rte_internal
+void fman_if_receive_rx_errors(struct fman_if *fm_if,
+	unsigned int err_eq);
 
 __rte_internal
 void fman_if_set_mcast_filter_table(struct fman_if *p);

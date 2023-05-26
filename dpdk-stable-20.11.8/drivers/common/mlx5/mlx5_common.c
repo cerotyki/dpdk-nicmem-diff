@@ -16,8 +16,6 @@
 #include "mlx5_malloc.h"
 #include "mlx5_common_pci.h"
 
-int mlx5_common_logtype;
-
 uint8_t haswell_broadwell_cpu;
 
 /* In case this is an x86_64 intel processor to check if
@@ -43,17 +41,12 @@ static inline void mlx5_cpu_id(unsigned int level,
 }
 #endif
 
-RTE_INIT_PRIO(mlx5_log_init, LOG)
-{
-	mlx5_common_logtype = rte_log_register("pmd.common.mlx5");
-	if (mlx5_common_logtype >= 0)
-		rte_log_set_level(mlx5_common_logtype, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(mlx5_common_logtype, pmd.common.mlx5, NOTICE)
 
 static bool mlx5_common_initialized;
 
 /**
- * One time innitialization routine for run-time dependency on glue library
+ * One time initialization routine for run-time dependency on glue library
  * for multiple PMDs. Each mlx5 PMD that depends on mlx5_common module,
  * must invoke in its constructor.
  */
@@ -243,4 +236,89 @@ mlx5_release_dbr(struct mlx5_dbr_page_list *head, uint32_t umem_id,
 		page->dbr_bitmap[i] &= ~(UINT64_C(1) << j);
 	}
 	return ret;
+}
+
+/**
+ * Allocate the User Access Region with DevX on specified device.
+ *
+ * @param [in] ctx
+ *   Infiniband device context to perform allocation on.
+ * @param [in] mapping
+ *   MLX5DV_UAR_ALLOC_TYPE_BF - allocate as cached memory with write-combining
+ *				attributes (if supported by the host), the
+ *				writes to the UAR registers must be followed
+ *				by write memory barrier.
+ *   MLX5DV_UAR_ALLOC_TYPE_NC - allocate as non-cached memory, all writes are
+ *				promoted to the registers immediately, no
+ *				memory barriers needed.
+ *   mapping < 0 - the first attempt is performed with MLX5DV_UAR_ALLOC_TYPE_NC,
+ *		   if this fails the next attempt with MLX5DV_UAR_ALLOC_TYPE_BF
+ *		   is performed. The drivers specifying negative values should
+ *		   always provide the write memory barrier operation after UAR
+ *		   register writings.
+ * If there is no definitions for the MLX5DV_UAR_ALLOC_TYPE_xx (older rdma
+ * library headers), the caller can specify 0.
+ *
+ * @return
+ *   UAR object pointer on success, NULL otherwise and rte_errno is set.
+ */
+void *
+mlx5_devx_alloc_uar(void *ctx, int mapping)
+{
+	void *uar;
+	uint32_t retry, uar_mapping;
+	void *base_addr;
+
+	for (retry = 0; retry < MLX5_ALLOC_UAR_RETRY; ++retry) {
+#ifdef MLX5DV_UAR_ALLOC_TYPE_NC
+		/* Control the mapping type according to the settings. */
+		uar_mapping = (mapping < 0) ?
+			      MLX5DV_UAR_ALLOC_TYPE_NC : mapping;
+#else
+		/*
+		 * It seems we have no way to control the memory mapping type
+		 * for the UAR, the default "Write-Combining" type is supposed.
+		 */
+		uar_mapping = 0;
+		RTE_SET_USED(mapping);
+#endif
+		uar = mlx5_glue->devx_alloc_uar(ctx, uar_mapping);
+#ifdef MLX5DV_UAR_ALLOC_TYPE_NC
+		if (!uar && mapping < 0) {
+			/*
+			 * If Verbs/kernel does not support "Non-Cached"
+			 * try the "Write-Combining".
+			 */
+			DRV_LOG(DEBUG, "Failed to allocate DevX UAR (NC)");
+			uar_mapping = MLX5DV_UAR_ALLOC_TYPE_BF;
+			uar = mlx5_glue->devx_alloc_uar(ctx, uar_mapping);
+		}
+#endif
+		if (!uar) {
+			DRV_LOG(ERR, "Failed to allocate DevX UAR (BF/NC)");
+			rte_errno = ENOMEM;
+			goto exit;
+		}
+		base_addr = mlx5_os_get_devx_uar_base_addr(uar);
+		if (base_addr)
+			break;
+		/*
+		 * The UARs are allocated by rdma_core within the
+		 * IB device context, on context closure all UARs
+		 * will be freed, should be no memory/object leakage.
+		 */
+		DRV_LOG(DEBUG, "Retrying to allocate DevX UAR");
+		uar = NULL;
+	}
+	/* Check whether we finally succeeded with valid UAR allocation. */
+	if (!uar) {
+		DRV_LOG(ERR, "Failed to allocate DevX UAR (NULL base)");
+		rte_errno = ENOMEM;
+	}
+	/*
+	 * Return void * instead of struct mlx5dv_devx_uar *
+	 * is for compatibility with older rdma-core library headers.
+	 */
+exit:
+	return uar;
 }

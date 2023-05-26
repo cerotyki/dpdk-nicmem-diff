@@ -2,6 +2,10 @@
  * Copyright(c) 2010-2016 Intel Corporation
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -12,6 +16,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <getopt.h>
+#include <sched.h>
 
 #include <rte_common.h>
 #include <rte_vect.h>
@@ -121,7 +126,7 @@ cb_parse_ptype(__rte_unused uint16_t port, __rte_unused uint16_t queue,
 }
 
 /*
- *  When set to zero, simple forwaring path is eanbled.
+ *  When set to zero, simple forwarding path is enabled.
  *  When set to one, optimized forwarding path is enabled.
  *  Note that LPM optimisation path uses SSE4.1 instructions.
  */
@@ -599,8 +604,8 @@ struct thread_rx_conf rx_thread[MAX_RX_THREAD];
 struct thread_tx_conf {
 	struct thread_conf conf;
 
-	uint16_t tx_queue_id[RTE_MAX_LCORE];
-	struct mbuf_table tx_mbufs[RTE_MAX_LCORE];
+	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
+	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
 
 	struct rte_ring *ring;
 	struct lthread_cond **ready;
@@ -1524,7 +1529,7 @@ processx4_step3(struct rte_mbuf *pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
 }
 
 /*
- * We group consecutive packets with the same destionation port into one burst.
+ * We group consecutive packets with the same destination port into one burst.
  * To avoid extra latency this is done together with some other packet
  * processing, but after we made a final decision about packet's destination.
  * To do this we maintain:
@@ -1549,7 +1554,7 @@ processx4_step3(struct rte_mbuf *pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
 
 /*
  * Group consecutive packets with the same destination port in bursts of 4.
- * Suppose we have array of destionation ports:
+ * Suppose we have array of destination ports:
  * dst_port[] = {a, b, c, d,, e, ... }
  * dp1 should contain: <a, b, c, d>, dp2: <b, c, d, e>.
  * We doing 4 comparisons at once and the result is 4 bit mask.
@@ -1560,7 +1565,7 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp, __m128i dp1, __m128i dp2)
 {
 	static const struct {
 		uint64_t pnum; /* prebuild 4 values for pnum[]. */
-		int32_t  idx;  /* index for new last updated elemnet. */
+		int32_t  idx;  /* index for new last updated element. */
 		uint16_t lpv;  /* add value to the last updated element. */
 	} gptbl[GRPSZ] = {
 	{
@@ -1829,7 +1834,7 @@ process_burst(struct rte_mbuf *pkts_burst[MAX_PKT_BURST], int nb_rx,
 
 	/*
 	 * Send packets out, through destination port.
-	 * Consecuteve pacekts with the same destination port
+	 * Consecutive packets with the same destination port
 	 * are already grouped together.
 	 * If destination port for the packet equals BAD_PORT,
 	 * then free the packet without sending it out.
@@ -1880,7 +1885,6 @@ process_burst(struct rte_mbuf *pkts_burst[MAX_PKT_BURST], int nb_rx,
 static int __rte_noreturn
 cpu_load_collector(__rte_unused void *arg) {
 	unsigned i, j, k;
-	uint64_t hits;
 	uint64_t prev_tsc, diff_tsc, cur_tsc;
 	uint64_t total[MAX_CPU] = { 0 };
 	unsigned min_cpu = MAX_CPU;
@@ -1970,12 +1974,10 @@ cpu_load_collector(__rte_unused void *arg) {
 			printf("cpu#     proc%%  poll%%  overhead%%\n\n");
 
 			for (i = min_cpu; i <= max_cpu; i++) {
-				hits = 0;
 				printf("CPU %d:", i);
 				for (j = 0; j < MAX_CPU_COUNTER; j++) {
 					printf("%7" PRIu64 "",
 							cpu_load.hits[j][i] * 100 / cpu_load.counter);
-					hits += cpu_load.hits[j][i];
 					cpu_load.hits[j][i] = 0;
 				}
 				printf("%7" PRIu64 "\n",
@@ -2211,7 +2213,7 @@ lthread_rx(void *dummy)
 /*
  * Start scheduler with initial lthread on lcore
  *
- * This lthread loop spawns all rx and tx lthreads on master lcore
+ * This lthread loop spawns all rx and tx lthreads on main lcore
  */
 
 static void *
@@ -2261,11 +2263,11 @@ lthread_spawner(__rte_unused void *arg)
 }
 
 /*
- * Start master scheduler with initial lthread spawning rx and tx lthreads
- * (main_lthread_master).
+ * Start main scheduler with initial lthread spawning rx and tx lthreads
+ * (main_lthread_main).
  */
 static int
-lthread_master_spawner(__rte_unused void *arg) {
+lthread_main_spawner(__rte_unused void *arg) {
 	struct lthread *lt;
 	int lcore_id = rte_lcore_id();
 
@@ -3430,6 +3432,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -3449,14 +3452,10 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf(
-					"Port%d Link Up. Speed %u Mbps - %s\n",
-						portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
-				else
-					printf("Port %d Link Down\n", portid);
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text), &link);
+				printf("Port %d %s\n", portid,
+					link_status_text);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -3505,7 +3504,7 @@ main(int argc, char **argv)
 
 	ret = rte_timer_subsystem_init();
 	if (ret < 0)
-		rte_exit(EXIT_FAILURE, "Failed to initialize timer subystem\n");
+		rte_exit(EXIT_FAILURE, "Failed to initialize timer subsystem\n");
 
 	/* pre-init dst MACs for all ports to 02:00:00:00:00:xx */
 	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
@@ -3762,18 +3761,21 @@ main(int argc, char **argv)
 #endif
 
 		lthread_num_schedulers_set(nb_lcores);
-		rte_eal_mp_remote_launch(sched_spawner, NULL, SKIP_MASTER);
-		lthread_master_spawner(NULL);
+		rte_eal_mp_remote_launch(sched_spawner, NULL, SKIP_MAIN);
+		lthread_main_spawner(NULL);
 
 	} else {
 		printf("Starting P-Threading Model\n");
 		/* launch per-lcore init on every lcore */
-		rte_eal_mp_remote_launch(pthread_run, NULL, CALL_MASTER);
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		rte_eal_mp_remote_launch(pthread_run, NULL, CALL_MAIN);
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 			if (rte_eal_wait_lcore(lcore_id) < 0)
 				return -1;
 		}
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

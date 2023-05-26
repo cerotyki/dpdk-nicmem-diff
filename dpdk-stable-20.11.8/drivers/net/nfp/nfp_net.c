@@ -50,7 +50,7 @@
 #include <errno.h>
 
 /* Prototypes */
-static void nfp_net_close(struct rte_eth_dev *dev);
+static int nfp_net_close(struct rte_eth_dev *dev);
 static int nfp_net_configure(struct rte_eth_dev *dev);
 static void nfp_net_dev_interrupt_handler(void *param);
 static void nfp_net_dev_interrupt_delayed_handler(void *param);
@@ -80,7 +80,7 @@ static int nfp_net_start(struct rte_eth_dev *dev);
 static int nfp_net_stats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_stats *stats);
 static int nfp_net_stats_reset(struct rte_eth_dev *dev);
-static void nfp_net_stop(struct rte_eth_dev *dev);
+static int nfp_net_stop(struct rte_eth_dev *dev);
 static uint16_t nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
 
@@ -94,6 +94,8 @@ static int nfp_net_rss_hash_write(struct rte_eth_dev *dev,
 			struct rte_eth_rss_conf *rss_conf);
 static int nfp_set_mac_addr(struct rte_eth_dev *dev,
 			     struct rte_ether_addr *mac_addr);
+
+#define DEFAULT_FLBUF_SIZE        9216
 
 /* The offset of the queue controller queues in the PCIe Target */
 #define NFP_PCIE_QUEUE(_q) (0x80000 + (NFP_QCP_QUEUE_ADDR_SZ * ((_q) & 0xff)))
@@ -223,6 +225,7 @@ nfp_net_rx_queue_release(void *rx_queue)
 
 	if (rxq) {
 		nfp_net_rx_queue_release_mbufs(rxq);
+		rte_memzone_free(rxq->tz);
 		rte_free(rxq->rxbufs);
 		rte_free(rxq);
 	}
@@ -259,6 +262,7 @@ nfp_net_tx_queue_release(void *tx_queue)
 
 	if (txq) {
 		nfp_net_tx_queue_release_mbufs(txq);
+		rte_memzone_free(txq->tz);
 		rte_free(txq->txbufs);
 		rte_free(txq);
 	}
@@ -543,10 +547,6 @@ nfp_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
 		return -EBUSY;
 	}
 
-	if ((hw->ctrl & NFP_NET_CFG_CTRL_ENABLE) &&
-	    !(hw->cap & NFP_NET_CFG_CTRL_LIVE_ADDR))
-		return -EBUSY;
-
 	/* Writing new MAC to the specific port BAR address */
 	nfp_net_write_mac(hw, (uint8_t *)mac_addr);
 
@@ -788,7 +788,7 @@ error:
 }
 
 /* Stop device: disable rx and tx functions to allow for reconfiguring. */
-static void
+static int
 nfp_net_stop(struct rte_eth_dev *dev)
 {
 	int i;
@@ -819,6 +819,8 @@ nfp_net_stop(struct rte_eth_dev *dev)
 			nfp_eth_set_configured(dev->process_private,
 					       hw->pf_port_idx, 0);
 	}
+
+	return 0;
 }
 
 /* Set the link up. */
@@ -864,12 +866,15 @@ nfp_net_set_link_down(struct rte_eth_dev *dev)
 }
 
 /* Reset and stop device. The device can not be restarted. */
-static void
+static int
 nfp_net_close(struct rte_eth_dev *dev)
 {
 	struct nfp_net_hw *hw;
 	struct rte_pci_device *pci_dev;
 	int i;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	PMD_INIT_LOG(DEBUG, "Close");
 
@@ -887,10 +892,14 @@ nfp_net_close(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		nfp_net_reset_tx_queue(
 			(struct nfp_net_txq *)dev->data->tx_queues[i]);
+		nfp_net_tx_queue_release(
+			(struct nfp_net_txq *)dev->data->tx_queues[i]);
 	}
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		nfp_net_reset_rx_queue(
+			(struct nfp_net_rxq *)dev->data->rx_queues[i]);
+		nfp_net_rx_queue_release(
 			(struct nfp_net_rxq *)dev->data->rx_queues[i]);
 	}
 
@@ -902,10 +911,16 @@ nfp_net_close(struct rte_eth_dev *dev)
 				     nfp_net_dev_interrupt_handler,
 				     (void *)dev);
 
+	/* Cancel possible impending LSC work here before releasing the port*/
+	rte_eal_alarm_cancel(nfp_net_dev_interrupt_delayed_handler,
+			     (void *)dev);
+
 	/*
-	 * The ixgbe PMD driver disables the pcie master on the
+	 * The ixgbe PMD disables the pcie master on the
 	 * device. The i40e does not...
 	 */
+
+	return 0;
 }
 
 static int
@@ -1213,9 +1228,6 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 					     DEV_RX_OFFLOAD_UDP_CKSUM |
 					     DEV_RX_OFFLOAD_TCP_CKSUM;
 
-	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_JUMBO_FRAME |
-				     DEV_RX_OFFLOAD_RSS_HASH;
-
 	if (hw->cap & NFP_NET_CFG_CTRL_TXVLAN)
 		dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT;
 
@@ -1250,15 +1262,36 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		.tx_rs_thresh = DEFAULT_TX_RSBIT_THRESH,
 	};
 
-	dev_info->flow_type_rss_offloads = ETH_RSS_IPV4 |
-					   ETH_RSS_NONFRAG_IPV4_TCP |
-					   ETH_RSS_NONFRAG_IPV4_UDP |
-					   ETH_RSS_IPV6 |
-					   ETH_RSS_NONFRAG_IPV6_TCP |
-					   ETH_RSS_NONFRAG_IPV6_UDP;
+	dev_info->rx_desc_lim = (struct rte_eth_desc_lim) {
+		.nb_max = NFP_NET_MAX_RX_DESC,
+		.nb_min = NFP_NET_MIN_RX_DESC,
+		.nb_align = NFP_ALIGN_RING_DESC,
+	};
 
-	dev_info->reta_size = NFP_NET_CFG_RSS_ITBL_SZ;
-	dev_info->hash_key_size = NFP_NET_CFG_RSS_KEY_SZ;
+	dev_info->tx_desc_lim = (struct rte_eth_desc_lim) {
+		.nb_max = NFP_NET_MAX_TX_DESC,
+		.nb_min = NFP_NET_MIN_TX_DESC,
+		.nb_align = NFP_ALIGN_RING_DESC,
+		.nb_seg_max = NFP_TX_MAX_SEG,
+		.nb_mtu_seg_max = NFP_TX_MAX_MTU_SEG,
+	};
+
+	/* All NFP devices support jumbo frames */
+	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+
+	if (hw->cap & NFP_NET_CFG_CTRL_RSS) {
+		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_RSS_HASH;
+
+		dev_info->flow_type_rss_offloads = ETH_RSS_IPV4 |
+						   ETH_RSS_NONFRAG_IPV4_TCP |
+						   ETH_RSS_NONFRAG_IPV4_UDP |
+						   ETH_RSS_IPV6 |
+						   ETH_RSS_NONFRAG_IPV6_TCP |
+						   ETH_RSS_NONFRAG_IPV6_UDP;
+
+		dev_info->reta_size = NFP_NET_CFG_RSS_ITBL_SZ;
+		dev_info->hash_key_size = NFP_NET_CFG_RSS_KEY_SZ;
+	}
 
 	dev_info->speed_capa = ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G |
 			       ETH_LINK_SPEED_25G | ETH_LINK_SPEED_40G |
@@ -1460,7 +1493,7 @@ nfp_net_dev_interrupt_delayed_handler(void *param)
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 
 	nfp_net_link_update(dev, 0);
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 
 	nfp_net_dev_link_status_print(dev);
 
@@ -1487,7 +1520,7 @@ nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	}
 
 	/* switch to jumbo mode if needed */
-	if ((uint32_t)mtu > RTE_ETHER_MAX_LEN)
+	if ((uint32_t)mtu > RTE_ETHER_MTU)
 		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		dev->data->dev_conf.rxmode.offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -1513,15 +1546,17 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	const struct rte_memzone *tz;
 	struct nfp_net_rxq *rxq;
 	struct nfp_net_hw *hw;
+	uint32_t rx_desc_sz;
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 
 	/* Validating number of descriptors */
-	if (((nb_desc * sizeof(struct nfp_net_rx_desc)) % 128) != 0 ||
-	    (nb_desc > NFP_NET_MAX_RX_DESC) ||
-	    (nb_desc < NFP_NET_MIN_RX_DESC)) {
+	rx_desc_sz = nb_desc * sizeof(struct nfp_net_rx_desc);
+	if (rx_desc_sz % NFP_ALIGN_RING_DESC != 0 ||
+	    nb_desc > NFP_NET_MAX_RX_DESC ||
+	    nb_desc < NFP_NET_MIN_RX_DESC) {
 		PMD_DRV_LOG(ERR, "Wrong nb_desc value");
 		return -EINVAL;
 	}
@@ -1581,6 +1616,11 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	/* Saving physical and virtual addresses for the RX ring */
 	rxq->dma = (uint64_t)tz->iova;
 	rxq->rxds = (struct nfp_net_rx_desc *)tz->addr;
+
+	/* Also save the pointer to the memzone struct so it can be freed
+	 * if needed
+	 */
+	rxq->tz = tz;
 
 	/* mbuf pointers array for referencing mbufs linked to RX descriptors */
 	rxq->rxbufs = rte_zmalloc_socket("rxq->rxbufs",
@@ -1660,15 +1700,17 @@ nfp_net_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	struct nfp_net_txq *txq;
 	uint16_t tx_free_thresh;
 	struct nfp_net_hw *hw;
+	uint32_t tx_desc_sz;
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 
 	/* Validating number of descriptors */
-	if (((nb_desc * sizeof(struct nfp_net_tx_desc)) % 128) != 0 ||
-	    (nb_desc > NFP_NET_MAX_TX_DESC) ||
-	    (nb_desc < NFP_NET_MIN_TX_DESC)) {
+	tx_desc_sz = nb_desc * sizeof(struct nfp_net_tx_desc);
+	if (tx_desc_sz % NFP_ALIGN_RING_DESC != 0 ||
+	    nb_desc > NFP_NET_MAX_TX_DESC ||
+	    nb_desc < NFP_NET_MIN_TX_DESC) {
 		PMD_DRV_LOG(ERR, "Wrong nb_desc value");
 		return -EINVAL;
 	}
@@ -1719,6 +1761,11 @@ nfp_net_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		nfp_net_tx_queue_release(txq);
 		return -ENOMEM;
 	}
+
+	/* Save the pointer to the memzone struct so it can be freed
+	 * if needed
+	 */
+	txq->tz = tz;
 
 	txq->tx_count = nb_desc;
 	txq->tx_free_thresh = tx_free_thresh;
@@ -1996,8 +2043,9 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct rte_mbuf *new_mb;
 	uint16_t nb_hold;
 	uint64_t dma_addr;
-	int avail;
+	uint16_t avail;
 
+	avail = 0;
 	rxq = rx_queue;
 	if (unlikely(rxq == NULL)) {
 		/*
@@ -2005,11 +2053,10 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		 * enabled. But the queue needs to be configured
 		 */
 		RTE_LOG_DP(ERR, PMD, "RX Bad queue\n");
-		return -EINVAL;
+		return avail;
 	}
 
 	hw = rxq->hw;
-	avail = 0;
 	nb_hold = 0;
 
 	while (avail < nb_pkts) {
@@ -2042,8 +2089,6 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			break;
 		}
 
-		nb_hold++;
-
 		/*
 		 * Grab the mbuf and refill the descriptor with the
 		 * previously allocated mbuf
@@ -2075,7 +2120,8 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 				hw->rx_offset,
 				rxq->mbuf_size - hw->rx_offset,
 				mb->data_len);
-			return -EINVAL;
+			rte_pktmbuf_free(mb);
+			break;
 		}
 
 		/* Filling the received mbuf with packet info */
@@ -2113,6 +2159,7 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxds->fld.dd = 0;
 		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xff;
 		rxds->fld.dma_addr_lo = dma_addr & 0xffffffff;
+		nb_hold++;
 
 		rxq->rd_p++;
 		if (unlikely(rxq->rd_p == rxq->rx_count)) /* wrapping?*/
@@ -2348,22 +2395,25 @@ nfp_net_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	uint32_t new_ctrl, update;
 	struct nfp_net_hw *hw;
+	struct rte_eth_conf *dev_conf;
 	int ret;
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	new_ctrl = 0;
+	dev_conf = &dev->data->dev_conf;
+	new_ctrl = hw->ctrl;
 
-	/* Enable vlan strip if it is not configured yet */
-	if ((mask & ETH_VLAN_STRIP_OFFLOAD) &&
-	    !(hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN))
-		new_ctrl = hw->ctrl | NFP_NET_CFG_CTRL_RXVLAN;
+	/*
+	 * Vlan stripping setting
+	 * Enable or disable VLAN stripping
+	 */
+	if (mask & ETH_VLAN_STRIP_MASK) {
+		if (dev_conf->rxmode.offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+			new_ctrl |= NFP_NET_CFG_CTRL_RXVLAN;
+		else
+			new_ctrl &= ~NFP_NET_CFG_CTRL_RXVLAN;
+	}
 
-	/* Disable vlan strip just if it is configured */
-	if (!(mask & ETH_VLAN_STRIP_OFFLOAD) &&
-	    (hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN))
-		new_ctrl = hw->ctrl & ~NFP_NET_CFG_CTRL_RXVLAN;
-
-	if (new_ctrl == 0)
+	if (new_ctrl == hw->ctrl)
 		return 0;
 
 	update = NFP_NET_CFG_UPDATE_GEN;
@@ -2604,7 +2654,7 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 	cfg_rss_ctrl = nn_cfg_readl(hw, NFP_NET_CFG_RSS_CTRL);
 
 	if (cfg_rss_ctrl & NFP_NET_CFG_RSS_IPV4)
-		rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP | ETH_RSS_NONFRAG_IPV4_UDP;
+		rss_hf |= ETH_RSS_IPV4;
 
 	if (cfg_rss_ctrl & NFP_NET_CFG_RSS_IPV4_TCP)
 		rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP;
@@ -2619,7 +2669,7 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 		rss_hf |= ETH_RSS_NONFRAG_IPV6_UDP;
 
 	if (cfg_rss_ctrl & NFP_NET_CFG_RSS_IPV6)
-		rss_hf |= ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP;
+		rss_hf |= ETH_RSS_IPV6;
 
 	/* Propagate current RSS hash functions to caller */
 	rss_conf->rss_hf = rss_hf;
@@ -2701,7 +2751,6 @@ static const struct eth_dev_ops nfp_net_eth_dev_ops = {
 	.rss_hash_conf_get	= nfp_net_rss_hash_conf_get,
 	.rx_queue_setup		= nfp_net_rx_queue_setup,
 	.rx_queue_release	= nfp_net_rx_queue_release,
-	.rx_queue_count		= nfp_net_rx_queue_count,
 	.tx_queue_setup		= nfp_net_tx_queue_setup,
 	.tx_queue_release	= nfp_net_tx_queue_release,
 	.rx_queue_intr_enable   = nfp_rx_queue_intr_enable,
@@ -2785,6 +2834,7 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	}
 
 	eth_dev->dev_ops = &nfp_net_eth_dev_ops;
+	eth_dev->rx_queue_count = nfp_net_rx_queue_count;
 	eth_dev->rx_pkt_burst = &nfp_net_recv_pkts;
 	eth_dev->tx_pkt_burst = &nfp_net_xmit_pkts;
 
@@ -2894,6 +2944,7 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	hw->cap = nn_cfg_readl(hw, NFP_NET_CFG_CAP);
 	hw->max_mtu = nn_cfg_readl(hw, NFP_NET_CFG_MAX_MTU);
 	hw->mtu = RTE_ETHER_MTU;
+	hw->flbufsz = DEFAULT_FLBUF_SIZE;
 
 	/* VLAN insertion is incompatible with LSOv2 */
 	if (hw->cap & NFP_NET_CFG_CTRL_LSO2)
@@ -2967,6 +3018,8 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	if (!(hw->cap & NFP_NET_CFG_CTRL_LIVE_ADDR))
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_NOLIVE_MAC_ADDR;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	PMD_INIT_LOG(INFO, "port %d VendorID=0x%x DeviceID=0x%x "
 		     "mac=%02x:%02x:%02x:%02x:%02x:%02x",
 		     eth_dev->data->port_id, pci_dev->id.vendor_id,
@@ -3009,7 +3062,7 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 	off_t offset, nfp_offset;
 	uint32_t cpp_id, pos, len;
 	uint32_t tmpbuf[16];
-	size_t count, curlen, totlen = 0;
+	size_t count, curlen;
 	int err = 0;
 
 	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
@@ -3086,7 +3139,6 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 		}
 
 		nfp_offset += pos;
-		totlen += pos;
 		nfp_cpp_area_release(area);
 		nfp_cpp_area_free(area);
 
@@ -3111,7 +3163,7 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 	off_t offset, nfp_offset;
 	uint32_t cpp_id, pos, len;
 	uint32_t tmpbuf[16];
-	size_t count, curlen, totlen = 0;
+	size_t count, curlen;
 	int err = 0;
 
 	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
@@ -3187,7 +3239,6 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 		}
 
 		nfp_offset += pos;
-		totlen += pos;
 		nfp_cpp_area_release(area);
 		nfp_cpp_area_free(area);
 
@@ -3490,7 +3541,7 @@ nfp_fw_upload(struct rte_pci_device *dev, struct nfp_nsp *nsp, char *card)
 
 	/* Then try the PCI name */
 	snprintf(fw_name, sizeof(fw_name), "%s/pci-%s.nffw", DEFAULT_FW_PATH,
-			dev->device.name);
+			dev->name);
 
 	PMD_DRV_LOG(DEBUG, "Trying with fw file: %s", fw_name);
 	fw_f = open(fw_name, O_RDONLY);
@@ -3614,7 +3665,7 @@ static int nfp_pf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	 * interface. Here we avoid this telling to the CPP init code to
 	 * use a lock file if UIO is being used.
 	 */
-	if (dev->kdrv == RTE_KDRV_VFIO)
+	if (dev->kdrv == RTE_PCI_KDRV_VFIO)
 		cpp = nfp_cpp_from_device_name(dev, 0);
 	else
 		cpp = nfp_cpp_from_device_name(dev, 1);
@@ -3719,6 +3770,8 @@ static int eth_nfp_pci_remove(struct rte_pci_device *pci_dev)
 	int port = 0;
 
 	eth_dev = rte_eth_dev_allocated(pci_dev->device.name);
+	if (eth_dev == NULL)
+		return 0; /* port already released */
 	if ((pci_dev->id.device_id == PCI_DEVICE_ID_NFP4000_PF_NIC) ||
 	    (pci_dev->id.device_id == PCI_DEVICE_ID_NFP6000_PF_NIC)) {
 		port = get_pf_port_number(eth_dev->data->name);

@@ -10,10 +10,6 @@
 #define __COMPAT_H
 
 #include <sched.h>
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -34,7 +30,6 @@
 #include <assert.h>
 #include <dirent.h>
 #include <inttypes.h>
-#include <error.h>
 #include <rte_byteorder.h>
 #include <rte_atomic.h>
 #include <rte_spinlock.h>
@@ -150,7 +145,8 @@ static inline void out_be32(volatile void *__p, u32 val)
 #define dcbt_ro(p) __builtin_prefetch(p, 0)
 #define dcbt_rw(p) __builtin_prefetch(p, 1)
 
-#if defined(RTE_ARCH_ARM64)
+#if defined(RTE_ARCH_ARM)
+#if defined(RTE_ARCH_64)
 #define dcbz(p) { asm volatile("dc zva, %0" : : "r" (p) : "memory"); }
 #define dcbz_64(p) dcbz(p)
 #define dcbf(p) { asm volatile("dc cvac, %0" : : "r"(p) : "memory"); }
@@ -163,13 +159,14 @@ static inline void out_be32(volatile void *__p, u32 val)
 		asm volatile("prfm pldl1keep, [%0, #64]" : : "r" (p));	\
 	} while (0)
 
-#elif defined(RTE_ARCH_ARM)
+#else /* RTE_ARCH_32 */
 #define dcbz(p) memset((p), 0, 32)
 #define dcbz_64(p) memset((p), 0, 64)
 #define dcbf(p)	RTE_SET_USED(p)
 #define dcbf_64(p) dcbf(p)
 #define dccivac(p)	RTE_SET_USED(p)
 #define dcbit_ro(p)	RTE_SET_USED(p)
+#endif
 
 #else
 #define dcbz(p)	RTE_SET_USED(p)

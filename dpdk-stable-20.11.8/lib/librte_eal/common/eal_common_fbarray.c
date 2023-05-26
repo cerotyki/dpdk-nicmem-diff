@@ -81,9 +81,8 @@ get_used_mask(void *data, unsigned int elt_sz, unsigned int len)
 }
 
 static int
-resize_and_map(int fd, void *addr, size_t len)
+resize_and_map(int fd, const char *path, void *addr, size_t len)
 {
-	char path[PATH_MAX];
 	void *map_addr;
 
 	if (eal_file_truncate(fd, len)) {
@@ -110,7 +109,7 @@ overlap(const struct mem_area *ma, const void *start, size_t len)
 	if (start >= ma_start && start < ma_end)
 		return 1;
 	/* end overlap? */
-	if (end >= ma_start && end < ma_end)
+	if (end > ma_start && end < ma_end)
 		return 1;
 	return 0;
 }
@@ -792,7 +791,7 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		if (eal_file_lock(fd, EAL_FLOCK_SHARED, EAL_FLOCK_RETURN))
 			goto fail;
 
-		if (resize_and_map(fd, data, mmap_len))
+		if (resize_and_map(fd, path, data, mmap_len))
 			goto fail;
 	}
 	ma->addr = data;
@@ -895,7 +894,7 @@ rte_fbarray_attach(struct rte_fbarray *arr)
 	if (eal_file_lock(fd, EAL_FLOCK_SHARED, EAL_FLOCK_RETURN))
 		goto fail;
 
-	if (resize_and_map(fd, data, mmap_len))
+	if (resize_and_map(fd, path, data, mmap_len))
 		goto fail;
 
 	/* store our new memory area */
@@ -1486,7 +1485,7 @@ rte_fbarray_dump_metadata(struct rte_fbarray *arr, FILE *f)
 
 	if (fully_validate(arr->name, arr->elt_sz, arr->len)) {
 		fprintf(f, "Invalid file-backed array\n");
-		goto out;
+		return;
 	}
 
 	/* prevent array from changing under us */
@@ -1500,6 +1499,5 @@ rte_fbarray_dump_metadata(struct rte_fbarray *arr, FILE *f)
 
 	for (i = 0; i < msk->n_masks; i++)
 		fprintf(f, "msk idx %i: 0x%016" PRIx64 "\n", i, msk->data[i]);
-out:
 	rte_rwlock_read_unlock(&arr->rwlock);
 }

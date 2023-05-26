@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
 
-subdirs = ['igb_uio', 'kni']
+subdirs = ['kni']
 
 # if we are cross-compiling we need kernel_dir specified
 if get_option('kernel_dir') == '' and meson.is_cross_build()
@@ -13,6 +13,12 @@ if kernel_dir == ''
 	# use default path for native builds
 	kernel_version = run_command('uname', '-r').stdout().strip()
 	kernel_dir = '/lib/modules/' + kernel_version
+endif
+
+kernel_source_dir = get_option('kernel_dir')
+if kernel_source_dir == ''
+	# use default path for native builds
+	kernel_source_dir = '/lib/modules/' + kernel_version + '/source'
 endif
 
 # test running make in kernel directory, using "make kernelversion"

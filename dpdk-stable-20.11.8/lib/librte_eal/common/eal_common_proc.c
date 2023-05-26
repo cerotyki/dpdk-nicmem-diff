@@ -35,6 +35,7 @@
 #include "eal_internal_cfg.h"
 
 static int mp_fd = -1;
+static pthread_t mp_handle_tid;
 static char mp_filter[PATH_MAX];   /* Filter for secondary process sockets */
 static char mp_dir_path[PATH_MAX]; /* The directory path for all mp sockets */
 static pthread_mutex_t mp_mutex_action = PTHREAD_MUTEX_INITIALIZER;
@@ -261,7 +262,7 @@ rte_mp_action_unregister(const char *name)
 }
 
 static int
-read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
+read_msg(int fd, struct mp_msg_internal *m, struct sockaddr_un *s)
 {
 	int msglen;
 	struct iovec iov;
@@ -281,8 +282,17 @@ read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
 	msgh.msg_control = control;
 	msgh.msg_controllen = sizeof(control);
 
-	msglen = recvmsg(mp_fd, &msgh, 0);
+retry:
+	msglen = recvmsg(fd, &msgh, 0);
+
+	/* zero length message means socket was closed */
+	if (msglen == 0)
+		return 0;
+
 	if (msglen < 0) {
+		if (errno == EINTR)
+			goto retry;
+
 		RTE_LOG(ERR, EAL, "recvmsg failed, %s\n", strerror(errno));
 		return -1;
 	}
@@ -310,7 +320,7 @@ read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
 		RTE_LOG(ERR, EAL, "invalid received data length\n");
 		return -1;
 	}
-	return 0;
+	return msglen;
 }
 
 static void
@@ -382,10 +392,16 @@ mp_handle(void *arg __rte_unused)
 {
 	struct mp_msg_internal msg;
 	struct sockaddr_un sa;
+	int fd;
 
-	while (1) {
-		if (read_msg(&msg, &sa) == 0)
-			process_msg(&msg, &sa);
+	while ((fd = __atomic_load_n(&mp_fd, __ATOMIC_RELAXED)) >= 0) {
+		int ret;
+
+		ret = read_msg(fd, &msg, &sa);
+		if (ret <= 0)
+			break;
+
+		process_msg(&msg, &sa);
 	}
 
 	return NULL;
@@ -423,7 +439,7 @@ process_async_request(struct pending_request *sr, const struct timespec *now)
 	/* did we timeout? */
 	timeout = timespec_cmp(&param->end, now) <= 0;
 
-	/* if we received a response, adjust relevant data and copy mesasge. */
+	/* if we received a response, adjust relevant data and copy message. */
 	if (sr->reply_received == 1 && sr->reply) {
 		struct rte_mp_msg *msg, *user_msgs, *tmp;
 
@@ -490,14 +506,11 @@ async_reply_handle_thread_unsafe(void *arg)
 	struct pending_request *req = (struct pending_request *)arg;
 	enum async_action action;
 	struct timespec ts_now;
-	struct timeval now;
 
-	if (gettimeofday(&now, NULL) < 0) {
+	if (clock_gettime(CLOCK_MONOTONIC, &ts_now) < 0) {
 		RTE_LOG(ERR, EAL, "Cannot get current time\n");
 		goto no_trigger;
 	}
-	ts_now.tv_nsec = now.tv_usec * 1000;
-	ts_now.tv_sec = now.tv_sec;
 
 	action = process_async_request(req, &ts_now);
 
@@ -570,14 +583,11 @@ open_socket_fd(void)
 }
 
 static void
-close_socket_fd(void)
+close_socket_fd(int fd)
 {
 	char path[PATH_MAX];
 
-	if (mp_fd < 0)
-		return;
-
-	close(mp_fd);
+	close(fd);
 	create_socket_path(peer_name, path, sizeof(path));
 	unlink(path);
 }
@@ -587,7 +597,6 @@ rte_mp_channel_init(void)
 {
 	char path[PATH_MAX];
 	int dir_fd;
-	pthread_t mp_handle_tid;
 	const struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
@@ -630,11 +639,10 @@ rte_mp_channel_init(void)
 
 	if (rte_ctrl_thread_create(&mp_handle_tid, "rte_mp_handle",
 			NULL, mp_handle, NULL) < 0) {
-		RTE_LOG(ERR, EAL, "failed to create mp thead: %s\n",
+		RTE_LOG(ERR, EAL, "failed to create mp thread: %s\n",
 			strerror(errno));
-		close(mp_fd);
 		close(dir_fd);
-		mp_fd = -1;
+		close(__atomic_exchange_n(&mp_fd, -1, __ATOMIC_RELAXED));
 		return -1;
 	}
 
@@ -648,7 +656,15 @@ rte_mp_channel_init(void)
 void
 rte_mp_channel_cleanup(void)
 {
-	close_socket_fd();
+	int fd;
+
+	fd = __atomic_exchange_n(&mp_fd, -1, __ATOMIC_RELAXED);
+	if (fd < 0)
+		return;
+
+	pthread_cancel(mp_handle_tid);
+	pthread_join(mp_handle_tid, NULL);
+	close_socket_fd(fd);
 }
 
 /**
@@ -896,6 +912,7 @@ mp_request_sync(const char *dst, struct rte_mp_msg *req,
 	       struct rte_mp_reply *reply, const struct timespec *ts)
 {
 	int ret;
+	pthread_condattr_t attr;
 	struct rte_mp_msg msg, *tmp;
 	struct pending_request pending_req, *exist;
 
@@ -904,7 +921,9 @@ mp_request_sync(const char *dst, struct rte_mp_msg *req,
 	strlcpy(pending_req.dst, dst, sizeof(pending_req.dst));
 	pending_req.request = req;
 	pending_req.reply = &msg;
-	pthread_cond_init(&pending_req.sync.cond, NULL);
+	pthread_condattr_init(&attr);
+	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+	pthread_cond_init(&pending_req.sync.cond, &attr);
 
 	exist = find_pending_request(dst, req->name);
 	if (exist) {
@@ -967,8 +986,7 @@ rte_mp_request_sync(struct rte_mp_msg *req, struct rte_mp_reply *reply,
 	int dir_fd, ret = -1;
 	DIR *mp_dir;
 	struct dirent *ent;
-	struct timeval now;
-	struct timespec end;
+	struct timespec now, end;
 	const struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
@@ -987,15 +1005,15 @@ rte_mp_request_sync(struct rte_mp_msg *req, struct rte_mp_reply *reply,
 		return -1;
 	}
 
-	if (gettimeofday(&now, NULL) < 0) {
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
 		RTE_LOG(ERR, EAL, "Failed to get current time\n");
 		rte_errno = errno;
 		goto end;
 	}
 
-	end.tv_nsec = (now.tv_usec * 1000 + ts->tv_nsec) % 1000000000;
+	end.tv_nsec = (now.tv_nsec + ts->tv_nsec) % 1000000000;
 	end.tv_sec = now.tv_sec + ts->tv_sec +
-			(now.tv_usec * 1000 + ts->tv_nsec) / 1000000000;
+			(now.tv_nsec + ts->tv_nsec) / 1000000000;
 
 	/* for secondary process, send request to the primary process only */
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
@@ -1069,7 +1087,7 @@ rte_mp_request_async(struct rte_mp_msg *req, const struct timespec *ts,
 	int dir_fd, ret = 0;
 	DIR *mp_dir;
 	struct dirent *ent;
-	struct timeval now;
+	struct timespec now;
 	struct timespec *end;
 	bool dummy_used = false;
 	const struct internal_config *internal_conf =
@@ -1086,7 +1104,7 @@ rte_mp_request_async(struct rte_mp_msg *req, const struct timespec *ts,
 		return -1;
 	}
 
-	if (gettimeofday(&now, NULL) < 0) {
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
 		RTE_LOG(ERR, EAL, "Failed to get current time\n");
 		rte_errno = errno;
 		return -1;
@@ -1108,9 +1126,9 @@ rte_mp_request_async(struct rte_mp_msg *req, const struct timespec *ts,
 	end = &param->end;
 	reply = &param->user_reply;
 
-	end->tv_nsec = (now.tv_usec * 1000 + ts->tv_nsec) % 1000000000;
+	end->tv_nsec = (now.tv_nsec + ts->tv_nsec) % 1000000000;
 	end->tv_sec = now.tv_sec + ts->tv_sec +
-			(now.tv_usec * 1000 + ts->tv_nsec) / 1000000000;
+			(now.tv_nsec + ts->tv_nsec) / 1000000000;
 	reply->nb_sent = 0;
 	reply->nb_received = 0;
 	reply->msgs = NULL;

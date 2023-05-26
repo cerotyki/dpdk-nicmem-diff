@@ -61,7 +61,7 @@ otx2_nix_xmit_prepare_tstamp(uint64_t *cmd,  const uint64_t *send_mem_desc,
 			/* Retrieving the default desc values */
 			cmd[off] = send_mem_desc[6];
 
-			/* Using compiler barier to avoid voilation of C
+			/* Using compiler barrier to avoid violation of C
 			 * aliasing rules.
 			 */
 			rte_compiler_barrier();
@@ -70,7 +70,7 @@ otx2_nix_xmit_prepare_tstamp(uint64_t *cmd,  const uint64_t *send_mem_desc,
 		/* Packets for which PKT_TX_IEEE1588_TMST is not set, tx tstamp
 		 * should not be recorded, hence changing the alg type to
 		 * NIX_SENDMEMALG_SET and also changing send mem addr field to
-		 * next 8 bytes as it corrpt the actual tx tstamp registered
+		 * next 8 bytes as it corrupts the actual tx tstamp registered
 		 * address.
 		 */
 		send_mem->alg = NIX_SENDMEMALG_SETTSTMP - (is_ol_tstamp);
@@ -197,7 +197,8 @@ otx2_nix_xmit_prepare_tso(struct rte_mbuf *m, const uint64_t flags)
 }
 
 static __rte_always_inline void
-otx2_nix_xmit_prepare(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags)
+otx2_nix_xmit_prepare(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags,
+		      const uint64_t lso_tun_fmt)
 {
 	struct nix_send_ext_s *send_hdr_ext;
 	struct nix_send_hdr_s *send_hdr;
@@ -339,14 +340,15 @@ otx2_nix_xmit_prepare(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags)
 		    (ol_flags & PKT_TX_TUNNEL_MASK)) {
 			const uint8_t is_udp_tun = (NIX_UDP_TUN_BITMASK >>
 				((ol_flags & PKT_TX_TUNNEL_MASK) >> 45)) & 0x1;
+			uint8_t shift = is_udp_tun ? 32 : 0;
+
+			shift += (!!(ol_flags & PKT_TX_OUTER_IPV6) << 4);
+			shift += (!!(ol_flags & PKT_TX_IPV6) << 3);
 
 			w1.il4type = NIX_SENDL4TYPE_TCP_CKSUM;
 			w1.ol4type = is_udp_tun ? NIX_SENDL4TYPE_UDP_CKSUM : 0;
 			/* Update format for UDP tunneled packet */
-			send_hdr_ext->w0.lso_format += is_udp_tun ? 2 : 6;
-
-			send_hdr_ext->w0.lso_format +=
-				!!(ol_flags & PKT_TX_OUTER_IPV6) << 1;
+			send_hdr_ext->w0.lso_format = (lso_tun_fmt >> shift);
 		}
 	}
 
@@ -363,6 +365,10 @@ otx2_nix_xmit_prepare(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags)
 			 * DF bit = 0 otherwise
 			 */
 			send_hdr->w0.df = otx2_nix_prefree_seg(m);
+			/* Ensuring mbuf fields which got updated in
+			 * otx2_nix_prefree_seg are written before LMTST.
+			 */
+			rte_io_wmb();
 		}
 		/* Mark mempool object as "put" since it is freed by NIX */
 		if (!send_hdr->w0.df)
@@ -381,6 +387,24 @@ otx2_nix_xmit_one(uint64_t *cmd, void *lmt_addr,
 		otx2_lmt_mov(lmt_addr, cmd, otx2_nix_tx_ext_subs(flags));
 		lmt_status = otx2_lmt_submit(io_addr);
 	} while (lmt_status == 0);
+}
+
+static __rte_always_inline void
+otx2_nix_xmit_prep_lmt(uint64_t *cmd, void *lmt_addr, const uint32_t flags)
+{
+	otx2_lmt_mov(lmt_addr, cmd, otx2_nix_tx_ext_subs(flags));
+}
+
+static __rte_always_inline uint64_t
+otx2_nix_xmit_submit_lmt(const rte_iova_t io_addr)
+{
+	return otx2_lmt_submit(io_addr);
+}
+
+static __rte_always_inline uint64_t
+otx2_nix_xmit_submit_lmt_release(const rte_iova_t io_addr)
+{
+	return otx2_lmt_submit_release(io_addr);
 }
 
 static __rte_always_inline uint16_t
@@ -418,13 +442,17 @@ otx2_nix_prepare_mseg(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags)
 		sg_u = sg_u | ((uint64_t)m->data_len << (i << 4));
 		*slist = rte_mbuf_data_iova(m);
 		/* Set invert df if buffer is not to be freed by H/W */
-		if (flags & NIX_TX_OFFLOAD_MBUF_NOFF_F)
+		if (flags & NIX_TX_OFFLOAD_MBUF_NOFF_F) {
 			sg_u |=	(otx2_nix_prefree_seg(m) << (i + 55));
-		/* Mark mempool object as "put" since it is freed by NIX */
-		if (!(sg_u & (1ULL << (i + 55)))) {
-			m->next = NULL;
-			__mempool_check_cookies(m->pool, (void **)&m, 1, 0);
+			/* Commit changes to mbuf */
+			rte_io_wmb();
 		}
+		/* Mark mempool object as "put" since it is freed by NIX */
+#ifdef RTE_LIBRTE_MEMPOOL_DEBUG
+		if (!(sg_u & (1ULL << (i + 55))))
+			__mempool_check_cookies(m->pool, (void **)&m, 1, 0);
+		rte_io_wmb();
+#endif
 		slist++;
 		i++;
 		nb_segs--;
@@ -454,11 +482,30 @@ otx2_nix_prepare_mseg(struct rte_mbuf *m, uint64_t *cmd, const uint16_t flags)
 }
 
 static __rte_always_inline void
+otx2_nix_xmit_mseg_prep_lmt(uint64_t *cmd, void *lmt_addr, uint16_t segdw)
+{
+	otx2_lmt_mov_seg(lmt_addr, (const void *)cmd, segdw);
+}
+
+static __rte_always_inline void
 otx2_nix_xmit_mseg_one(uint64_t *cmd, void *lmt_addr,
 		       rte_iova_t io_addr, uint16_t segdw)
 {
 	uint64_t lmt_status;
 
+	do {
+		otx2_lmt_mov_seg(lmt_addr, (const void *)cmd, segdw);
+		lmt_status = otx2_lmt_submit(io_addr);
+	} while (lmt_status == 0);
+}
+
+static __rte_always_inline void
+otx2_nix_xmit_mseg_one_release(uint64_t *cmd, void *lmt_addr,
+		       rte_iova_t io_addr, uint16_t segdw)
+{
+	uint64_t lmt_status;
+
+	rte_io_wmb();
 	do {
 		otx2_lmt_mov_seg(lmt_addr, (const void *)cmd, segdw);
 		lmt_status = otx2_lmt_submit(io_addr);

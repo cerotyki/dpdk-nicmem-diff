@@ -35,6 +35,7 @@
 #ifndef RTE_EXEC_ENV_WINDOWS
 #include <rte_telemetry.h>
 #endif
+#include <rte_vect.h>
 
 #include "eal_internal_cfg.h"
 #include "eal_options.h"
@@ -51,7 +52,8 @@
 
 const char
 eal_short_options[] =
-	"b:" /* pci-blacklist */
+	"a:" /* allow */
+	"b:" /* block */
 	"c:" /* coremask */
 	"s:" /* service coremask */
 	"d:" /* driver */
@@ -62,7 +64,7 @@ eal_short_options[] =
 	"n:" /* memory channels */
 	"r:" /* memory ranks */
 	"v"  /* version */
-	"w:" /* pci-whitelist */
+	"w:" /* pci-whitelist (deprecated) */
 	;
 
 const struct option
@@ -81,14 +83,15 @@ eal_long_options[] = {
 	{OPT_TRACE_BUF_SIZE,    1, NULL, OPT_TRACE_BUF_SIZE_NUM   },
 	{OPT_TRACE_MODE,        1, NULL, OPT_TRACE_MODE_NUM       },
 	{OPT_MASTER_LCORE,      1, NULL, OPT_MASTER_LCORE_NUM     },
+	{OPT_MAIN_LCORE,        1, NULL, OPT_MAIN_LCORE_NUM       },
 	{OPT_MBUF_POOL_OPS_NAME, 1, NULL, OPT_MBUF_POOL_OPS_NAME_NUM},
 	{OPT_NO_HPET,           0, NULL, OPT_NO_HPET_NUM          },
 	{OPT_NO_HUGE,           0, NULL, OPT_NO_HUGE_NUM          },
 	{OPT_NO_PCI,            0, NULL, OPT_NO_PCI_NUM           },
 	{OPT_NO_SHCONF,         0, NULL, OPT_NO_SHCONF_NUM        },
 	{OPT_IN_MEMORY,         0, NULL, OPT_IN_MEMORY_NUM        },
-	{OPT_PCI_BLACKLIST,     1, NULL, OPT_PCI_BLACKLIST_NUM    },
-	{OPT_PCI_WHITELIST,     1, NULL, OPT_PCI_WHITELIST_NUM    },
+	{OPT_DEV_BLOCK,         1, NULL, OPT_DEV_BLOCK_NUM        },
+	{OPT_DEV_ALLOW,		1, NULL, OPT_DEV_ALLOW_NUM	  },
 	{OPT_PROC_TYPE,         1, NULL, OPT_PROC_TYPE_NUM        },
 	{OPT_SOCKET_MEM,        1, NULL, OPT_SOCKET_MEM_NUM       },
 	{OPT_SOCKET_LIMIT,      1, NULL, OPT_SOCKET_LIMIT_NUM     },
@@ -102,6 +105,12 @@ eal_long_options[] = {
 	{OPT_MATCH_ALLOCATIONS, 0, NULL, OPT_MATCH_ALLOCATIONS_NUM},
 	{OPT_TELEMETRY,         0, NULL, OPT_TELEMETRY_NUM        },
 	{OPT_NO_TELEMETRY,      0, NULL, OPT_NO_TELEMETRY_NUM     },
+	{OPT_FORCE_MAX_SIMD_BITWIDTH, 1, NULL, OPT_FORCE_MAX_SIMD_BITWIDTH_NUM},
+
+	/* legacy options that will be removed in future */
+	{OPT_PCI_BLACKLIST,     1, NULL, OPT_PCI_BLACKLIST_NUM    },
+	{OPT_PCI_WHITELIST,     1, NULL, OPT_PCI_WHITELIST_NUM    },
+
 	{0,                     0, NULL, 0                        }
 };
 
@@ -144,7 +153,7 @@ struct device_option {
 static struct device_option_list devopt_list =
 TAILQ_HEAD_INITIALIZER(devopt_list);
 
-static int master_lcore_parsed;
+static int main_lcore_parsed;
 static int mem_parsed;
 static int core_parsed;
 
@@ -219,9 +228,9 @@ eal_save_args(int argc, char **argv)
 		return -1;
 
 	for (i = 0; i < argc; i++) {
-		eal_args[i] = strdup(argv[i]);
 		if (strcmp(argv[i], "--") == 0)
 			break;
+		eal_args[i] = strdup(argv[i]);
 	}
 	eal_args[i++] = NULL; /* always finish with NULL */
 
@@ -343,6 +352,8 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 	internal_cfg->user_mbuf_pool_ops_name = NULL;
 	CPU_ZERO(&internal_cfg->ctrl_cpuset);
 	internal_cfg->init_complete = 0;
+	internal_cfg->max_simd_bitwidth.bitwidth = RTE_VECT_DEFAULT_SIMD_BITWIDTH;
+	internal_cfg->max_simd_bitwidth.forced = 0;
 }
 
 static int
@@ -391,8 +402,10 @@ eal_plugindir_init(const char *path)
 		struct stat sb;
 		int nlen = strnlen(dent->d_name, sizeof(dent->d_name));
 
-		/* check if name ends in .so */
-		if (strcmp(&dent->d_name[nlen - 3], ".so") != 0)
+		/* check if name ends in .so or .so.ABI_VERSION */
+		if (strcmp(&dent->d_name[nlen - 3], ".so") != 0 &&
+		    strcmp(&dent->d_name[nlen - 4 - strlen(ABI_VERSION)],
+			   ".so."ABI_VERSION) != 0)
 			continue;
 
 		snprintf(sopath, sizeof(sopath), "%s/%s", path, dent->d_name);
@@ -481,6 +494,43 @@ out:
 	return retval;
 }
 
+static int
+is_shared_build(void)
+{
+#define EAL_SO "librte_eal.so"
+	char soname[32];
+	size_t len, minlen = strlen(EAL_SO);
+
+	len = strlcpy(soname, EAL_SO"."ABI_VERSION, sizeof(soname));
+	if (len > sizeof(soname)) {
+		RTE_LOG(ERR, EAL, "Shared lib name too long in shared build check\n");
+		len = sizeof(soname) - 1;
+	}
+
+	while (len >= minlen) {
+		void *handle;
+
+		/* check if we have this .so loaded, if so - shared build */
+		RTE_LOG(DEBUG, EAL, "Checking presence of .so '%s'\n", soname);
+		handle = dlopen(soname, RTLD_LAZY | RTLD_NOLOAD);
+		if (handle != NULL) {
+			RTE_LOG(INFO, EAL, "Detected shared linkage of DPDK\n");
+			dlclose(handle);
+			return 1;
+		}
+
+		/* remove any version numbers off the end to retry */
+		while (len-- > 0)
+			if (soname[len] == '.') {
+				soname[len] = '\0';
+				break;
+			}
+	}
+
+	RTE_LOG(INFO, EAL, "Detected static linkage of DPDK\n");
+	return 0;
+}
+
 int
 eal_plugins_init(void)
 {
@@ -492,7 +542,7 @@ eal_plugins_init(void)
 	 * (Using dlopen with NOLOAD flag on EAL, will return NULL if the EAL
 	 * shared library is not already loaded i.e. it's statically linked.)
 	 */
-	if (dlopen("librte_eal.so", RTLD_LAZY | RTLD_NOLOAD) != NULL &&
+	if (is_shared_build() &&
 			*default_solib_dir != '\0' &&
 			stat(default_solib_dir, &sb) == 0 &&
 			S_ISDIR(sb.st_mode))
@@ -575,12 +625,12 @@ eal_parse_service_coremask(const char *coremask)
 		for (j = 0; j < BITS_PER_HEX && idx < RTE_MAX_LCORE;
 				j++, idx++) {
 			if ((1 << j) & val) {
-				/* handle master lcore already parsed */
+				/* handle main lcore already parsed */
 				uint32_t lcore = idx;
-				if (master_lcore_parsed &&
-						cfg->master_lcore == lcore) {
+				if (main_lcore_parsed &&
+						cfg->main_lcore == lcore) {
 					RTE_LOG(ERR, EAL,
-						"lcore %u is master lcore, cannot use as service core\n",
+						"lcore %u is main lcore, cannot use as service core\n",
 						idx);
 					return -1;
 				}
@@ -711,10 +761,10 @@ static int
 eal_parse_service_corelist(const char *corelist)
 {
 	struct rte_config *cfg = rte_eal_get_configuration();
-	int i, idx = 0;
+	int i;
 	unsigned count = 0;
 	char *end = NULL;
-	int min, max;
+	uint32_t min, max, idx;
 	uint32_t taken_lcore_count = 0;
 
 	if (corelist == NULL)
@@ -738,6 +788,8 @@ eal_parse_service_corelist(const char *corelist)
 		idx = strtoul(corelist, &end, 10);
 		if (errno || end == NULL)
 			return -1;
+		if (idx >= RTE_MAX_LCORE)
+			return -1;
 		while (isblank(*end))
 			end++;
 		if (*end == '-') {
@@ -748,12 +800,12 @@ eal_parse_service_corelist(const char *corelist)
 				min = idx;
 			for (idx = min; idx <= max; idx++) {
 				if (cfg->lcore_role[idx] != ROLE_SERVICE) {
-					/* handle master lcore already parsed */
+					/* handle main lcore already parsed */
 					uint32_t lcore = idx;
-					if (cfg->master_lcore == lcore &&
-							master_lcore_parsed) {
+					if (cfg->main_lcore == lcore &&
+							main_lcore_parsed) {
 						RTE_LOG(ERR, EAL,
-							"Error: lcore %u is master lcore, cannot use as service core\n",
+							"Error: lcore %u is main lcore, cannot use as service core\n",
 							idx);
 						return -1;
 					}
@@ -836,25 +888,25 @@ eal_parse_corelist(const char *corelist, int *cores)
 	return 0;
 }
 
-/* Changes the lcore id of the master thread */
+/* Changes the lcore id of the main thread */
 static int
-eal_parse_master_lcore(const char *arg)
+eal_parse_main_lcore(const char *arg)
 {
 	char *parsing_end;
 	struct rte_config *cfg = rte_eal_get_configuration();
 
 	errno = 0;
-	cfg->master_lcore = (uint32_t) strtol(arg, &parsing_end, 0);
+	cfg->main_lcore = (uint32_t) strtol(arg, &parsing_end, 0);
 	if (errno || parsing_end[0] != 0)
 		return -1;
-	if (cfg->master_lcore >= RTE_MAX_LCORE)
+	if (cfg->main_lcore >= RTE_MAX_LCORE)
 		return -1;
-	master_lcore_parsed = 1;
+	main_lcore_parsed = 1;
 
-	/* ensure master core is not used as service core */
-	if (lcore_config[cfg->master_lcore].core_role == ROLE_SERVICE) {
+	/* ensure main core is not used as service core */
+	if (lcore_config[cfg->main_lcore].core_role == ROLE_SERVICE) {
 		RTE_LOG(ERR, EAL,
-			"Error: Master lcore is used as a service core\n");
+			"Error: Main lcore is used as a service core\n");
 		return -1;
 	}
 
@@ -1310,6 +1362,34 @@ eal_parse_iova_mode(const char *name)
 }
 
 static int
+eal_parse_simd_bitwidth(const char *arg)
+{
+	char *end;
+	unsigned long bitwidth;
+	int ret;
+	struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+
+	if (arg == NULL || arg[0] == '\0')
+		return -1;
+
+	errno = 0;
+	bitwidth = strtoul(arg, &end, 0);
+
+	/* check for errors */
+	if (errno != 0 || end == NULL || *end != '\0' || bitwidth > RTE_VECT_SIMD_MAX)
+		return -1;
+
+	if (bitwidth == 0)
+		bitwidth = (unsigned long) RTE_VECT_SIMD_MAX;
+	ret = rte_vect_set_max_simd_bitwidth(bitwidth);
+	if (ret < 0)
+		return -1;
+	internal_conf->max_simd_bitwidth.forced = 1;
+	return 0;
+}
+
+static int
 eal_parse_base_virtaddr(const char *arg)
 {
 	char *end;
@@ -1415,28 +1495,31 @@ eal_parse_common_option(int opt, const char *optarg,
 			struct internal_config *conf)
 {
 	static int b_used;
-	static int w_used;
+	static int a_used;
 
 	switch (opt) {
-	/* blacklist */
+	case OPT_PCI_BLACKLIST_NUM:
+		fprintf(stderr,
+			"Option --pci-blacklist is deprecated, use -b, --block instead\n");
+		/* fallthrough */
 	case 'b':
-		if (w_used)
-			goto bw_used;
-		if (eal_option_device_add(RTE_DEVTYPE_BLACKLISTED_PCI,
-				optarg) < 0) {
+		if (a_used)
+			goto ba_conflict;
+		if (eal_option_device_add(RTE_DEVTYPE_BLOCKED, optarg) < 0)
 			return -1;
-		}
 		b_used = 1;
 		break;
-	/* whitelist */
+
 	case 'w':
+		fprintf(stderr,
+			"Option -w, --pci-whitelist is deprecated, use -a, --allow option instead\n");
+		/* fallthrough */
+	case 'a':
 		if (b_used)
-			goto bw_used;
-		if (eal_option_device_add(RTE_DEVTYPE_WHITELISTED_PCI,
-				optarg) < 0) {
+			goto ba_conflict;
+		if (eal_option_device_add(RTE_DEVTYPE_ALLOWED, optarg) < 0)
 			return -1;
-		}
-		w_used = 1;
+		a_used = 1;
 		break;
 	/* coremask */
 	case 'c': {
@@ -1593,9 +1676,14 @@ eal_parse_common_option(int opt, const char *optarg,
 		break;
 
 	case OPT_MASTER_LCORE_NUM:
-		if (eal_parse_master_lcore(optarg) < 0) {
+		fprintf(stderr,
+			"Option --" OPT_MASTER_LCORE
+			" is deprecated use " OPT_MAIN_LCORE "\n");
+		/* fallthrough */
+	case OPT_MAIN_LCORE_NUM:
+		if (eal_parse_main_lcore(optarg) < 0) {
 			RTE_LOG(ERR, EAL, "invalid parameter for --"
-					OPT_MASTER_LCORE "\n");
+					OPT_MAIN_LCORE "\n");
 			return -1;
 		}
 		break;
@@ -1707,6 +1795,13 @@ eal_parse_common_option(int opt, const char *optarg,
 	case OPT_NO_TELEMETRY_NUM:
 		conf->no_telemetry = 1;
 		break;
+	case OPT_FORCE_MAX_SIMD_BITWIDTH_NUM:
+		if (eal_parse_simd_bitwidth(optarg) < 0) {
+			RTE_LOG(ERR, EAL, "invalid parameter for --"
+					OPT_FORCE_MAX_SIMD_BITWIDTH "\n");
+			return -1;
+		}
+		break;
 
 	/* don't know what to do, leave this to caller */
 	default:
@@ -1715,9 +1810,10 @@ eal_parse_common_option(int opt, const char *optarg,
 	}
 
 	return 0;
-bw_used:
-	RTE_LOG(ERR, EAL, "Options blacklist (-b) and whitelist (-w) "
-		"cannot be used at the same time\n");
+
+ba_conflict:
+	RTE_LOG(ERR, EAL,
+		"Options allow (-a) and block (-b) can't be used at the same time\n");
 	return -1;
 }
 
@@ -1763,9 +1859,9 @@ compute_ctrl_threads_cpuset(struct internal_config *internal_cfg)
 
 	RTE_CPU_AND(cpuset, cpuset, &default_set);
 
-	/* if no remaining cpu, use master lcore cpu affinity */
+	/* if no remaining cpu, use main lcore cpu affinity */
 	if (!CPU_COUNT(cpuset)) {
-		memcpy(cpuset, &lcore_config[rte_get_master_lcore()].cpuset,
+		memcpy(cpuset, &lcore_config[rte_get_main_lcore()].cpuset,
 			sizeof(*cpuset));
 	}
 }
@@ -1797,12 +1893,12 @@ eal_adjust_config(struct internal_config *internal_cfg)
 	if (internal_conf->process_type == RTE_PROC_AUTO)
 		internal_conf->process_type = eal_proc_type_detect();
 
-	/* default master lcore is the first one */
-	if (!master_lcore_parsed) {
-		cfg->master_lcore = rte_get_next_lcore(-1, 0, 0);
-		if (cfg->master_lcore >= RTE_MAX_LCORE)
+	/* default main lcore is the first one */
+	if (!main_lcore_parsed) {
+		cfg->main_lcore = rte_get_next_lcore(-1, 0, 0);
+		if (cfg->main_lcore >= RTE_MAX_LCORE)
 			return -1;
-		lcore_config[cfg->master_lcore].core_role = ROLE_RTE;
+		lcore_config[cfg->main_lcore].core_role = ROLE_RTE;
 	}
 
 	compute_ctrl_threads_cpuset(internal_cfg);
@@ -1822,8 +1918,8 @@ eal_check_common_options(struct internal_config *internal_cfg)
 	const struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
-	if (cfg->lcore_role[cfg->master_lcore] != ROLE_RTE) {
-		RTE_LOG(ERR, EAL, "Master lcore is not enabled for DPDK\n");
+	if (cfg->lcore_role[cfg->main_lcore] != ROLE_RTE) {
+		RTE_LOG(ERR, EAL, "Main lcore is not enabled for DPDK\n");
 		return -1;
 	}
 
@@ -1903,6 +1999,32 @@ eal_check_common_options(struct internal_config *internal_cfg)
 	return 0;
 }
 
+uint16_t
+rte_vect_get_max_simd_bitwidth(void)
+{
+	const struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+	return internal_conf->max_simd_bitwidth.bitwidth;
+}
+
+int
+rte_vect_set_max_simd_bitwidth(uint16_t bitwidth)
+{
+	struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+	if (internal_conf->max_simd_bitwidth.forced) {
+		RTE_LOG(NOTICE, EAL, "Cannot set max SIMD bitwidth - user runtime override enabled");
+		return -EPERM;
+	}
+
+	if (bitwidth < RTE_VECT_SIMD_DISABLED || !rte_is_power_of_2(bitwidth)) {
+		RTE_LOG(ERR, EAL, "Invalid bitwidth value!\n");
+		return -EINVAL;
+	}
+	internal_conf->max_simd_bitwidth.bitwidth = bitwidth;
+	return 0;
+}
+
 void
 eal_common_usage(void)
 {
@@ -1921,19 +2043,19 @@ eal_common_usage(void)
 	       "                      '( )' can be omitted for single element group,\n"
 	       "                      '@' can be omitted if cpus and lcores have the same value\n"
 	       "  -s SERVICE COREMASK Hexadecimal bitmask of cores to be used as service cores\n"
-	       "  --"OPT_MASTER_LCORE" ID   Core ID that is used as master\n"
+	       "  --"OPT_MAIN_LCORE" ID     Core ID that is used as main\n"
 	       "  --"OPT_MBUF_POOL_OPS_NAME" Pool ops name for mbuf to use\n"
 	       "  -n CHANNELS         Number of memory channels\n"
 	       "  -m MB               Memory to allocate (see also --"OPT_SOCKET_MEM")\n"
 	       "  -r RANKS            Force number of memory ranks (don't detect)\n"
-	       "  -b, --"OPT_PCI_BLACKLIST" Add a PCI device in black list.\n"
-	       "                      Prevent EAL from using this PCI device. The argument\n"
-	       "                      format is <domain:bus:devid.func>.\n"
-	       "  -w, --"OPT_PCI_WHITELIST" Add a PCI device in white list.\n"
-	       "                      Only use the specified PCI devices. The argument format\n"
-	       "                      is <[domain:]bus:devid.func>. This option can be present\n"
-	       "                      several times (once per device).\n"
-	       "                      [NOTE: PCI whitelist cannot be used with -b option]\n"
+	       "  -b, --block         Add a device to the blocked list.\n"
+	       "                      Prevent EAL from using this device. The argument\n"
+	       "                      format for PCI devices is <domain:bus:devid.func>.\n"
+	       "  -a, --allow         Add a device to the allow list.\n"
+	       "                      Only use the specified devices. The argument format\n"
+	       "                      for PCI devices is <[domain:]bus:devid.func>.\n"
+	       "                      This option can be present several times.\n"
+	       "                      [NOTE: " OPT_DEV_ALLOW " cannot be used with "OPT_DEV_BLOCK" option]\n"
 	       "  --"OPT_VDEV"              Add a virtual device.\n"
 	       "                      The argument format is <driver><id>[,key=val,...]\n"
 	       "                      (ex: --vdev=net_pcap0,iface=eth2).\n"
@@ -1981,6 +2103,7 @@ eal_common_usage(void)
 	       "  --"OPT_BASE_VIRTADDR"     Base virtual address\n"
 	       "  --"OPT_TELEMETRY"   Enable telemetry support (on by default)\n"
 	       "  --"OPT_NO_TELEMETRY"   Disable telemetry support\n"
+	       "  --"OPT_FORCE_MAX_SIMD_BITWIDTH" Force the max SIMD bitwidth\n"
 	       "\nEAL options for DEBUG use only:\n"
 	       "  --"OPT_HUGE_UNLINK"       Unlink hugepage files after init\n"
 	       "  --"OPT_NO_HUGE"           Use malloc instead of hugetlbfs\n"

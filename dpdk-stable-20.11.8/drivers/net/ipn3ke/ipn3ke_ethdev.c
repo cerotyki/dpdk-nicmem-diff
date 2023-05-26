@@ -483,7 +483,7 @@ static int ipn3ke_vswitch_probe(struct rte_afu_device *afu_dev)
 					RTE_CACHE_LINE_SIZE,
 					afu_dev->device.numa_node);
 		if (!hw) {
-			IPN3KE_AFU_PMD_ERR("failed to allocate hardwart data");
+			IPN3KE_AFU_PMD_ERR("failed to allocate hardware data");
 				retval = -ENOMEM;
 				return -ENOMEM;
 		}
@@ -561,11 +561,9 @@ static int ipn3ke_vswitch_remove(struct rte_afu_device *afu_dev)
 		snprintf(name, sizeof(name), "net_%s_representor_%d",
 			afu_dev->device.name, i);
 
-		ethdev = rte_eth_dev_allocated(afu_dev->device.name);
-		if (!ethdev)
-			return -ENODEV;
-
-		rte_eth_dev_destroy(ethdev, ipn3ke_rpst_uninit);
+		ethdev = rte_eth_dev_allocated(name);
+		if (ethdev != NULL)
+			rte_eth_dev_destroy(ethdev, ipn3ke_rpst_uninit);
 	}
 
 	ret = rte_eth_switch_domain_free(hw->switch_domain_id);

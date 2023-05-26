@@ -79,6 +79,10 @@ mvneta_buffs_refill(struct mvneta_priv *priv, struct mvneta_rxq *rxq, u16 *num)
 	int i, ret;
 	uint16_t nb_desc = *num;
 
+	/* To prevent GCC-12 warning. */
+	if (unlikely(nb_desc == 0))
+		return -1;
+
 	ret = rte_pktmbuf_alloc_bulk(rxq->mp, mbufs, nb_desc);
 	if (ret) {
 		MVNETA_LOG(ERR, "Failed to allocate %u mbufs.", nb_desc);
@@ -872,7 +876,17 @@ mvneta_rx_queue_flush(struct mvneta_rxq *rxq)
 	int ret, i;
 
 	descs = rte_malloc("rxdesc", MRVL_NETA_RXD_MAX * sizeof(*descs), 0);
+	if (descs == NULL) {
+		MVNETA_LOG(ERR, "Failed to allocate descs.");
+		return;
+	}
+
 	bufs = rte_malloc("buffs", MRVL_NETA_RXD_MAX * sizeof(*bufs), 0);
+	if (bufs == NULL) {
+		MVNETA_LOG(ERR, "Failed to allocate bufs.");
+		rte_free(descs);
+		return;
+	}
 
 	do {
 		num = MRVL_NETA_RXD_MAX;

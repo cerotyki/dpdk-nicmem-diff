@@ -17,6 +17,13 @@
 
 #include "base/i40e_register.h"
 
+/**
+ * _i=0...143,
+ * counters 0-127 are for the 128 VFs,
+ * counters 128-143 are for the 16 PFs
+ */
+#define I40E_GL_RXERR1_H(_i)	(0x00318004 + ((_i) * 8))
+
 #define I40E_VLAN_TAG_SIZE        4
 
 #define I40E_AQ_LEN               32
@@ -40,6 +47,9 @@
 #define I40E_MAX_VF               128
 /*flag of no loopback*/
 #define I40E_AQ_LB_MODE_NONE	  0x0
+#define I40E_AQ_LB_MODE_EN	  0x01
+#define I40E_AQ_LB_MAC		  0x01
+#define I40E_AQ_LB_MAC_LOCAL_X722 0x04
 /*
  * vlan_id is a 12 bit number.
  * The VFTA array is actually a 4096 bit array, 128 of 32bit elements.
@@ -88,8 +98,10 @@
 	do {								\
 		uint32_t ori_val;					\
 		struct rte_eth_dev *dev;				\
+		struct rte_eth_dev_data *dev_data;			\
 		ori_val = I40E_READ_REG((hw), (reg));			\
-		dev = ((struct i40e_adapter *)hw->back)->eth_dev;	\
+		dev_data = ((struct i40e_adapter *)hw->back)->pf.dev_data; \
+		dev = &rte_eth_devices[dev_data->port_id];		\
 		I40E_PCI_REG_WRITE(I40E_PCI_REG_ADDR((hw),		\
 						     (reg)), (value));	\
 		if (ori_val != value)					\
@@ -281,15 +293,30 @@ struct rte_flow {
  */
 #define I40E_ETH_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + I40E_VLAN_TAG_SIZE * 2)
+#define I40E_ETH_MAX_LEN (RTE_ETHER_MTU + I40E_ETH_OVERHEAD)
+
+#define I40E_RXTX_BYTES_H_16_BIT(bytes) ((bytes) & ~I40E_48_BIT_MASK)
+#define I40E_RXTX_BYTES_L_48_BIT(bytes) ((bytes) & I40E_48_BIT_MASK)
 
 struct i40e_adapter;
 struct rte_pci_driver;
 
 /**
+ * MAC filter type
+ */
+enum i40e_mac_filter_type {
+	I40E_MAC_PERFECT_MATCH = 1, /**< exact match of MAC addr. */
+	I40E_MACVLAN_PERFECT_MATCH, /**< exact match of MAC addr and VLAN ID. */
+	I40E_MAC_HASH_MATCH, /**< hash match of MAC addr. */
+	/** hash match of MAC addr and exact match of VLAN ID. */
+	I40E_MACVLAN_HASH_MATCH,
+};
+
+/**
  * MAC filter structure
  */
 struct i40e_mac_filter_info {
-	enum rte_mac_filter_type filter_type;
+	enum i40e_mac_filter_type filter_type;
 	struct rte_ether_addr mac_addr;
 };
 
@@ -344,7 +371,7 @@ struct i40e_veb {
 /* i40e MACVLAN filter structure */
 struct i40e_macvlan_filter {
 	struct rte_ether_addr macaddr;
-	enum rte_mac_filter_type filter_type;
+	enum i40e_mac_filter_type filter_type;
 	uint16_t vlan_id;
 };
 
@@ -399,6 +426,8 @@ struct i40e_vsi {
 	uint8_t vlan_anti_spoof_on; /* The VLAN anti-spoofing enabled */
 	uint8_t vlan_filter_on; /* The VLAN filter enabled */
 	struct i40e_bw_info bw_info; /* VSI bandwidth information */
+	uint64_t prev_rx_bytes;
+	uint64_t prev_tx_bytes;
 };
 
 struct pool_entry {
@@ -594,19 +623,34 @@ enum i40e_fdir_ip_type {
 	I40E_FDIR_IPTYPE_IPV6,
 };
 
+/**
+ * Structure to store flex pit for flow diretor.
+ */
+struct i40e_fdir_flex_pit {
+	uint8_t src_offset; /* offset in words from the beginning of payload */
+	uint8_t size;       /* size in words */
+	uint8_t dst_offset; /* offset in words of flexible payload */
+};
+
 /* A structure used to contain extend input of flow */
 struct i40e_fdir_flow_ext {
 	uint16_t vlan_tci;
 	uint8_t flexbytes[RTE_ETH_FDIR_MAX_FLEXLEN];
 	/* It is filled by the flexible payload to match. */
+	uint8_t flex_mask[I40E_FDIR_MAX_FLEX_LEN];
+	uint8_t raw_id;
 	uint8_t is_vf;   /* 1 for VF, 0 for port dev */
 	uint16_t dst_id; /* VF ID, available when is_vf is 1*/
+	uint64_t input_set;
 	bool inner_ip;   /* If there is inner ip */
 	enum i40e_fdir_ip_type iip_type; /* ip type for inner ip */
 	enum i40e_fdir_ip_type oip_type; /* ip type for outer ip */
 	bool customized_pctype; /* If customized pctype is used */
 	bool pkt_template; /* If raw packet template is used */
 	bool is_udp; /* ipv4|ipv6 udp flow */
+	enum i40e_flxpld_layer_idx layer_idx;
+	struct i40e_fdir_flex_pit flex_pit[I40E_MAX_FLXPLD_LAYER * I40E_MAX_FLXPLD_FIED];
+	bool is_flex_flow;
 };
 
 /* A structure used to define the input for a flow director filter entry */
@@ -648,23 +692,13 @@ struct i40e_fdir_action {
 };
 
 /* A structure used to define the flow director filter entry by filter_ctrl API
- * It supports RTE_ETH_FILTER_FDIR with RTE_ETH_FILTER_ADD and
- * RTE_ETH_FILTER_DELETE operations.
+ * It supports RTE_ETH_FILTER_FDIR data representation.
  */
 struct i40e_fdir_filter_conf {
 	uint32_t soft_id;
 	/* ID, an unique value is required when deal with FDIR entry */
 	struct i40e_fdir_input input;    /* Input set */
 	struct i40e_fdir_action action;  /* Action taken when match */
-};
-
-/*
- * Structure to store flex pit for flow diretor.
- */
-struct i40e_fdir_flex_pit {
-	uint8_t src_offset;    /* offset in words from the beginning of payload */
-	uint8_t size;          /* size in words */
-	uint8_t dst_offset;    /* offset in words of flexible payload */
 };
 
 struct i40e_fdir_flex_mask {
@@ -764,7 +798,9 @@ struct i40e_fdir_info {
 	bool flex_pit_flag[I40E_MAX_FLXPLD_LAYER];
 	bool flex_mask_flag[I40E_FILTER_PCTYPE_MAX];
 
-	bool inset_flag[I40E_FILTER_PCTYPE_MAX]; /* Mark if input set is set */
+	uint32_t flow_count[I40E_FILTER_PCTYPE_MAX];
+
+	uint32_t flex_flow_count[I40E_MAX_FLXPLD_LAYER];
 };
 
 /* Ethertype filter number HW supports */
@@ -863,7 +899,7 @@ struct i40e_tunnel_filter {
 	TAILQ_ENTRY(i40e_tunnel_filter) rules;
 	struct i40e_tunnel_filter_input input;
 	uint8_t is_to_vf; /* 0 - to PF, 1 - to VF */
-	uint16_t vf_id;   /* VF id, avaiblable when is_to_vf is 1. */
+	uint16_t vf_id;   /* VF id, available when is_to_vf is 1. */
 	uint16_t queue; /* Queue assigned to when match */
 };
 
@@ -932,7 +968,7 @@ struct i40e_tunnel_filter_conf {
 	uint32_t tenant_id;     /**< Tenant ID to match. VNI, GRE key... */
 	uint16_t queue_id;      /**< Queue assigned to if match. */
 	uint8_t is_to_vf;       /**< 0 - to PF, 1 - to VF */
-	uint16_t vf_id;         /**< VF id, avaiblable when is_to_vf is 1. */
+	uint16_t vf_id;         /**< VF id, available when is_to_vf is 1. */
 };
 
 #define I40E_MIRROR_MAX_ENTRIES_PER_RULE   64
@@ -1069,7 +1105,7 @@ struct i40e_vf_msg_cfg {
 	/*
 	 * If message statistics from a VF exceed the maximal limitation,
 	 * the PF will ignore any new message from that VF for
-	 * 'ignor_second' time.
+	 * 'ignore_second' time.
 	 */
 	uint32_t ignore_second;
 };
@@ -1088,6 +1124,9 @@ struct i40e_pf {
 
 	struct i40e_hw_port_stats stats_offset;
 	struct i40e_hw_port_stats stats;
+	u64 rx_err1;	/* rxerr1 */
+	u64 rx_err1_offset;
+
 	/* internal packet statistics, it should be excluded from the total */
 	struct i40e_eth_stats internal_stats_offset;
 	struct i40e_eth_stats internal_stats;
@@ -1156,6 +1195,10 @@ struct i40e_pf {
 	uint16_t switch_domain_id;
 
 	struct i40e_vf_msg_cfg vf_msg_cfg;
+	uint64_t prev_rx_bytes;
+	uint64_t prev_tx_bytes;
+	uint64_t internal_prev_rx_bytes;
+	uint64_t internal_prev_tx_bytes;
 };
 
 enum pending_msg {
@@ -1200,6 +1243,7 @@ struct i40e_vf {
 	bool promisc_unicast_enabled;
 	bool promisc_multicast_enabled;
 
+	rte_spinlock_t cmd_send_lock;
 	uint32_t version_major; /* Major version number */
 	uint32_t version_minor; /* Minor version number */
 	uint16_t promisc_flags; /* Promiscuous setting */
@@ -1235,7 +1279,6 @@ struct i40e_vf {
 struct i40e_adapter {
 	/* Common for both PF and VF */
 	struct i40e_hw hw;
-	struct rte_eth_dev *eth_dev;
 
 	/* Specific for PF or VF */
 	union {
@@ -1269,7 +1312,7 @@ struct i40e_adapter {
 };
 
 /**
- * Strucute to store private data for each VF representor instance
+ * Structure to store private data for each VF representor instance
  */
 struct i40e_vf_representor {
 	uint16_t switch_domain_id;
@@ -1277,7 +1320,7 @@ struct i40e_vf_representor {
 	uint16_t vf_id;
 	/**< Virtual Function ID */
 	struct i40e_adapter *adapter;
-	/**< Private data store of assocaiated physical function */
+	/**< Private data store of associated physical function */
 	struct i40e_eth_stats stats_offset;
 	/**< Zero-point of VF statistics*/
 };
@@ -1348,16 +1391,11 @@ void i40e_fdir_info_get(struct rte_eth_dev *dev,
 			struct rte_eth_fdir_info *fdir);
 void i40e_fdir_stats_get(struct rte_eth_dev *dev,
 			 struct rte_eth_fdir_stats *stat);
-int i40e_fdir_ctrl_func(struct rte_eth_dev *dev,
-			  enum rte_filter_op filter_op,
-			  void *arg);
 int i40e_select_filter_input_set(struct i40e_hw *hw,
 				 struct rte_eth_input_set_conf *conf,
 				 enum rte_filter_type filter);
 void i40e_fdir_filter_restore(struct i40e_pf *pf);
 int i40e_hash_filter_inset_select(struct i40e_hw *hw,
-			     struct rte_eth_input_set_conf *conf);
-int i40e_fdir_filter_inset_select(struct i40e_pf *pf,
 			     struct rte_eth_input_set_conf *conf);
 int i40e_pf_host_send_msg_to_vf(struct i40e_pf_vf *vf, uint32_t opcode,
 				uint32_t retval, uint8_t *msg,
@@ -1386,9 +1424,6 @@ uint64_t i40e_get_default_input_set(uint16_t pctype);
 int i40e_ethertype_filter_set(struct i40e_pf *pf,
 			      struct rte_eth_ethertype_filter *filter,
 			      bool add);
-int i40e_add_del_fdir_filter(struct rte_eth_dev *dev,
-			     const struct rte_eth_fdir_filter *filter,
-			     bool add);
 struct rte_flow *
 i40e_fdir_entry_pool_get(struct i40e_fdir_info *fdir_info);
 void i40e_fdir_entry_pool_put(struct i40e_fdir_info *fdir_info,
@@ -1419,8 +1454,8 @@ bool is_i40evf_supported(struct rte_eth_dev *dev);
 
 int i40e_validate_input_set(enum i40e_filter_pctype pctype,
 			    enum rte_filter_type filter, uint64_t inset);
-int i40e_generate_inset_mask_reg(uint64_t inset, uint32_t *mask,
-				 uint8_t nb_elem);
+int i40e_generate_inset_mask_reg(struct i40e_hw *hw, uint64_t inset,
+				 uint32_t *mask, uint8_t nb_elem);
 uint64_t i40e_translate_input_set_reg(enum i40e_mac_type type, uint64_t input);
 void i40e_check_write_reg(struct i40e_hw *hw, uint32_t addr, uint32_t val);
 void i40e_check_write_global_reg(struct i40e_hw *hw,
@@ -1493,7 +1528,7 @@ i40e_get_vsi_from_adapter(struct i40e_adapter *adapter)
 #define I40E_VSI_TO_DEV_DATA(vsi) \
 	(((struct i40e_vsi *)vsi)->adapter->pf.dev_data)
 #define I40E_VSI_TO_ETH_DEV(vsi) \
-	(((struct i40e_vsi *)vsi)->adapter->eth_dev)
+	(&rte_eth_devices[((struct i40e_vsi *)vsi)->adapter->pf.dev_data->port_id])
 
 /* I40E_PF_TO */
 #define I40E_PF_TO_HW(pf) \
@@ -1528,7 +1563,7 @@ i40e_calc_itr_interval(bool is_pf, bool is_multi_drv)
 	uint16_t interval = 0;
 
 	if (is_multi_drv) {
-		interval = I40E_QUEUE_ITR_INTERVAL_MAX;
+		interval = I40E_QUEUE_ITR_INTERVAL_DEFAULT;
 	} else {
 		if (is_pf)
 			interval = I40E_QUEUE_ITR_INTERVAL_DEFAULT;

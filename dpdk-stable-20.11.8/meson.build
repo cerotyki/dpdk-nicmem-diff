@@ -7,12 +7,18 @@ project('DPDK', 'C',
 	version: run_command(find_program('cat', 'more'),
 		files('VERSION')).stdout().strip(),
 	license: 'BSD',
-	default_options: ['buildtype=release', 'default_library=static'],
+	default_options: [
+		'buildtype=release',
+		'default_library=static',
+		'warning_level=2',
+	],
 	meson_version: '>= 0.47.1'
 )
 
 # set up some global vars for compiler, platform, configuration, etc.
 cc = meson.get_compiler('c')
+dpdk_source_root = meson.current_source_dir()
+dpdk_build_root = meson.current_build_dir()
 dpdk_conf = configuration_data()
 dpdk_libraries = []
 dpdk_static_libraries = []
@@ -59,6 +65,9 @@ subdir('doc')
 # build any examples explicitly requested - useful for developers - and
 # install any example code into the appropriate install path
 subdir('examples')
+install_subdir('examples',
+	install_dir: get_option('datadir') + '/dpdk',
+	exclude_files: ex_file_excludes)
 
 # build kernel modules if enabled
 if get_option('enable_kmods')

@@ -501,7 +501,8 @@ otx2_sso_info_get(struct rte_eventdev *event_dev,
 					RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES |
 					RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
 					RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
-					RTE_EVENT_DEV_CAP_NONSEQ_MODE;
+					RTE_EVENT_DEV_CAP_NONSEQ_MODE |
+					RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
 }
 
 static void
@@ -688,7 +689,36 @@ sso_lf_cfg(struct otx2_sso_evdev *dev, struct otx2_mbox *mbox,
 static void
 otx2_sso_port_release(void *port)
 {
-	rte_free(port);
+	struct otx2_ssogws_cookie *gws_cookie = ssogws_get_cookie(port);
+	struct otx2_sso_evdev *dev;
+	int i;
+
+	if (!gws_cookie->configured)
+		goto free;
+
+	dev = sso_pmd_priv(gws_cookie->event_dev);
+	if (dev->dual_ws) {
+		struct otx2_ssogws_dual *ws = port;
+
+		for (i = 0; i < dev->nb_event_queues; i++) {
+			sso_port_link_modify((struct otx2_ssogws *)
+					     &ws->ws_state[0], i, false);
+			sso_port_link_modify((struct otx2_ssogws *)
+					     &ws->ws_state[1], i, false);
+		}
+		memset(ws, 0, sizeof(*ws));
+	} else {
+		struct otx2_ssogws *ws = port;
+
+		for (i = 0; i < dev->nb_event_queues; i++)
+			sso_port_link_modify(ws, i, false);
+		memset(ws, 0, sizeof(*ws));
+	}
+
+	memset(gws_cookie, 0, sizeof(*gws_cookie));
+
+free:
+	rte_free(gws_cookie);
 }
 
 static void
@@ -696,33 +726,6 @@ otx2_sso_queue_release(struct rte_eventdev *event_dev, uint8_t queue_id)
 {
 	RTE_SET_USED(event_dev);
 	RTE_SET_USED(queue_id);
-}
-
-static void
-sso_clr_links(const struct rte_eventdev *event_dev)
-{
-	struct otx2_sso_evdev *dev = sso_pmd_priv(event_dev);
-	int i, j;
-
-	for (i = 0; i < dev->nb_event_ports; i++) {
-		if (dev->dual_ws) {
-			struct otx2_ssogws_dual *ws;
-
-			ws = event_dev->data->ports[i];
-			for (j = 0; j < dev->nb_event_queues; j++) {
-				sso_port_link_modify((struct otx2_ssogws *)
-						&ws->ws_state[0], j, false);
-				sso_port_link_modify((struct otx2_ssogws *)
-						&ws->ws_state[1], j, false);
-			}
-		} else {
-			struct otx2_ssogws *ws;
-
-			ws = event_dev->data->ports[i];
-			for (j = 0; j < dev->nb_event_queues; j++)
-				sso_port_link_modify(ws, j, false);
-		}
-	}
 }
 
 static void
@@ -771,7 +774,7 @@ sso_set_port_ops(struct otx2_ssogws *ws, uintptr_t base)
 	ws->tag_op		= base + SSOW_LF_GWS_TAG;
 	ws->wqp_op		= base + SSOW_LF_GWS_WQP;
 	ws->getwrk_op		= base + SSOW_LF_GWS_OP_GET_WORK;
-	ws->swtp_op		= base + SSOW_LF_GWS_SWTP;
+	ws->swtag_flush_op	= base + SSOW_LF_GWS_OP_SWTAG_FLUSH;
 	ws->swtag_norm_op	= base + SSOW_LF_GWS_OP_SWTAG_NORM;
 	ws->swtag_desched_op	= base + SSOW_LF_GWS_OP_SWTAG_DESCHED;
 }
@@ -802,6 +805,7 @@ sso_configure_dual_ports(const struct rte_eventdev *event_dev)
 	}
 
 	for (i = 0; i < dev->nb_event_ports; i++) {
+		struct otx2_ssogws_cookie *gws_cookie;
 		struct otx2_ssogws_dual *ws;
 		uintptr_t base;
 
@@ -810,14 +814,20 @@ sso_configure_dual_ports(const struct rte_eventdev *event_dev)
 		} else {
 			/* Allocate event port memory */
 			ws = rte_zmalloc_socket("otx2_sso_ws",
-					sizeof(struct otx2_ssogws_dual),
+					sizeof(struct otx2_ssogws_dual) +
+					RTE_CACHE_LINE_SIZE,
 					RTE_CACHE_LINE_SIZE,
 					event_dev->data->socket_id);
-		}
-		if (ws == NULL) {
-			otx2_err("Failed to alloc memory for port=%d", i);
-			rc = -ENOMEM;
-			break;
+			if (ws == NULL) {
+				otx2_err("Failed to alloc memory for port=%d",
+					 i);
+				rc = -ENOMEM;
+				break;
+			}
+
+			/* First cache line is reserved for cookie */
+			ws = (struct otx2_ssogws_dual *)
+				((uint8_t *)ws + RTE_CACHE_LINE_SIZE);
 		}
 
 		ws->port = i;
@@ -828,6 +838,10 @@ sso_configure_dual_ports(const struct rte_eventdev *event_dev)
 		base = dev->bar2 + (RVU_BLOCK_ADDR_SSOW << 20 | vws << 12);
 		sso_set_port_ops((struct otx2_ssogws *)&ws->ws_state[1], base);
 		vws++;
+
+		gws_cookie = ssogws_get_cookie(ws);
+		gws_cookie->event_dev = event_dev;
+		gws_cookie->configured = 1;
 
 		event_dev->data->ports[i] = ws;
 	}
@@ -865,30 +879,38 @@ sso_configure_ports(const struct rte_eventdev *event_dev)
 	}
 
 	for (i = 0; i < nb_lf; i++) {
+		struct otx2_ssogws_cookie *gws_cookie;
 		struct otx2_ssogws *ws;
 		uintptr_t base;
 
-		/* Free memory prior to re-allocation if needed */
 		if (event_dev->data->ports[i] != NULL) {
 			ws = event_dev->data->ports[i];
-			rte_free(ws);
-			ws = NULL;
-		}
+		} else {
+			/* Allocate event port memory */
+			ws = rte_zmalloc_socket("otx2_sso_ws",
+						sizeof(struct otx2_ssogws) +
+						RTE_CACHE_LINE_SIZE,
+						RTE_CACHE_LINE_SIZE,
+						event_dev->data->socket_id);
+			if (ws == NULL) {
+				otx2_err("Failed to alloc memory for port=%d",
+					 i);
+				rc = -ENOMEM;
+				break;
+			}
 
-		/* Allocate event port memory */
-		ws = rte_zmalloc_socket("otx2_sso_ws",
-					sizeof(struct otx2_ssogws),
-					RTE_CACHE_LINE_SIZE,
-					event_dev->data->socket_id);
-		if (ws == NULL) {
-			otx2_err("Failed to alloc memory for port=%d", i);
-			rc = -ENOMEM;
-			break;
+			/* First cache line is reserved for cookie */
+			ws = (struct otx2_ssogws *)
+				((uint8_t *)ws + RTE_CACHE_LINE_SIZE);
 		}
 
 		ws->port = i;
 		base = dev->bar2 + (RVU_BLOCK_ADDR_SSOW << 20 | i << 12);
 		sso_set_port_ops(ws, base);
+
+		gws_cookie = ssogws_get_cookie(ws);
+		gws_cookie->event_dev = event_dev;
+		gws_cookie->configured = 1;
 
 		event_dev->data->ports[i] = ws;
 	}
@@ -959,7 +981,7 @@ sso_xaq_allocate(struct otx2_sso_evdev *dev)
 
 	dev->fc_iova = mz->iova;
 	dev->fc_mem = mz->addr;
-
+	*dev->fc_mem = 0;
 	aura = (struct npa_aura_s *)((uintptr_t)dev->fc_mem + OTX2_ALIGN);
 	memset(aura, 0, sizeof(struct npa_aura_s));
 
@@ -1035,6 +1057,19 @@ sso_ggrp_alloc_xaq(struct otx2_sso_evdev *dev)
 	return otx2_mbox_process(mbox);
 }
 
+static int
+sso_ggrp_free_xaq(struct otx2_sso_evdev *dev)
+{
+	struct otx2_mbox *mbox = dev->mbox;
+	struct sso_release_xaq *req;
+
+	otx2_sso_dbg("Freeing XAQ for GGRPs");
+	req = otx2_mbox_alloc_msg_sso_hw_release_xaq_aura(mbox);
+	req->hwgrps = dev->nb_event_queues;
+
+	return otx2_mbox_process(mbox);
+}
+
 static void
 sso_lf_teardown(struct otx2_sso_evdev *dev,
 		enum otx2_sso_lf_type lf_type)
@@ -1098,11 +1133,8 @@ otx2_sso_configure(const struct rte_eventdev *event_dev)
 		return -EINVAL;
 	}
 
-	if (dev->configured) {
+	if (dev->configured)
 		sso_unregister_irqs(event_dev);
-		/* Clear any prior port-queue mapping. */
-		sso_clr_links(event_dev);
-	}
 
 	if (dev->nb_event_queues) {
 		/* Finit any previous queues. */
@@ -1428,6 +1460,8 @@ sso_cleanup(struct rte_eventdev *event_dev, uint8_t enable)
 			ssogws_reset((struct otx2_ssogws *)&ws->ws_state[1]);
 			ws->swtag_req = 0;
 			ws->vws = 0;
+			ws->fc_mem = dev->fc_mem;
+			ws->xaq_lmt = dev->xaq_lmt;
 			ws->ws_state[0].cur_grp = 0;
 			ws->ws_state[0].cur_tt = SSO_SYNC_EMPTY;
 			ws->ws_state[1].cur_grp = 0;
@@ -1438,6 +1472,8 @@ sso_cleanup(struct rte_eventdev *event_dev, uint8_t enable)
 			ws = event_dev->data->ports[i];
 			ssogws_reset(ws);
 			ws->swtag_req = 0;
+			ws->fc_mem = dev->fc_mem;
+			ws->xaq_lmt = dev->xaq_lmt;
 			ws->cur_grp = 0;
 			ws->cur_tt = SSO_SYNC_EMPTY;
 		}
@@ -1484,28 +1520,30 @@ int
 sso_xae_reconfigure(struct rte_eventdev *event_dev)
 {
 	struct otx2_sso_evdev *dev = sso_pmd_priv(event_dev);
-	struct rte_mempool *prev_xaq_pool;
 	int rc = 0;
 
 	if (event_dev->data->dev_started)
 		sso_cleanup(event_dev, 0);
 
-	prev_xaq_pool = dev->xaq_pool;
+	rc = sso_ggrp_free_xaq(dev);
+	if (rc < 0) {
+		otx2_err("Failed to free XAQ\n");
+		return rc;
+	}
+
+	rte_mempool_free(dev->xaq_pool);
 	dev->xaq_pool = NULL;
 	rc = sso_xaq_allocate(dev);
 	if (rc < 0) {
 		otx2_err("Failed to alloc xaq pool %d", rc);
-		rte_mempool_free(prev_xaq_pool);
 		return rc;
 	}
 	rc = sso_ggrp_alloc_xaq(dev);
 	if (rc < 0) {
 		otx2_err("Failed to alloc xaq to ggrp %d", rc);
-		rte_mempool_free(prev_xaq_pool);
 		return rc;
 	}
 
-	rte_mempool_free(prev_xaq_pool);
 	rte_mb();
 	if (event_dev->data->dev_started)
 		sso_cleanup(event_dev, 1);
@@ -1587,6 +1625,10 @@ static struct rte_eventdev_ops otx2_sso_ops = {
 
 	.timer_adapter_caps_get = otx2_tim_caps_get,
 
+	.crypto_adapter_caps_get = otx2_ca_caps_get,
+	.crypto_adapter_queue_pair_add = otx2_ca_qp_add,
+	.crypto_adapter_queue_pair_del = otx2_ca_qp_del,
+
 	.xstats_get       = otx2_sso_xstats_get,
 	.xstats_reset     = otx2_sso_xstats_reset,
 	.xstats_get_names = otx2_sso_xstats_get_names,
@@ -1601,7 +1643,6 @@ static struct rte_eventdev_ops otx2_sso_ops = {
 #define OTX2_SSO_XAE_CNT	"xae_cnt"
 #define OTX2_SSO_SINGLE_WS	"single_ws"
 #define OTX2_SSO_GGRP_QOS	"qos"
-#define OTX2_SSO_SELFTEST	"selftest"
 
 static void
 parse_queue_param(char *value, void *opaque)
@@ -1691,8 +1732,6 @@ sso_parse_devargs(struct otx2_sso_evdev *dev, struct rte_devargs *devargs)
 	if (kvlist == NULL)
 		return;
 
-	rte_kvargs_process(kvlist, OTX2_SSO_SELFTEST, &parse_kvargs_flag,
-			   &dev->selftest);
 	rte_kvargs_process(kvlist, OTX2_SSO_XAE_CNT, &parse_kvargs_value,
 			   &dev->xae_cnt);
 	rte_kvargs_process(kvlist, OTX2_SSO_SINGLE_WS, &parse_kvargs_flag,
@@ -1808,10 +1847,6 @@ otx2_sso_init(struct rte_eventdev *event_dev)
 	otx2_sso_dbg("Initializing %s max_queues=%d max_ports=%d",
 		     event_dev->data->name, dev->max_event_queues,
 		     dev->max_event_ports);
-	if (dev->selftest) {
-		event_dev->dev->driver = &pci_sso.driver;
-		event_dev->dev_ops->dev_selftest();
-	}
 
 	otx2_tim_init(pci_dev, (struct otx2_dev *)dev);
 
@@ -1861,5 +1896,4 @@ RTE_PMD_REGISTER_KMOD_DEP(event_octeontx2, "vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(event_octeontx2, OTX2_SSO_XAE_CNT "=<int>"
 			      OTX2_SSO_SINGLE_WS "=1"
 			      OTX2_SSO_GGRP_QOS "=<string>"
-			      OTX2_SSO_SELFTEST "=1"
 			      OTX2_NPA_LOCK_MASK "=<1-65535>");

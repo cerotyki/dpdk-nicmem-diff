@@ -133,6 +133,12 @@ err:
 	return ret;
 }
 
+struct rte_dev_event {
+	enum rte_dev_event_type type;	/**< device event type */
+	int subsystem;			/**< subsystem id */
+	char *devname;			/**< device name */
+};
+
 static int
 dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 {
@@ -151,6 +157,9 @@ dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 				break;
 			buf++;
 		}
+		if (i >= length)
+			break;
+
 		/**
 		 * check device uevent from kernel side, no need to check
 		 * uevent from udev.
@@ -189,7 +198,7 @@ dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 	else if (!strncmp(subsystem, "vfio", 4))
 		event->subsystem = EAL_DEV_EVENT_SUBSYSTEM_VFIO;
 	else
-		return -1;
+		goto err;
 
 	/* parse the action type */
 	if (!strncmp(action, "add", 3))
@@ -197,8 +206,11 @@ dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 	else if (!strncmp(action, "remove", 6))
 		event->type = RTE_DEV_EVENT_REMOVE;
 	else
-		return -1;
+		goto err;
 	return 0;
+err:
+	free(event->devname);
+	return -1;
 }
 
 static void
@@ -214,13 +226,13 @@ dev_uev_handler(__rte_unused void *param)
 {
 	struct rte_dev_event uevent;
 	int ret;
-	char buf[EAL_UEV_MSG_LEN];
+	char buf[EAL_UEV_MSG_LEN + 1];
 	struct rte_bus *bus;
 	struct rte_device *dev;
 	const char *busname = "";
 
 	memset(&uevent, 0, sizeof(struct rte_dev_event));
-	memset(buf, 0, EAL_UEV_MSG_LEN);
+	memset(buf, 0, EAL_UEV_MSG_LEN + 1);
 
 	ret = recv(intr_handle.fd, buf, EAL_UEV_MSG_LEN, MSG_DONTWAIT);
 	if (ret < 0 && errno == EAGAIN)
@@ -234,8 +246,7 @@ dev_uev_handler(__rte_unused void *param)
 
 	ret = dev_uev_parse(buf, &uevent, EAL_UEV_MSG_LEN);
 	if (ret < 0) {
-		RTE_LOG(DEBUG, EAL, "It is not an valid event "
-			"that need to be handle.\n");
+		RTE_LOG(DEBUG, EAL, "Ignoring uevent '%s'\n", buf);
 		return;
 	}
 
@@ -277,12 +288,14 @@ dev_uev_handler(__rte_unused void *param)
 			rte_spinlock_unlock(&failure_handle_lock);
 		}
 		rte_dev_event_callback_process(uevent.devname, uevent.type);
+		free(uevent.devname);
 	}
 
 	return;
 
 failure_handle_err:
 	rte_spinlock_unlock(&failure_handle_lock);
+	free(uevent.devname);
 }
 
 int

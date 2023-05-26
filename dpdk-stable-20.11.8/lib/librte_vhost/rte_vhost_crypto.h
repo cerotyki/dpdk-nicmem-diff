@@ -5,17 +5,44 @@
 #ifndef _VHOST_CRYPTO_H_
 #define _VHOST_CRYPTO_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+
+#include <rte_compat.h>
+
+/* pre-declare structs to avoid including full headers */
+struct rte_mempool;
+struct rte_crypto_op;
+
 #define VHOST_CRYPTO_MBUF_POOL_SIZE		(8192)
 #define VHOST_CRYPTO_MAX_BURST_SIZE		(64)
+#define VHOST_CRYPTO_MAX_DATA_SIZE		(4096)
 #define VHOST_CRYPTO_SESSION_MAP_ENTRIES	(1024) /**< Max nb sessions */
 /** max nb virtual queues in a burst for finalizing*/
 #define VIRTIO_CRYPTO_MAX_NUM_BURST_VQS		(64)
+#define VHOST_CRYPTO_MAX_IV_LEN			(32)
+#define VHOST_CRYPTO_MAX_N_DESC			(32)
 
 enum rte_vhost_crypto_zero_copy {
 	RTE_VHOST_CRYPTO_ZERO_COPY_DISABLE = 0,
 	RTE_VHOST_CRYPTO_ZERO_COPY_ENABLE = 1,
 	RTE_VHOST_CRYPTO_MAX_ZERO_COPY_OPTIONS
 };
+
+/**
+ * Start vhost crypto driver
+ *
+ * @param path
+ *  The vhost-user socket file path
+ * @return
+ *  0 on success, -1 on failure
+ */
+__rte_experimental
+int
+rte_vhost_crypto_driver_start(const char *path);
 
 /**
  *  Create Vhost-crypto instance
@@ -113,5 +140,9 @@ __rte_experimental
 uint16_t
 rte_vhost_crypto_finalize_requests(struct rte_crypto_op **ops,
 		uint16_t nb_ops, int *callfds, uint16_t *nb_callfds);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /**< _VHOST_CRYPTO_H_ */

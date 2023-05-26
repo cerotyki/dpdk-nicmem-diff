@@ -657,6 +657,9 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 		}
 	}
 
+	/* Setup scatter mode if needed by jumbo */
+	otx2_nix_enable_mseg_on_jumbo(rxq);
+
 	return 0;
 
 free_rxq:
@@ -876,6 +879,33 @@ nix_sqb_unlock(struct rte_mempool *mp)
 	}
 
 	return 0;
+}
+
+void
+otx2_nix_enable_mseg_on_jumbo(struct otx2_eth_rxq *rxq)
+{
+	struct rte_pktmbuf_pool_private *mbp_priv;
+	struct rte_eth_dev *eth_dev;
+	struct otx2_eth_dev *dev;
+	uint32_t buffsz;
+
+	eth_dev = rxq->eth_dev;
+	dev = otx2_eth_pmd_priv(eth_dev);
+
+	/* Get rx buffer size */
+	mbp_priv = rte_mempool_get_priv(rxq->pool);
+	buffsz = mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM;
+
+	if (eth_dev->data->dev_conf.rxmode.max_rx_pkt_len > buffsz) {
+		dev->rx_offloads |= DEV_RX_OFFLOAD_SCATTER;
+		dev->tx_offloads |= DEV_TX_OFFLOAD_MULTI_SEGS;
+
+		/* Setting up the rx[tx]_offload_flags due to change
+		 * in rx[tx]_offloads.
+		 */
+		dev->rx_offload_flags |= nix_rx_offload_flags(eth_dev);
+		dev->tx_offload_flags |= nix_tx_offload_flags(eth_dev);
+	}
 }
 
 static int
@@ -1281,6 +1311,7 @@ otx2_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t sq,
 	txq->qconf.nb_desc = nb_desc;
 	memcpy(&txq->qconf.conf.tx, tx_conf, sizeof(struct rte_eth_txconf));
 
+	txq->lso_tun_fmt = dev->lso_tun_fmt;
 	otx2_nix_form_default_desc(txq);
 
 	otx2_nix_dbg("sq=%d fc=%p offload=0x%" PRIx64 " sqb=0x%" PRIx64 ""
@@ -1353,10 +1384,8 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 	return 0;
 
 fail:
-	if (tx_qconf)
-		free(tx_qconf);
-	if (rx_qconf)
-		free(rx_qconf);
+	free(tx_qconf);
+	free(rx_qconf);
 
 	return -ENOMEM;
 }
@@ -1633,7 +1662,7 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	struct otx2_mbox *mbox = dev->mbox;
 	struct nix_lso_format_cfg_rsp *rsp;
 	struct nix_lso_format_cfg *req;
-	uint8_t base;
+	uint8_t *fmt;
 	int rc;
 
 	/* Skip if TSO was not requested */
@@ -1648,11 +1677,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	base = rsp->lso_format_idx;
-	if (base != NIX_LSO_FORMAT_IDX_TSOV4)
+	if (rsp->lso_format_idx != NIX_LSO_FORMAT_IDX_TSOV4)
 		return -EFAULT;
-	dev->lso_base_idx = base;
-	otx2_nix_dbg("tcpv4 lso fmt=%u", base);
+	otx2_nix_dbg("tcpv4 lso fmt=%u", rsp->lso_format_idx);
 
 
 	/*
@@ -1664,9 +1691,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 1)
+	if (rsp->lso_format_idx != NIX_LSO_FORMAT_IDX_TSOV6)
 		return -EFAULT;
-	otx2_nix_dbg("tcpv6 lso fmt=%u\n", base + 1);
+	otx2_nix_dbg("tcpv6 lso fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/UDP/TUN HDR/IPv4/TCP LSO
@@ -1677,9 +1704,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 2)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v4v4 fmt=%u\n", base + 2);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V4V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v4v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/UDP/TUN HDR/IPv6/TCP LSO
@@ -1690,9 +1716,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 3)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v4v6 fmt=%u\n", base + 3);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V4V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v4v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/UDP/TUN HDR/IPv4/TCP LSO
@@ -1703,9 +1728,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 4)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v6v4 fmt=%u\n", base + 4);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V6V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v6v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/UDP/TUN HDR/IPv6/TCP LSO
@@ -1715,9 +1739,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	rc = otx2_mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
 		return rc;
-	if (rsp->lso_format_idx != base + 5)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v6v6 fmt=%u\n", base + 5);
+
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V6V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v6v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/TUN HDR/IPv4/TCP LSO
@@ -1728,9 +1752,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 6)
-		return -EFAULT;
-	otx2_nix_dbg("tun v4v4 fmt=%u\n", base + 6);
+	dev->lso_tun_idx[NIX_LSO_TUN_V4V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v4v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/TUN HDR/IPv6/TCP LSO
@@ -1741,9 +1764,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 7)
-		return -EFAULT;
-	otx2_nix_dbg("tun v4v6 fmt=%u\n", base + 7);
+	dev->lso_tun_idx[NIX_LSO_TUN_V4V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v4v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/TUN HDR/IPv4/TCP LSO
@@ -1754,9 +1776,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 8)
-		return -EFAULT;
-	otx2_nix_dbg("tun v6v4 fmt=%u\n", base + 8);
+	dev->lso_tun_idx[NIX_LSO_TUN_V6V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v6v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/TUN HDR/IPv6/TCP LSO
@@ -1766,9 +1787,26 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	rc = otx2_mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
 		return rc;
-	if (rsp->lso_format_idx != base + 9)
-		return -EFAULT;
-	otx2_nix_dbg("tun v6v6 fmt=%u\n", base + 9);
+
+	dev->lso_tun_idx[NIX_LSO_TUN_V6V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v6v6 fmt=%u\n", rsp->lso_format_idx);
+
+	/* Save all tun formats into u64 for fast path.
+	 * Lower 32bit has non-udp tunnel formats.
+	 * Upper 32bit has udp tunnel formats.
+	 */
+	fmt = dev->lso_tun_idx;
+	dev->lso_tun_fmt = ((uint64_t)fmt[NIX_LSO_TUN_V4V4] |
+			    (uint64_t)fmt[NIX_LSO_TUN_V4V6] << 8 |
+			    (uint64_t)fmt[NIX_LSO_TUN_V6V4] << 16 |
+			    (uint64_t)fmt[NIX_LSO_TUN_V6V6] << 24);
+
+	fmt = dev->lso_udp_tun_idx;
+	dev->lso_tun_fmt |= ((uint64_t)fmt[NIX_LSO_TUN_V4V4] << 32 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V4V6] << 40 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V6V4] << 48 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V6V6] << 56);
+
 	return 0;
 }
 
@@ -2111,7 +2149,7 @@ done:
 	return rc;
 }
 
-static void
+static int
 otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
@@ -2141,6 +2179,8 @@ otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 	/* Stop tx queues  */
 	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
 		otx2_nix_tx_queue_stop(eth_dev, i);
+
+	return 0;
 }
 
 static int
@@ -2195,6 +2235,16 @@ otx2_nix_dev_start(struct rte_eth_dev *eth_dev)
 	if (otx2_ethdev_is_ptp_en(dev) && otx2_dev_is_vf(dev))
 		otx2_nix_ptp_enable_vf(eth_dev);
 
+	if (dev->rx_offload_flags & NIX_RX_OFFLOAD_TSTAMP_F) {
+		rc = rte_mbuf_dyn_rx_timestamp_register(
+				&dev->tstamp.tstamp_dynfield_offset,
+				&dev->tstamp.rx_tstamp_dynflag);
+		if (rc != 0) {
+			otx2_err("Failed to register Rx timestamp field/flag");
+			return -rte_errno;
+		}
+	}
+
 	rc = npc_rx_enable(dev);
 	if (rc) {
 		otx2_err("Failed to enable NPC rx %d", rc);
@@ -2222,7 +2272,7 @@ rx_disable:
 }
 
 static int otx2_nix_dev_reset(struct rte_eth_dev *eth_dev);
-static void otx2_nix_dev_close(struct rte_eth_dev *eth_dev);
+static int otx2_nix_dev_close(struct rte_eth_dev *eth_dev);
 
 /* Initialize and register driver with DPDK Application */
 static const struct eth_dev_ops otx2_eth_dev_ops = {
@@ -2272,10 +2322,6 @@ static const struct eth_dev_ops otx2_eth_dev_ops = {
 	.txq_info_get             = otx2_nix_txq_info_get,
 	.rx_burst_mode_get        = otx2_rx_burst_mode_get,
 	.tx_burst_mode_get        = otx2_tx_burst_mode_get,
-	.rx_queue_count           = otx2_nix_rx_queue_count,
-	.rx_descriptor_done       = otx2_nix_rx_descriptor_done,
-	.rx_descriptor_status     = otx2_nix_rx_descriptor_status,
-	.tx_descriptor_status     = otx2_nix_tx_descriptor_status,
 	.tx_done_cleanup          = otx2_nix_tx_done_cleanup,
 	.set_queue_rate_limit     = otx2_nix_tm_set_queue_rate_limit,
 	.pool_ops_supported       = otx2_nix_pool_ops_supported,
@@ -2382,6 +2428,10 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	int rc, max_entries;
 
 	eth_dev->dev_ops = &otx2_eth_dev_ops;
+	eth_dev->rx_descriptor_done = otx2_nix_rx_descriptor_done;
+	eth_dev->rx_queue_count = otx2_nix_rx_queue_count;
+	eth_dev->rx_descriptor_status = otx2_nix_rx_descriptor_status;
+	eth_dev->tx_descriptor_status = otx2_nix_tx_descriptor_status;
 
 	/* For secondary processes, the primary has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
@@ -2394,7 +2444,7 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Zero out everything after OTX2_DEV to allow proper dev_reset() */
 	memset(&dev->otx2_eth_dev_data_start, 0, sizeof(*dev) -
@@ -2635,10 +2685,11 @@ otx2_eth_dev_uninit(struct rte_eth_dev *eth_dev, bool mbox_close)
 	return 0;
 }
 
-static void
+static int
 otx2_nix_dev_close(struct rte_eth_dev *eth_dev)
 {
 	otx2_eth_dev_uninit(eth_dev, true);
+	return 0;
 }
 
 static int
@@ -2668,7 +2719,7 @@ nix_remove(struct rte_pci_device *pci_dev)
 		if (rc)
 			return rc;
 
-		rte_eth_dev_pci_release(eth_dev);
+		rte_eth_dev_release_port(eth_dev);
 	}
 
 	/* Nothing to be done for secondary processes */

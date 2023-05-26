@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
-
-#include <stdbool.h>
 
 #include <rte_eal.h>
 #include <rte_ethdev_driver.h>
@@ -14,7 +12,8 @@
 #include "hns3_rxtx.h"
 #include "hns3_mp.h"
 
-static bool hns3_inited;
+/* local data for primary or secondary process. */
+struct hns3_process_local_data process_data;
 
 /*
  * Initialize IPC message.
@@ -80,7 +79,7 @@ mp_secondary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 
 	if (!rte_eth_dev_is_valid_port(param->port_id)) {
 		rte_errno = ENODEV;
-		PMD_INIT_LOG(ERR, "port %u invalid port ID", param->port_id);
+		PMD_INIT_LOG(ERR, "port %d invalid port ID", param->port_id);
 		return -rte_errno;
 	}
 	dev = &rte_eth_devices[param->port_id];
@@ -88,8 +87,8 @@ mp_secondary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 	case HNS3_MP_REQ_START_RXTX:
 		PMD_INIT_LOG(INFO, "port %u starting datapath",
 			     dev->data->port_id);
+		hns3_start_rxtx_datapath(dev);
 		rte_mb();
-		hns3_set_rxtx_function(dev);
 		mp_init_msg(dev, &mp_res, param->type);
 		res->result = 0;
 		ret = rte_mp_reply(&mp_res, peer);
@@ -97,7 +96,7 @@ mp_secondary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 	case HNS3_MP_REQ_STOP_RXTX:
 		PMD_INIT_LOG(INFO, "port %u stopping datapath",
 			     dev->data->port_id);
-		hns3_set_rxtx_function(dev);
+		hns3_stop_rxtx_datapath(dev);
 		rte_mb();
 		mp_init_msg(dev, &mp_res, param->type);
 		res->result = 0;
@@ -132,9 +131,11 @@ mp_req_on_rxtx(struct rte_eth_dev *dev, enum hns3_mp_req_type type)
 	int ret;
 	int i;
 
-	if (!hw->secondary_cnt)
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY ||
+		__atomic_load_n(&hw->secondary_cnt, __ATOMIC_RELAXED) == 0)
 		return;
 	if (type != HNS3_MP_REQ_START_RXTX && type != HNS3_MP_REQ_STOP_RXTX) {
+
 		hns3_err(hw, "port %u unknown request (req_type %d)",
 			 dev->data->port_id, type);
 		return;
@@ -198,25 +199,27 @@ int hns3_mp_init_primary(void)
 {
 	int ret;
 
-	if (!hns3_inited) {
-		/* primary is allowed to not support IPC */
-		ret = rte_mp_action_register(HNS3_MP_NAME, mp_primary_handle);
-		if (ret && rte_errno != ENOTSUP)
-			return ret;
+	if (process_data.init_done)
+		return 0;
 
-		hns3_inited = true;
-	}
+	/* primary is allowed to not support IPC */
+	ret = rte_mp_action_register(HNS3_MP_NAME, mp_primary_handle);
+	if (ret && rte_errno != ENOTSUP)
+		return ret;
+
+	process_data.init_done = true;
 
 	return 0;
 }
 
-/*
- * Un-initialize by primary process.
- */
-void hns3_mp_uninit_primary(void)
+void hns3_mp_uninit(void)
 {
-	if (hns3_inited)
+	process_data.eth_dev_cnt--;
+
+	if (process_data.eth_dev_cnt == 0) {
 		rte_mp_action_unregister(HNS3_MP_NAME);
+		process_data.init_done = false;
+	}
 }
 
 /*
@@ -226,13 +229,14 @@ int hns3_mp_init_secondary(void)
 {
 	int ret;
 
-	if (!hns3_inited) {
-		ret = rte_mp_action_register(HNS3_MP_NAME, mp_secondary_handle);
-		if (ret)
-			return ret;
+	if (process_data.init_done)
+		return 0;
 
-		hns3_inited = true;
-	}
+	ret = rte_mp_action_register(HNS3_MP_NAME, mp_secondary_handle);
+	if (ret)
+		return ret;
+
+	process_data.init_done = true;
 
 	return 0;
 }

@@ -27,6 +27,7 @@ nix_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	struct otx2_eth_txq *txq = tx_queue; uint16_t i;
 	const rte_iova_t io_addr = txq->io_addr;
 	void *lmt_addr = txq->lmt_addr;
+	uint64_t lso_tun_fmt;
 
 	NIX_XMIT_FC_OR_RETURN(txq, pkts);
 
@@ -34,15 +35,19 @@ nix_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 
 	/* Perform header writes before barrier for TSO */
 	if (flags & NIX_TX_OFFLOAD_TSO_F) {
+		lso_tun_fmt = txq->lso_tun_fmt;
 		for (i = 0; i < pkts; i++)
 			otx2_nix_xmit_prepare_tso(tx_pkts[i], flags);
 	}
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	for (i = 0; i < pkts; i++) {
-		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags);
+		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags, lso_tun_fmt);
 		/* Passing no of segdw as 4: HDR + EXT + SG + SMEM */
 		otx2_nix_xmit_prepare_tstamp(cmd, &txq->cmd[0],
 					     tx_pkts[i]->ol_flags, 4, flags);
@@ -62,6 +67,7 @@ nix_xmit_pkts_mseg(void *tx_queue, struct rte_mbuf **tx_pkts,
 	struct otx2_eth_txq *txq = tx_queue; uint64_t i;
 	const rte_iova_t io_addr = txq->io_addr;
 	void *lmt_addr = txq->lmt_addr;
+	uint64_t lso_tun_fmt;
 	uint16_t segdw;
 
 	NIX_XMIT_FC_OR_RETURN(txq, pkts);
@@ -70,15 +76,19 @@ nix_xmit_pkts_mseg(void *tx_queue, struct rte_mbuf **tx_pkts,
 
 	/* Perform header writes before barrier for TSO */
 	if (flags & NIX_TX_OFFLOAD_TSO_F) {
+		lso_tun_fmt = txq->lso_tun_fmt;
 		for (i = 0; i < pkts; i++)
 			otx2_nix_xmit_prepare_tso(tx_pkts[i], flags);
 	}
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	for (i = 0; i < pkts; i++) {
-		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags);
+		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags, lso_tun_fmt);
 		segdw = otx2_nix_prepare_mseg(tx_pkts[i], cmd, flags);
 		otx2_nix_xmit_prepare_tstamp(cmd, &txq->cmd[0],
 					     tx_pkts[i]->ol_flags, segdw,
@@ -127,8 +137,11 @@ nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 	/* Reduce the cached count */
 	txq->fc_cache_pkts -= pkts;
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	senddesc01_w0 = vld1q_dup_u64(&txq->cmd[0]);
 	senddesc23_w0 = senddesc01_w0;
@@ -221,6 +234,10 @@ nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 							1, 0);
 			senddesc01_w0 = vorrq_u64(senddesc01_w0, xmask01);
 			senddesc23_w0 = vorrq_u64(senddesc23_w0, xmask23);
+			/* Ensuring mbuf fields which got updated in
+			 * otx2_nix_prefree_seg are written before LMTST.
+			 */
+			rte_io_wmb();
 		} else {
 			struct rte_mbuf *mbuf;
 			/* Mark mempool object as "put" since

@@ -33,7 +33,7 @@ map_shared_memory(const char *filename, const size_t mem_size, int flags)
 	}
 	retval = mmap(NULL, mem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	close(fd);
-	return retval;
+	return retval == MAP_FAILED ? NULL : retval;
 }
 
 static void *
@@ -88,6 +88,10 @@ eal_hugepage_info_init(void)
 	fd = open(CONTIGMEM_DEV, O_RDWR);
 	if (fd < 0) {
 		RTE_LOG(ERR, EAL, "could not open "CONTIGMEM_DEV"\n");
+		return -1;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+		RTE_LOG(ERR, EAL, "could not lock memory. Is another DPDK process running?\n");
 		return -1;
 	}
 

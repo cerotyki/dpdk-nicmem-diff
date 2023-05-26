@@ -185,9 +185,8 @@ rte_bitmap_init(uint32_t n_bits, uint8_t *mem, uint32_t mem_size)
 	size = __rte_bitmap_get_memory_footprint(n_bits,
 		&array1_byte_offset, &array1_slabs,
 		&array2_byte_offset, &array2_slabs);
-	if (size < mem_size) {
+	if (size > mem_size)
 		return NULL;
-	}
 
 	/* Setup bitmap */
 	memset(mem, 0, size);
@@ -328,8 +327,6 @@ rte_bitmap_reset(struct rte_bitmap *bmp)
  *   Handle to bitmap instance
  * @param pos
  *   Bit position
- * @return
- *   0 upon success, error code otherwise
  */
 static inline void
 rte_bitmap_prefetch0(struct rte_bitmap *bmp, uint32_t pos)

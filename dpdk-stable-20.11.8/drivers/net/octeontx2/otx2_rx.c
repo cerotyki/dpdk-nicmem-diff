@@ -279,6 +279,12 @@ nix_recv_pkts_vector(void *rx_queue, struct rte_mbuf **rx_pkts,
 		vst1q_u64((uint64_t *)mbuf2->rearm_data, rearm2);
 		vst1q_u64((uint64_t *)mbuf3->rearm_data, rearm3);
 
+		/* Update that no more segments */
+		mbuf0->next = NULL;
+		mbuf1->next = NULL;
+		mbuf2->next = NULL;
+		mbuf3->next = NULL;
+
 		/* Store the mbufs to rx_pkts */
 		vst1q_u64((uint64_t *)&rx_pkts[packets], mbuf01);
 		vst1q_u64((uint64_t *)&rx_pkts[packets + 2], mbuf23);
@@ -303,7 +309,7 @@ nix_recv_pkts_vector(void *rx_queue, struct rte_mbuf **rx_pkts,
 	rxq->head = head;
 	rxq->available -= packets;
 
-	rte_cio_wmb();
+	rte_io_wmb();
 	/* Free all the CQs that we've processed */
 	otx2_write64((rxq->wdata | packets), rxq->cq_door);
 

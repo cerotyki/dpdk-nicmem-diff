@@ -21,7 +21,6 @@
 #include <rte_cycles.h>
 #include <rte_spinlock.h>
 #include <rte_log.h>
-#include <rte_random.h>
 #include <rte_io.h>
 
 #include "ice_alloc.h"
@@ -165,6 +164,7 @@ do {									\
 #endif
 
 #define ICE_PCI_REG_WRITE(reg, value) writel(value, reg)
+#define ICE_PCI_REG_WC_WRITE(reg, value) rte_write32_wc(value, reg)
 
 #define ICE_READ_REG(hw, reg)         rd32(hw, reg)
 #define ICE_WRITE_REG(hw, reg, value) wr32(hw, reg, value)
@@ -191,7 +191,7 @@ struct ice_virt_mem {
 } __rte_packed;
 
 #define ice_malloc(h, s)    rte_zmalloc(NULL, s, 0)
-#define ice_calloc(h, c, s) rte_zmalloc(NULL, (c) * (s), 0)
+#define ice_calloc(h, c, s) rte_calloc(NULL, c, s, 0)
 #define ice_free(h, m)         rte_free(m)
 
 #define ice_memset(a, b, c, d) memset((a), (b), (c))
@@ -244,13 +244,15 @@ static inline void *
 ice_alloc_dma_mem(__rte_unused struct ice_hw *hw,
 		  struct ice_dma_mem *mem, u64 size)
 {
+	static uint64_t ice_dma_memzone_id;
 	const struct rte_memzone *mz = NULL;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 
 	if (!mem)
 		return NULL;
 
-	snprintf(z_name, sizeof(z_name), "ice_dma_%"PRIu64, rte_rand());
+	snprintf(z_name, sizeof(z_name), "ice_dma_%" PRIu64,
+		__atomic_fetch_add(&ice_dma_memzone_id, 1, __ATOMIC_RELAXED));
 	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY, 0,
 					 0, RTE_PGSIZE_2M);
 	if (!mz)
@@ -258,7 +260,7 @@ ice_alloc_dma_mem(__rte_unused struct ice_hw *hw,
 
 	mem->size = size;
 	mem->va = mz->addr;
-	mem->pa = mz->phys_addr;
+	mem->pa = mz->iova;
 	mem->zone = (const void *)mz;
 	PMD_DRV_LOG(DEBUG, "memzone %s allocated with physical address: "
 		    "%"PRIu64, mz->name, mem->pa);

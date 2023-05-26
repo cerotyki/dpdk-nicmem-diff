@@ -14,7 +14,6 @@ struct bnxt_filter_info;
 struct bnxt_cp_ring_info;
 struct hwrm_func_qstats_output;
 
-#define HWRM_SEQ_ID_INVALID -1U
 /* Convert Bit field location to value */
 #define ASYNC_CMPL_EVENT_ID_LINK_STATUS_CHANGE	\
 	(1 << HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE)
@@ -34,6 +33,8 @@ struct hwrm_func_qstats_output;
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE - 32))
 #define ASYNC_CMPL_EVENT_ID_DBG_NOTIFICATION	\
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEBUG_NOTIFICATION - 32))
+#define	ASYNC_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE	\
+	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE - 32))
 
 #define HWRM_QUEUE_SERVICE_PROFILE_LOSSY \
 	HWRM_QUEUE_QPORTCFG_OUTPUT_QUEUE_ID0_SERVICE_PROFILE_LOSSY
@@ -45,6 +46,13 @@ struct hwrm_func_qstats_output;
 	HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MINIMAL_STATIC
 #define HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MAXIMAL \
 	HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MAXIMAL
+
+#define HWRM_PORT_PHY_CFG_IN_EN_FORCE_PAM4_LINK_SPEED \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_FORCE_PAM4_LINK_SPEED
+#define HWRM_PORT_PHY_CFG_IN_EN_AUTO_PAM4_LINK_SPD_MASK \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_PAM4_LINK_SPEED_MASK
+#define HWRM_PORT_PHY_CFG_IN_EN_AUTO_LINK_SPEED_MASK \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_LINK_SPEED_MASK
 
 #define HWRM_CFA_ADV_FLOW_MGNT_QCAPS_L2_HDR_SRC_FILTER_EN \
 HWRM_CFA_ADV_FLOW_MGNT_QCAPS_OUTPUT_FLAGS_L2_HEADER_SOURCE_FIELDS_SUPPORTED
@@ -98,7 +106,42 @@ enum bnxt_flow_dir {
 	BNXT_DIR_MAX
 };
 
+struct bnxt_pf_resource_info {
+	uint16_t num_rsscos_ctxs;
+	uint16_t num_stat_ctxs;
+	uint16_t num_tx_rings;
+	uint16_t num_rx_rings;
+	uint16_t num_cp_rings;
+	uint16_t num_l2_ctxs;
+	uint16_t num_nq_rings;
+	uint16_t num_vnics;
+	uint32_t num_hw_ring_grps;
+};
+
 #define BNXT_CTX_VAL_INVAL	0xFFFF
+
+#define BNXT_TUNNELED_OFFLOADS_CAP_VXLAN_EN(bp)		\
+	(!((bp)->tunnel_disable_flag & HWRM_FUNC_QCAPS_OUTPUT_TUNNEL_DISABLE_FLAG_DISABLE_VXLAN))
+#define BNXT_TUNNELED_OFFLOADS_CAP_NGE_EN(bp)		\
+	(!((bp)->tunnel_disable_flag & HWRM_FUNC_QCAPS_OUTPUT_TUNNEL_DISABLE_FLAG_DISABLE_NGE))
+#define BNXT_TUNNELED_OFFLOADS_CAP_GRE_EN(bp)		\
+	(!((bp)->tunnel_disable_flag & HWRM_FUNC_QCAPS_OUTPUT_TUNNEL_DISABLE_FLAG_DISABLE_GRE))
+#define BNXT_TUNNELED_OFFLOADS_CAP_IPINIP_EN(bp)	\
+	(!((bp)->tunnel_disable_flag & HWRM_FUNC_QCAPS_OUTPUT_TUNNEL_DISABLE_FLAG_DISABLE_IPINIP))
+
+/*
+ * If the device supports VXLAN, GRE, IPIP and GENEVE tunnel parsing, then report
+ * RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM, RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM and
+ * RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM in the Rx/Tx offload capabilities of the device.
+ */
+#define BNXT_TUNNELED_OFFLOADS_CAP_ALL_EN(bp)			\
+	(BNXT_TUNNELED_OFFLOADS_CAP_VXLAN_EN(bp) &&		\
+	 BNXT_TUNNELED_OFFLOADS_CAP_NGE_EN(bp)   &&		\
+	 BNXT_TUNNELED_OFFLOADS_CAP_GRE_EN(bp)   &&		\
+	 BNXT_TUNNELED_OFFLOADS_CAP_IPINIP_EN(bp))
+
+#define BNXT_SIG_MODE_NRZ	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_NRZ
+#define BNXT_SIG_MODE_PAM4	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_PAM4
 
 int bnxt_hwrm_cfa_l2_clear_rx_mask(struct bnxt *bp,
 				   struct bnxt_vnic_info *vnic);
@@ -118,12 +161,12 @@ int bnxt_hwrm_exec_fwd_resp(struct bnxt *bp, uint16_t target_id,
 int bnxt_hwrm_reject_fwd_resp(struct bnxt *bp, uint16_t target_id,
 			      void *encaped, size_t ec_size);
 
-int bnxt_hwrm_func_buf_rgtr(struct bnxt *bp);
+int bnxt_hwrm_func_buf_rgtr(struct bnxt *bp, int num_vfs);
 int bnxt_hwrm_func_buf_unrgtr(struct bnxt *bp);
 int bnxt_hwrm_func_driver_register(struct bnxt *bp);
 int bnxt_hwrm_func_qcaps(struct bnxt *bp);
 int bnxt_hwrm_func_reset(struct bnxt *bp);
-int bnxt_hwrm_func_driver_unregister(struct bnxt *bp, uint32_t flags);
+int bnxt_hwrm_func_driver_unregister(struct bnxt *bp);
 int bnxt_hwrm_func_qstats(struct bnxt *bp, uint16_t fid,
 			  struct rte_eth_stats *stats,
 			  struct hwrm_func_qstats_output *func_qstats);
@@ -147,13 +190,6 @@ int bnxt_hwrm_ring_grp_alloc(struct bnxt *bp, unsigned int idx);
 int bnxt_hwrm_ring_grp_free(struct bnxt *bp, unsigned int idx);
 
 int bnxt_hwrm_stat_clear(struct bnxt *bp, struct bnxt_cp_ring_info *cpr);
-int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp,
-			     struct bnxt_cp_ring_info *cpr, unsigned int idx);
-int bnxt_hwrm_stat_ctx_free(struct bnxt *bp,
-			    struct bnxt_cp_ring_info *cpr, unsigned int idx);
-int bnxt_hwrm_ctx_qstats(struct bnxt *bp, uint32_t cid, int idx,
-			 struct rte_eth_stats *stats, uint8_t rx);
-
 int bnxt_hwrm_ver_get(struct bnxt *bp, uint32_t timeout);
 
 int bnxt_hwrm_vnic_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic);
@@ -275,9 +311,16 @@ int bnxt_hwrm_get_dflt_vnic_svif(struct bnxt *bp, uint16_t fid,
 				 uint16_t *vnic_id, uint16_t *svif);
 int bnxt_hwrm_parent_pf_qcfg(struct bnxt *bp);
 int bnxt_hwrm_port_phy_qcaps(struct bnxt *bp);
-int bnxt_hwrm_oem_cmd(struct bnxt *bp, uint32_t entry_num);
 int bnxt_clear_one_vnic_filter(struct bnxt *bp,
 			       struct bnxt_filter_info *filter);
-int bnxt_hwrm_cfa_vfr_alloc(struct bnxt *bp, uint16_t vf_idx);
-int bnxt_hwrm_cfa_vfr_free(struct bnxt *bp, uint16_t vf_idx);
+void bnxt_free_vf_info(struct bnxt *bp);
+int bnxt_hwrm_first_vf_id_query(struct bnxt *bp, uint16_t fid,
+				uint16_t *first_vf_id);
+int bnxt_hwrm_cfa_pair_alloc(struct bnxt *bp, struct bnxt_representor *rep);
+int bnxt_hwrm_cfa_pair_free(struct bnxt *bp, struct bnxt_representor *rep);
+int bnxt_hwrm_poll_ver_get(struct bnxt *bp);
+int bnxt_hwrm_ring_stats(struct bnxt *bp, uint32_t cid, int idx,
+			 struct bnxt_ring_stats *stats, bool rx);
+int bnxt_hwrm_rx_ring_reset(struct bnxt *bp, int queue_index);
+int bnxt_vnic_rss_clear_p5(struct bnxt *bp, struct bnxt_vnic_info *vnic);
 #endif

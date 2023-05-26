@@ -244,6 +244,8 @@ const char * const vhost_msg_strings[] = {
 	[VHOST_USER_SET_VRING_ENABLE] = "VHOST_SET_VRING_ENABLE",
 	[VHOST_USER_GET_PROTOCOL_FEATURES] = "VHOST_USER_GET_PROTOCOL_FEATURES",
 	[VHOST_USER_SET_PROTOCOL_FEATURES] = "VHOST_USER_SET_PROTOCOL_FEATURES",
+	[VHOST_USER_SET_STATUS] = "VHOST_SET_STATUS",
+	[VHOST_USER_GET_STATUS] = "VHOST_GET_STATUS",
 };
 
 static int
@@ -275,15 +277,35 @@ vhost_user_sock(struct virtio_user_dev *dev,
 	msg.size = 0;
 
 	switch (req) {
+	case VHOST_USER_GET_STATUS:
+		if (!(dev->status & VIRTIO_CONFIG_STATUS_FEATURES_OK) ||
+		    (!(dev->protocol_features &
+				(1ULL << VHOST_USER_PROTOCOL_F_STATUS))))
+			return -ENOTSUP;
+		/* Fallthrough */
 	case VHOST_USER_GET_FEATURES:
 	case VHOST_USER_GET_PROTOCOL_FEATURES:
 		need_reply = 1;
 		break;
 
-	case VHOST_USER_SET_FEATURES:
+	case VHOST_USER_SET_STATUS:
+		if (!(dev->status & VIRTIO_CONFIG_STATUS_FEATURES_OK) ||
+		    (!(dev->protocol_features &
+				(1ULL << VHOST_USER_PROTOCOL_F_STATUS))))
+			return -ENOTSUP;
+
+		if (has_reply_ack)
+			msg.flags |= VHOST_USER_NEED_REPLY_MASK;
+		/* Fallthrough */
 	case VHOST_USER_SET_PROTOCOL_FEATURES:
 	case VHOST_USER_SET_LOG_BASE:
 		msg.payload.u64 = *((__u64 *)arg);
+		msg.size = sizeof(m.payload.u64);
+		break;
+
+	case VHOST_USER_SET_FEATURES:
+		msg.payload.u64 = *((__u64 *)arg) | (dev->device_features &
+			(1ULL << VHOST_USER_F_PROTOCOL_FEATURES));
 		msg.size = sizeof(m.payload.u64);
 		break;
 
@@ -363,6 +385,7 @@ vhost_user_sock(struct virtio_user_dev *dev,
 
 		switch (req) {
 		case VHOST_USER_GET_FEATURES:
+		case VHOST_USER_GET_STATUS:
 		case VHOST_USER_GET_PROTOCOL_FEATURES:
 			if (msg.size != sizeof(m.payload.u64)) {
 				PMD_DRV_LOG(ERR, "Received bad msg size");
@@ -445,8 +468,10 @@ vhost_user_setup(struct virtio_user_dev *dev)
 	}
 
 	flag = fcntl(fd, F_GETFD);
-	if (fcntl(fd, F_SETFD, flag | FD_CLOEXEC) < 0)
-		PMD_DRV_LOG(WARNING, "fcntl failed, %s", strerror(errno));
+	if (flag == -1)
+		PMD_DRV_LOG(WARNING, "fcntl get fd failed, %s", strerror(errno));
+	else if (fcntl(fd, F_SETFD, flag | FD_CLOEXEC) < 0)
+		PMD_DRV_LOG(WARNING, "fcntl set fd failed, %s", strerror(errno));
 
 	memset(&un, 0, sizeof(un));
 	un.sun_family = AF_UNIX;

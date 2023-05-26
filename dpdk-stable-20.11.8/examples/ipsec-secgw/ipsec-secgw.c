@@ -65,6 +65,7 @@ volatile bool force_quit;
 #define CDEV_QUEUE_DESC 2048
 #define CDEV_MAP_ENTRIES 16384
 #define CDEV_MP_CACHE_SZ 64
+#define CDEV_MP_CACHE_MULTIPLIER 1.5 /* from rte_mempool.c */
 #define MAX_QUEUE_PAIRS 1
 
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
@@ -159,7 +160,7 @@ uint32_t single_sa_idx;
 /* mask of enabled ports */
 static uint32_t enabled_port_mask;
 static uint64_t enabled_cryptodev_mask = UINT64_MAX;
-static int32_t promiscuous_on = 1;
+static int32_t promiscuous_on;
 static int32_t numa_on = 1; /**< NUMA is enabled by default. */
 static uint32_t nb_lcores;
 static uint32_t single_sa;
@@ -254,7 +255,7 @@ struct socket_ctx socket_ctx[NB_SOCKETS];
 /*
  * Determine is multi-segment support required:
  *  - either frame buffer size is smaller then mtu
- *  - or reassmeble support is requested
+ *  - or reassemble support is requested
  */
 static int
 multi_seg_required(void)
@@ -290,6 +291,8 @@ adjust_ipv6_pktlen(struct rte_mbuf *m, const struct rte_ipv6_hdr *iph,
 }
 
 #if (STATS_INTERVAL > 0)
+
+struct ipsec_core_statistics core_statistics[RTE_MAX_LCORE];
 
 /* Print out statistics on packet distribution */
 static void
@@ -426,7 +429,8 @@ prepare_one_packet(struct rte_mbuf *pkt, struct ipsec_traffic *t)
 	 * with the security session.
 	 */
 
-	if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD) {
+	if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD &&
+			rte_security_dynfield_is_registered()) {
 		struct ipsec_sa *sa;
 		struct ipsec_mbuf_metadata *priv;
 		struct rte_security_ctx *ctx = (struct rte_security_ctx *)
@@ -436,10 +440,8 @@ prepare_one_packet(struct rte_mbuf *pkt, struct ipsec_traffic *t)
 		/* Retrieve the userdata registered. Here, the userdata
 		 * registered is the SA pointer.
 		 */
-
-		sa = (struct ipsec_sa *)
-				rte_security_get_userdata(ctx, pkt->udata64);
-
+		sa = (struct ipsec_sa *)rte_security_get_userdata(ctx,
+				*rte_security_dynfield(pkt));
 		if (sa == NULL) {
 			/* userdata could not be retrieved */
 			return;
@@ -1842,6 +1844,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -1861,14 +1864,10 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf(
-					"Port%d Link Up - speed %u Mbps -%s\n",
-						portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
-				else
-					printf("Port %d Link Down\n", portid);
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text), &link);
+				printf("Port %d %s\n", portid,
+				       link_status_text);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -1939,7 +1938,7 @@ add_mapping(struct rte_hash *map, const char *str, uint16_t cdev_id,
 
 	ret = rte_hash_add_key_data(map, &key, (void *)i);
 	if (ret < 0) {
-		printf("Faled to insert cdev mapping for (lcore %u, "
+		printf("Failed to insert cdev mapping for (lcore %u, "
 				"cdev %u, qp %u), errno %d\n",
 				key.lcore_id, ipsec_ctx->tbl[i].id,
 				ipsec_ctx->tbl[i].qp, ret);
@@ -1972,7 +1971,7 @@ add_cdev_mapping(struct rte_cryptodev_info *dev_info, uint16_t cdev_id,
 		str = "Inbound";
 	}
 
-	/* Required cryptodevs with operation chainning */
+	/* Required cryptodevs with operation chaining */
 	if (!(dev_info->feature_flags &
 				RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING))
 		return ret;
@@ -2141,7 +2140,7 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 			"Error during getting device (port %u) info: %s\n",
 			portid, strerror(-ret));
 
-	/* limit allowed HW offloafs, as user requested */
+	/* limit allowed HW offloads, as user requested */
 	dev_info.rx_offload_capa &= dev_rx_offload;
 	dev_info.tx_offload_capa &= dev_tx_offload;
 
@@ -2191,7 +2190,7 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 			local_port_conf.rxmode.offloads)
 		rte_exit(EXIT_FAILURE,
 			"Error: port %u required RX offloads: 0x%" PRIx64
-			", avaialbe RX offloads: 0x%" PRIx64 "\n",
+			", available RX offloads: 0x%" PRIx64 "\n",
 			portid, local_port_conf.rxmode.offloads,
 			dev_info.rx_offload_capa);
 
@@ -2199,7 +2198,7 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 			local_port_conf.txmode.offloads)
 		rte_exit(EXIT_FAILURE,
 			"Error: port %u required TX offloads: 0x%" PRIx64
-			", avaialbe TX offloads: 0x%" PRIx64 "\n",
+			", available TX offloads: 0x%" PRIx64 "\n",
 			portid, local_port_conf.txmode.offloads,
 			dev_info.tx_offload_capa);
 
@@ -2210,7 +2209,7 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM)
 		local_port_conf.txmode.offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
 
-	printf("port %u configurng rx_offloads=0x%" PRIx64
+	printf("port %u configuring rx_offloads=0x%" PRIx64
 		", tx_offloads=0x%" PRIx64 "\n",
 		portid, local_port_conf.rxmode.offloads,
 		local_port_conf.txmode.offloads);
@@ -2262,12 +2261,6 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 
 		qconf = &lcore_conf[lcore_id];
 		qconf->tx_queue_id[portid] = tx_queueid;
-
-		/* Pre-populate pkt offloads based on capabilities */
-		qconf->outbound.ipv4_offloads = PKT_TX_IPV4;
-		qconf->outbound.ipv6_offloads = PKT_TX_IPV6;
-		if (local_port_conf.txmode.offloads & DEV_TX_OFFLOAD_IPV4_CKSUM)
-			qconf->outbound.ipv4_offloads |= PKT_TX_IP_CKSUM;
 
 		tx_queueid++;
 
@@ -2351,12 +2344,10 @@ session_pool_init(struct socket_ctx *ctx, int32_t socket_id, size_t sess_sz)
 
 	snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
 			"sess_mp_%u", socket_id);
-	/*
-	 * Doubled due to rte_security_session_create() uses one mempool for
-	 * session and for session private data.
-	 */
 	nb_sess = (get_nb_crypto_sessions() + CDEV_MP_CACHE_SZ *
-		rte_lcore_count()) * 2;
+		rte_lcore_count());
+	nb_sess = RTE_MAX(nb_sess, CDEV_MP_CACHE_SZ *
+			CDEV_MP_CACHE_MULTIPLIER);
 	sess_mp = rte_cryptodev_sym_session_pool_create(
 			mp_name, nb_sess, sess_sz, CDEV_MP_CACHE_SZ, 0,
 			socket_id);
@@ -2379,12 +2370,10 @@ session_priv_pool_init(struct socket_ctx *ctx, int32_t socket_id,
 
 	snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
 			"sess_mp_priv_%u", socket_id);
-	/*
-	 * Doubled due to rte_security_session_create() uses one mempool for
-	 * session and for session private data.
-	 */
 	nb_sess = (get_nb_crypto_sessions() + CDEV_MP_CACHE_SZ *
-		rte_lcore_count()) * 2;
+		rte_lcore_count());
+	nb_sess = RTE_MAX(nb_sess, CDEV_MP_CACHE_SZ *
+			CDEV_MP_CACHE_MULTIPLIER);
 	sess_mp = rte_mempool_create(mp_name,
 			nb_sess,
 			sess_sz,
@@ -2812,6 +2801,7 @@ main(int32_t argc, char **argv)
 	uint64_t req_rx_offloads[RTE_MAX_ETHPORTS];
 	uint64_t req_tx_offloads[RTE_MAX_ETHPORTS];
 	struct eh_conf *eh_conf = NULL;
+	uint32_t ipv4_cksum_port_mask = 0;
 	size_t sess_sz;
 
 	nb_bufs_in_pool = 0;
@@ -2917,6 +2907,20 @@ main(int32_t argc, char **argv)
 				&req_tx_offloads[portid]);
 		port_init(portid, req_rx_offloads[portid],
 				req_tx_offloads[portid]);
+		if ((req_tx_offloads[portid] & DEV_TX_OFFLOAD_IPV4_CKSUM))
+			ipv4_cksum_port_mask |= 1U << portid;
+	}
+
+	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+		if (rte_lcore_is_enabled(lcore_id) == 0)
+			continue;
+
+		/* Pre-populate pkt offloads based on capabilities */
+		lcore_conf[lcore_id].outbound.ipv4_offloads = PKT_TX_IPV4;
+		lcore_conf[lcore_id].outbound.ipv6_offloads = PKT_TX_IPV6;
+		/* Update per lcore checksum offload support only if all ports support it */
+		if (ipv4_cksum_port_mask == enabled_port_mask)
+			lcore_conf[lcore_id].outbound.ipv4_offloads |= PKT_TX_IP_CKSUM;
 	}
 
 	/*
@@ -2936,13 +2940,14 @@ main(int32_t argc, char **argv)
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
 
-		/* Create flow before starting the device */
-		create_default_ipsec_flow(portid, req_rx_offloads[portid]);
-
 		ret = rte_eth_dev_start(portid);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "rte_eth_dev_start: "
 					"err=%d, port=%d\n", ret, portid);
+
+		/* Create flow after starting the device */
+		create_default_ipsec_flow(portid, req_rx_offloads[portid]);
+
 		/*
 		 * If enabled, put device in promiscuous mode.
 		 * This allows IO forwarding mode to forward packets
@@ -2992,8 +2997,8 @@ main(int32_t argc, char **argv)
 #endif /* STATS_INTERVAL */
 
 	/* launch per-lcore init on every lcore */
-	rte_eal_mp_remote_launch(ipsec_launch_one_lcore, eh_conf, CALL_MASTER);
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	rte_eal_mp_remote_launch(ipsec_launch_one_lcore, eh_conf, CALL_MAIN);
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
@@ -3035,10 +3040,18 @@ main(int32_t argc, char **argv)
 					" for port %u, err msg: %s\n", portid,
 					err.message);
 		}
-		rte_eth_dev_stop(portid);
+		ret = rte_eth_dev_stop(portid);
+		if (ret != 0)
+			RTE_LOG(ERR, IPSEC,
+				"rte_eth_dev_stop: err=%s, port=%u\n",
+				rte_strerror(-ret), portid);
+
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 	printf("Bye...\n");
 
 	return 0;

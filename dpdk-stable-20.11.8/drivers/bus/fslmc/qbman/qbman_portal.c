@@ -339,17 +339,9 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 	eqcr_pi = qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_EQCR_PI);
 	p->eqcr.pi = eqcr_pi & p->eqcr.pi_ci_mask;
 	p->eqcr.pi_vb = eqcr_pi & QB_VALID_BIT;
-	if ((p->desc.qman_version & QMAN_REV_MASK) >= QMAN_REV_5000
-			&& (d->cena_access_mode == qman_cena_fastest_access))
-		p->eqcr.ci = qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_EQCR_PI)
-					     & p->eqcr.pi_ci_mask;
-	else
-		p->eqcr.ci = qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_EQCR_CI)
-					     & p->eqcr.pi_ci_mask;
-	p->eqcr.available = p->eqcr.pi_ring_size -
-				qm_cyc_diff(p->eqcr.pi_ring_size,
-				p->eqcr.ci & (p->eqcr.pi_ci_mask<<1),
-				p->eqcr.pi & (p->eqcr.pi_ci_mask<<1));
+	p->eqcr.ci = qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_EQCR_CI)
+			& p->eqcr.pi_ci_mask;
+	p->eqcr.available = p->eqcr.pi_ring_size;
 
 	portal_idx_map[p->desc.idx] = p;
 	return p;
@@ -1201,6 +1193,8 @@ static int qbman_swp_enqueue_multiple_mem_back(struct qbman_swp *s,
 				QBMAN_CENA_SWP_EQCR(eqcr_pi & half_mask));
 		memcpy(&p[1], &cl[1], 28);
 		memcpy(&p[8], &fd[i], sizeof(*fd));
+		p[0] = cl[0] | s->eqcr.pi_vb;
+
 		if (flags && (flags[i] & QBMAN_ENQUEUE_FLAG_DCA)) {
 			struct qbman_eq_desc *d = (struct qbman_eq_desc *)p;
 
@@ -1208,7 +1202,6 @@ static int qbman_swp_enqueue_multiple_mem_back(struct qbman_swp *s,
 				((flags[i]) & QBMAN_EQCR_DCA_IDXMASK);
 		}
 		eqcr_pi++;
-		p[0] = cl[0] | s->eqcr.pi_vb;
 
 		if (!(eqcr_pi & half_mask))
 			s->eqcr.pi_vb ^= QB_VALID_BIT;

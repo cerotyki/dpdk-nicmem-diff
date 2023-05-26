@@ -20,11 +20,11 @@ extern "C" {
  */
 struct rte_net_hdr_lens {
 	uint8_t l2_len;
-	uint8_t l3_len;
-	uint8_t l4_len;
-	uint8_t tunnel_len;
 	uint8_t inner_l2_len;
-	uint8_t inner_l3_len;
+	uint16_t l3_len;
+	uint16_t inner_l3_len;
+	uint16_t tunnel_len;
+	uint8_t l4_len;
 	uint8_t inner_l4_len;
 };
 
@@ -125,11 +125,22 @@ rte_net_intel_cksum_flags_prepare(struct rte_mbuf *m, uint64_t ol_flags)
 	 * Mainly it is required to avoid fragmented headers check if
 	 * no offloads are requested.
 	 */
-	if (!(ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_L4_MASK | PKT_TX_TCP_SEG)))
+	if (!(ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_L4_MASK | PKT_TX_TCP_SEG |
+			  PKT_TX_OUTER_IP_CKSUM)))
 		return 0;
 
-	if (ol_flags & (PKT_TX_OUTER_IPV4 | PKT_TX_OUTER_IPV6))
+	if (ol_flags & (PKT_TX_OUTER_IPV4 | PKT_TX_OUTER_IPV6)) {
 		inner_l3_offset += m->outer_l2_len + m->outer_l3_len;
+		/*
+		 * prepare outer IPv4 header checksum by setting it to 0,
+		 * in order to be computed by hardware NICs.
+		 */
+		if (ol_flags & PKT_TX_OUTER_IP_CKSUM) {
+			ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+					struct rte_ipv4_hdr *, m->outer_l2_len);
+			ipv4_hdr->hdr_checksum = 0;
+		}
+	}
 
 	/*
 	 * Check if headers are fragmented.

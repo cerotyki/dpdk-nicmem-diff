@@ -37,12 +37,12 @@ struct vhost_user_socket {
 	struct sockaddr_un un;
 	bool is_server;
 	bool reconnect;
-	bool dequeue_zero_copy;
 	bool iommu_support;
 	bool use_builtin_virtio_net;
 	bool extbuf;
 	bool linearbuf;
 	bool async_copy;
+	bool net_compliant_ol_flags;
 
 	/*
 	 * The "supported_features" indicates the feature bits the
@@ -128,10 +128,12 @@ read_fd_message(int sockfd, char *buf, int buflen, int *fds, int max_fds,
 		return ret;
 	}
 
-	if (msgh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
+	if (msgh.msg_flags & MSG_TRUNC)
 		VHOST_LOG_CONFIG(ERR, "truncated msg\n");
-		return -1;
-	}
+
+	/* MSG_CTRUNC may be caused by LSM misconfiguration */
+	if (msgh.msg_flags & MSG_CTRUNC)
+		VHOST_LOG_CONFIG(ERR, "truncated control data (fd %d)\n", sockfd);
 
 	for (cmsg = CMSG_FIRSTHDR(&msgh); cmsg != NULL;
 		cmsg = CMSG_NXTHDR(&msgh, cmsg)) {
@@ -225,12 +227,10 @@ vhost_user_add_connection(int fd, struct vhost_user_socket *vsocket)
 	size = strnlen(vsocket->path, PATH_MAX);
 	vhost_set_ifname(vid, vsocket->path, size);
 
-	vhost_set_builtin_virtio_net(vid, vsocket->use_builtin_virtio_net);
+	vhost_setup_virtio_net(vid, vsocket->use_builtin_virtio_net,
+		vsocket->net_compliant_ol_flags);
 
 	vhost_attach_vdpa_device(vid, vsocket->vdpa_dev);
-
-	if (vsocket->dequeue_zero_copy)
-		vhost_enable_dequeue_zero_copy(vid);
 
 	if (vsocket->extbuf)
 		vhost_enable_extbuf(vid);
@@ -245,7 +245,7 @@ vhost_user_add_connection(int fd, struct vhost_user_socket *vsocket)
 			dev->async_copy = 1;
 	}
 
-	VHOST_LOG_CONFIG(INFO, "new device, handle is %d\n", vid);
+	VHOST_LOG_CONFIG(INFO, "new device, handle is %d, path is %s\n", vid, vsocket->path);
 
 	if (vsocket->notify_ops->new_connection) {
 		ret = vsocket->notify_ops->new_connection(vid);
@@ -503,7 +503,7 @@ vhost_user_reconnect_init(void)
 
 	ret = pthread_mutex_init(&reconn_list.mutex, NULL);
 	if (ret < 0) {
-		VHOST_LOG_CONFIG(ERR, "failed to initialize mutex");
+		VHOST_LOG_CONFIG(ERR, "failed to initialize mutex\n");
 		return ret;
 	}
 	TAILQ_INIT(&reconn_list.head);
@@ -511,10 +511,10 @@ vhost_user_reconnect_init(void)
 	ret = rte_ctrl_thread_create(&reconn_tid, "vhost_reconn", NULL,
 			     vhost_user_client_reconnect, NULL);
 	if (ret != 0) {
-		VHOST_LOG_CONFIG(ERR, "failed to create reconnect thread");
+		VHOST_LOG_CONFIG(ERR, "failed to create reconnect thread\n");
 		if (pthread_mutex_destroy(&reconn_list.mutex)) {
 			VHOST_LOG_CONFIG(ERR,
-				"failed to destroy reconnect mutex");
+				"failed to destroy reconnect mutex\n");
 		}
 	}
 
@@ -878,19 +878,10 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		goto out_free;
 	}
 	vsocket->vdpa_dev = NULL;
-	vsocket->dequeue_zero_copy = flags & RTE_VHOST_USER_DEQUEUE_ZERO_COPY;
 	vsocket->extbuf = flags & RTE_VHOST_USER_EXTBUF_SUPPORT;
 	vsocket->linearbuf = flags & RTE_VHOST_USER_LINEARBUF_SUPPORT;
-
-	if (vsocket->dequeue_zero_copy &&
-	    (flags & RTE_VHOST_USER_IOMMU_SUPPORT)) {
-		VHOST_LOG_CONFIG(ERR,
-			"error: enabling dequeue zero copy and IOMMU features "
-			"simultaneously is not supported\n");
-		goto out_mutex;
-	}
-
 	vsocket->async_copy = flags & RTE_VHOST_USER_ASYNC_COPY;
+	vsocket->net_compliant_ol_flags = flags & RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS;
 
 	if (vsocket->async_copy &&
 		(flags & (RTE_VHOST_USER_IOMMU_SUPPORT |
@@ -917,39 +908,6 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 	vsocket->supported_features = VIRTIO_NET_SUPPORTED_FEATURES;
 	vsocket->features           = VIRTIO_NET_SUPPORTED_FEATURES;
 	vsocket->protocol_features  = VHOST_USER_PROTOCOL_FEATURES;
-
-	/*
-	 * Dequeue zero copy can't assure descriptors returned in order.
-	 * Also, it requires that the guest memory is populated, which is
-	 * not compatible with postcopy.
-	 */
-	if (vsocket->dequeue_zero_copy) {
-		if (vsocket->extbuf) {
-			VHOST_LOG_CONFIG(ERR,
-			"error: zero copy is incompatible with external buffers\n");
-			ret = -1;
-			goto out_mutex;
-		}
-		if (vsocket->linearbuf) {
-			VHOST_LOG_CONFIG(ERR,
-			"error: zero copy is incompatible with linear buffers\n");
-			ret = -1;
-			goto out_mutex;
-		}
-		if ((flags & RTE_VHOST_USER_CLIENT) != 0) {
-			VHOST_LOG_CONFIG(ERR,
-			"error: zero copy is incompatible with vhost client mode\n");
-			ret = -1;
-			goto out_mutex;
-		}
-		vsocket->supported_features &= ~(1ULL << VIRTIO_F_IN_ORDER);
-		vsocket->features &= ~(1ULL << VIRTIO_F_IN_ORDER);
-
-		VHOST_LOG_CONFIG(INFO,
-			"Dequeue zero copy requested, disabling postcopy support\n");
-		vsocket->protocol_features &=
-			~(1ULL << VHOST_USER_PROTOCOL_F_PAGEFAULT);
-	}
 
 	if (vsocket->async_copy) {
 		vsocket->supported_features &= ~(1ULL << VHOST_F_LOG_ALL);
@@ -1067,66 +1025,65 @@ again:
 
 	for (i = 0; i < vhost_user.vsocket_cnt; i++) {
 		struct vhost_user_socket *vsocket = vhost_user.vsockets[i];
+		if (strcmp(vsocket->path, path))
+			continue;
 
-		if (!strcmp(vsocket->path, path)) {
-			pthread_mutex_lock(&vsocket->conn_mutex);
-			for (conn = TAILQ_FIRST(&vsocket->conn_list);
-			     conn != NULL;
-			     conn = next) {
-				next = TAILQ_NEXT(conn, next);
-
-				/*
-				 * If r/wcb is executing, release vsocket's
-				 * conn_mutex and vhost_user's mutex locks, and
-				 * try again since the r/wcb may use the
-				 * conn_mutex and mutex locks.
-				 */
-				if (fdset_try_del(&vhost_user.fdset,
-						  conn->connfd) == -1) {
-					pthread_mutex_unlock(
-							&vsocket->conn_mutex);
-					pthread_mutex_unlock(&vhost_user.mutex);
-					goto again;
-				}
-
-				VHOST_LOG_CONFIG(INFO,
-					"free connfd = %d for device '%s'\n",
-					conn->connfd, path);
-				close(conn->connfd);
-				vhost_destroy_device(conn->vid);
-				TAILQ_REMOVE(&vsocket->conn_list, conn, next);
-				free(conn);
+		if (vsocket->is_server) {
+			/*
+			 * If r/wcb is executing, release vhost_user's
+			 * mutex lock, and try again since the r/wcb
+			 * may use the mutex lock.
+			 */
+			if (fdset_try_del(&vhost_user.fdset, vsocket->socket_fd) == -1) {
+				pthread_mutex_unlock(&vhost_user.mutex);
+				goto again;
 			}
-			pthread_mutex_unlock(&vsocket->conn_mutex);
-
-			if (vsocket->is_server) {
-				/*
-				 * If r/wcb is executing, release vhost_user's
-				 * mutex lock, and try again since the r/wcb
-				 * may use the mutex lock.
-				 */
-				if (fdset_try_del(&vhost_user.fdset,
-						vsocket->socket_fd) == -1) {
-					pthread_mutex_unlock(&vhost_user.mutex);
-					goto again;
-				}
-
-				close(vsocket->socket_fd);
-				unlink(path);
-			} else if (vsocket->reconnect) {
-				vhost_user_remove_reconnect(vsocket);
-			}
-
-			pthread_mutex_destroy(&vsocket->conn_mutex);
-			vhost_user_socket_mem_free(vsocket);
-
-			count = --vhost_user.vsocket_cnt;
-			vhost_user.vsockets[i] = vhost_user.vsockets[count];
-			vhost_user.vsockets[count] = NULL;
-			pthread_mutex_unlock(&vhost_user.mutex);
-
-			return 0;
+		} else if (vsocket->reconnect) {
+			vhost_user_remove_reconnect(vsocket);
 		}
+
+		pthread_mutex_lock(&vsocket->conn_mutex);
+		for (conn = TAILQ_FIRST(&vsocket->conn_list);
+			 conn != NULL;
+			 conn = next) {
+			next = TAILQ_NEXT(conn, next);
+
+			/*
+			 * If r/wcb is executing, release vsocket's
+			 * conn_mutex and vhost_user's mutex locks, and
+			 * try again since the r/wcb may use the
+			 * conn_mutex and mutex locks.
+			 */
+			if (fdset_try_del(&vhost_user.fdset,
+					  conn->connfd) == -1) {
+				pthread_mutex_unlock(&vsocket->conn_mutex);
+				pthread_mutex_unlock(&vhost_user.mutex);
+				goto again;
+			}
+
+			VHOST_LOG_CONFIG(INFO,
+				"free connfd = %d for device '%s'\n",
+				conn->connfd, path);
+			close(conn->connfd);
+			vhost_destroy_device(conn->vid);
+			TAILQ_REMOVE(&vsocket->conn_list, conn, next);
+			free(conn);
+		}
+		pthread_mutex_unlock(&vsocket->conn_mutex);
+
+		if (vsocket->is_server) {
+			close(vsocket->socket_fd);
+			unlink(path);
+		}
+
+		pthread_mutex_destroy(&vsocket->conn_mutex);
+		vhost_user_socket_mem_free(vsocket);
+
+		count = --vhost_user.vsocket_cnt;
+		vhost_user.vsockets[i] = vhost_user.vsockets[count];
+		vhost_user.vsockets[count] = NULL;
+		pthread_mutex_unlock(&vhost_user.mutex);
+		return 0;
 	}
 	pthread_mutex_unlock(&vhost_user.mutex);
 
@@ -1192,8 +1149,7 @@ rte_vhost_driver_start(const char *path)
 			&vhost_user.fdset);
 		if (ret != 0) {
 			VHOST_LOG_CONFIG(ERR,
-				"failed to create fdset handling thread");
-
+				"failed to create fdset handling thread\n");
 			fdset_pipe_uninit(&vhost_user.fdset);
 			return -1;
 		}

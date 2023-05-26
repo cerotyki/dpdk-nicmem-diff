@@ -191,8 +191,8 @@ qat_comp_build_request(void *in_op, uint8_t *out_msg,
 					ICP_QAT_FW_COMP_EOP
 				      : ICP_QAT_FW_COMP_NOT_EOP,
 				ICP_QAT_FW_COMP_NOT_BFINAL,
-				ICP_QAT_FW_COMP_NO_CNV,
-				ICP_QAT_FW_COMP_NO_CNV_RECOVERY);
+				ICP_QAT_FW_COMP_CNV,
+				ICP_QAT_FW_COMP_CNV_RECOVERY);
 	}
 
 	/* common for sgl and flat buffers */
@@ -305,9 +305,9 @@ qat_comp_build_request(void *in_op, uint8_t *out_msg,
 				comp_req->comp_pars.out_buffer_sz;
 
 		comp_req->comn_mid.src_data_addr =
-		    rte_pktmbuf_mtophys_offset(op->m_src, op->src.offset);
+		    rte_pktmbuf_iova_offset(op->m_src, op->src.offset);
 		comp_req->comn_mid.dest_data_addr =
-		    rte_pktmbuf_mtophys_offset(op->m_dst, op->dst.offset);
+		    rte_pktmbuf_iova_offset(op->m_dst, op->dst.offset);
 	}
 
 	if (unlikely(rte_pktmbuf_pkt_len(op->m_dst) < QAT_MIN_OUT_BUF_SIZE)) {
@@ -603,7 +603,8 @@ qat_comp_process_response(void **op, uint8_t *resp, void *op_cookie,
 			rx_op->status = RTE_COMP_OP_STATUS_ERROR;
 			rx_op->debug_status = ERR_CODE_QAT_COMP_WRONG_FW;
 			*op = (void *)rx_op;
-			QAT_DP_LOG(ERR, "QAT has wrong firmware");
+			QAT_DP_LOG(ERR,
+					"This QAT hardware doesn't support compression operation");
 			++(*dequeue_err_count);
 			return 1;
 		}
@@ -957,7 +958,7 @@ static int qat_comp_create_templates(struct qat_comp_xform *qat_xform,
 				ICP_QAT_FW_SLICE_XLAT);
 
 		comp_req->u1.xlt_pars.inter_buff_ptr =
-				interm_buff_mz->phys_addr;
+				interm_buff_mz->iova;
 	}
 
 #if RTE_LOG_DP_LEVEL >= RTE_LOG_DEBUG

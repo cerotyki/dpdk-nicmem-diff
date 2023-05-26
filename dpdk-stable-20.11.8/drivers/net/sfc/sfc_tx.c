@@ -188,6 +188,17 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.vi_window_shift = encp->enc_vi_window_shift;
 	info.tso_tcp_header_offset_limit =
 		encp->enc_tx_tso_tcp_header_offset_limit;
+	info.tso_max_nb_header_descs =
+		RTE_MIN(encp->enc_tx_tso_max_header_ndescs,
+			(uint32_t)UINT16_MAX);
+	info.tso_max_header_len =
+		RTE_MIN(encp->enc_tx_tso_max_header_length,
+			(uint32_t)UINT16_MAX);
+	info.tso_max_nb_payload_descs =
+		RTE_MIN(encp->enc_tx_tso_max_payload_ndescs,
+			(uint32_t)UINT16_MAX);
+	info.tso_max_payload_len = encp->enc_tx_tso_max_payload_length;
+	info.tso_max_nb_outgoing_frames = encp->enc_tx_tso_max_nframes;
 
 	rc = sa->priv.dp_tx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				     &RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
@@ -258,6 +269,7 @@ sfc_tx_qinit_info(struct sfc_adapter *sa, unsigned int sw_index)
 static int
 sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 {
+	uint64_t dev_tx_offload_cap = sfc_tx_get_dev_offload_caps(sa);
 	int rc = 0;
 
 	switch (txmode->mq_mode) {
@@ -266,6 +278,13 @@ sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 	default:
 		sfc_err(sa, "Tx multi-queue mode %u not supported",
 			txmode->mq_mode);
+		rc = EINVAL;
+	}
+
+	if ((dev_tx_offload_cap & DEV_TX_OFFLOAD_MBUF_FAST_FREE) != 0 &&
+	    (txmode->offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE) == 0) {
+		sfc_err(sa, "There is no FAST_FREE flag in the attempted Tx mode configuration");
+		sfc_err(sa, "FAST_FREE is always active as per the current Tx datapath variant");
 		rc = EINVAL;
 	}
 
@@ -592,14 +611,16 @@ sfc_tx_start(struct sfc_adapter *sa)
 	sfc_log_init(sa, "txq_count = %u", sas->txq_count);
 
 	if (sa->tso) {
-		if (!encp->enc_fw_assisted_tso_v2_enabled) {
+		if (!encp->enc_fw_assisted_tso_v2_enabled &&
+		    !encp->enc_tso_v3_enabled) {
 			sfc_warn(sa, "TSO support was unable to be restored");
 			sa->tso = B_FALSE;
 			sa->tso_encap = B_FALSE;
 		}
 	}
 
-	if (sa->tso_encap && !encp->enc_fw_assisted_tso_v2_encap_enabled) {
+	if (sa->tso_encap && !encp->enc_fw_assisted_tso_v2_encap_enabled &&
+	    !encp->enc_tso_v3_enabled) {
 		sfc_warn(sa, "Encapsulated TSO support was unable to be restored");
 		sa->tso_encap = B_FALSE;
 	}
@@ -718,7 +739,7 @@ sfc_efx_prepare_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		 * insertion offload is requested regardless the offload
 		 * requested/supported.
 		 */
-		ret = sfc_dp_tx_prepare_pkt(tx_pkts[i],
+		ret = sfc_dp_tx_prepare_pkt(tx_pkts[i], 0, SFC_TSOH_STD_LEN,
 				encp->enc_tx_tso_tcp_header_offset_limit,
 				txq->max_fill_level, EFX_TX_FATSOV2_OPT_NDESCS,
 				1);
@@ -1138,7 +1159,7 @@ struct sfc_dp_tx sfc_efx_tx = {
 	.dp = {
 		.name		= SFC_KVARG_DATAPATH_EFX,
 		.type		= SFC_DP_TX,
-		.hw_fw_caps	= 0,
+		.hw_fw_caps	= SFC_DP_HW_FW_CAP_TX_EFX,
 	},
 	.features		= 0,
 	.dev_offload_capa	= DEV_TX_OFFLOAD_VLAN_INSERT |

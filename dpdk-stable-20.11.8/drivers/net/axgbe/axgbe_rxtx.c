@@ -10,6 +10,7 @@
 #include <rte_time.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
+#include <rte_vect.h>
 
 static void
 axgbe_rx_queue_release(struct axgbe_rx_queue *rx_queue)
@@ -95,7 +96,7 @@ int axgbe_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		axgbe_rx_queue_release(rxq);
 		return -ENOMEM;
 	}
-	rxq->ring_phys_addr = (uint64_t)dma->phys_addr;
+	rxq->ring_phys_addr = (uint64_t)dma->iova;
 	rxq->desc = (volatile union axgbe_rx_desc *)dma->addr;
 	memset((void *)rxq->desc, 0, size);
 	/* Allocate software ring */
@@ -275,6 +276,10 @@ axgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		/* Get the RSS hash */
 		if (AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3, RSV))
 			mbuf->hash.rss = rte_le_to_cpu_32(desc->write.desc1);
+		/* Indicate if a Context Descriptor is next */
+		if (AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3, CDA))
+			mbuf->ol_flags |= PKT_RX_IEEE1588_PTP
+					| PKT_RX_IEEE1588_TMST;
 		pkt_len = AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3,
 					     PL) - rxq->crc_len;
 		/* Mbuf populate */
@@ -316,19 +321,18 @@ uint16_t eth_axgbe_recv_scattered_pkts(void *rx_queue,
 	struct axgbe_rx_queue *rxq = rx_queue;
 	volatile union axgbe_rx_desc *desc;
 
-	uint64_t old_dirty = rxq->dirty;
 	struct rte_mbuf *first_seg = NULL;
 	struct rte_mbuf *mbuf, *tmbuf;
-	unsigned int err;
-	uint32_t error_status;
+	unsigned int err = 0;
+	uint32_t error_status = 0;
 	uint16_t idx, pidx, data_len = 0, pkt_len = 0;
+	bool eop = 0;
 
 	idx = AXGBE_GET_DESC_IDX(rxq, rxq->cur);
+
 	while (nb_rx < nb_pkts) {
-		bool eop = 0;
 next_desc:
-		if (unlikely(idx == rxq->nb_desc))
-			idx = 0;
+		idx = AXGBE_GET_DESC_IDX(rxq, rxq->cur);
 
 		desc = &rxq->desc[idx];
 
@@ -356,19 +360,6 @@ next_desc:
 		}
 
 		mbuf = rxq->sw_ring[idx];
-		/* Check for any errors and free mbuf*/
-		err = AXGMAC_GET_BITS_LE(desc->write.desc3,
-					 RX_NORMAL_DESC3, ES);
-		error_status = 0;
-		if (unlikely(err)) {
-			error_status = desc->write.desc3 & AXGBE_ERR_STATUS;
-			if ((error_status != AXGBE_L3_CSUM_ERR)
-					&& (error_status != AXGBE_L4_CSUM_ERR)) {
-				rxq->errors++;
-				rte_pktmbuf_free(mbuf);
-				goto err_set;
-			}
-		}
 		rte_prefetch1(rte_pktmbuf_mtod(mbuf, void *));
 
 		if (!AXGMAC_GET_BITS_LE(desc->write.desc3,
@@ -379,58 +370,90 @@ next_desc:
 		} else {
 			eop = 1;
 			pkt_len = AXGMAC_GET_BITS_LE(desc->write.desc3,
-					RX_NORMAL_DESC3, PL);
-			data_len = pkt_len - rxq->crc_len;
+					RX_NORMAL_DESC3, PL) - rxq->crc_len;
+			data_len = pkt_len % rxq->buf_size;
+			/* Check for any errors and free mbuf*/
+			err = AXGMAC_GET_BITS_LE(desc->write.desc3,
+					RX_NORMAL_DESC3, ES);
+			error_status = 0;
+			if (unlikely(err)) {
+				error_status = desc->write.desc3 &
+					AXGBE_ERR_STATUS;
+				if (error_status != AXGBE_L3_CSUM_ERR &&
+						error_status != AXGBE_L4_CSUM_ERR) {
+					rxq->errors++;
+					rte_pktmbuf_free(mbuf);
+					rte_pktmbuf_free(first_seg);
+					first_seg = NULL;
+					eop = 0;
+					goto err_set;
+				}
+			}
+
+		}
+		/* Mbuf populate */
+		mbuf->data_off = RTE_PKTMBUF_HEADROOM;
+		mbuf->data_len = data_len;
+		mbuf->pkt_len = data_len;
+
+		if (rxq->saved_mbuf) {
+			first_seg = rxq->saved_mbuf;
+			rxq->saved_mbuf = NULL;
 		}
 
 		if (first_seg != NULL) {
-			if (rte_pktmbuf_chain(first_seg, mbuf) != 0)
-				rte_mempool_put(rxq->mb_pool,
-						first_seg);
+			if (rte_pktmbuf_chain(first_seg, mbuf) != 0) {
+				rte_pktmbuf_free(first_seg);
+				first_seg = NULL;
+				rte_pktmbuf_free(mbuf);
+				rxq->saved_mbuf = NULL;
+				rxq->errors++;
+				eop = 0;
+				break;
+			}
 		} else {
 			first_seg = mbuf;
 		}
 
 		/* Get the RSS hash */
 		if (AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3, RSV))
-			mbuf->hash.rss = rte_le_to_cpu_32(desc->write.desc1);
-
-		/* Mbuf populate */
-		mbuf->data_off = RTE_PKTMBUF_HEADROOM;
-		mbuf->data_len = data_len;
+			first_seg->hash.rss =
+				rte_le_to_cpu_32(desc->write.desc1);
 
 err_set:
 		rxq->cur++;
-		rxq->sw_ring[idx++] = tmbuf;
+		rxq->sw_ring[idx] = tmbuf;
 		desc->read.baddr =
 			rte_cpu_to_le_64(rte_mbuf_data_iova_default(tmbuf));
 		memset((void *)(&desc->read.desc2), 0, 8);
 		AXGMAC_SET_BITS_LE(desc->read.desc3, RX_NORMAL_DESC3, OWN, 1);
-		rxq->dirty++;
 
-		if (!eop) {
-			rte_pktmbuf_free(mbuf);
+		if (!eop)
 			goto next_desc;
-		}
+		eop = 0;
 
-		first_seg->pkt_len = pkt_len;
 		rxq->bytes += pkt_len;
-		mbuf->next = NULL;
 
 		first_seg->port = rxq->port_id;
 		if (rxq->pdata->rx_csum_enable) {
-			mbuf->ol_flags = 0;
-			mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
-			mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+			first_seg->ol_flags = 0;
+			first_seg->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+			first_seg->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 			if (unlikely(error_status == AXGBE_L3_CSUM_ERR)) {
-				mbuf->ol_flags &= ~PKT_RX_IP_CKSUM_GOOD;
-				mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
-				mbuf->ol_flags &= ~PKT_RX_L4_CKSUM_GOOD;
-				mbuf->ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
+				first_seg->ol_flags &=
+					~PKT_RX_IP_CKSUM_GOOD;
+				first_seg->ol_flags |=
+					PKT_RX_IP_CKSUM_BAD;
+				first_seg->ol_flags &=
+					~PKT_RX_L4_CKSUM_GOOD;
+				first_seg->ol_flags |=
+					PKT_RX_L4_CKSUM_UNKNOWN;
 			} else if (unlikely(error_status
 						== AXGBE_L4_CSUM_ERR)) {
-				mbuf->ol_flags &= ~PKT_RX_L4_CKSUM_GOOD;
-				mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+				first_seg->ol_flags &=
+					~PKT_RX_L4_CKSUM_GOOD;
+				first_seg->ol_flags |=
+					PKT_RX_L4_CKSUM_BAD;
 			}
 		}
 
@@ -440,15 +463,20 @@ err_set:
 		first_seg = NULL;
 	}
 
+	/* Check if we need to save state before leaving */
+	if (first_seg != NULL && eop == 0)
+		rxq->saved_mbuf = first_seg;
+
 	/* Save receive context.*/
 	rxq->pkts += nb_rx;
 
-	if (rxq->dirty != old_dirty) {
+	if (rxq->dirty != rxq->cur) {
 		rte_wmb();
-		idx = AXGBE_GET_DESC_IDX(rxq, rxq->dirty - 1);
+		idx = AXGBE_GET_DESC_IDX(rxq, rxq->cur - 1);
 		AXGMAC_DMA_IOWRITE(rxq, DMA_CH_RDTR_LO,
 				   low32_value(rxq->ring_phys_addr +
 				   (idx * sizeof(union axgbe_rx_desc))));
+		rxq->dirty = rxq->cur;
 	}
 	return nb_rx;
 }
@@ -530,7 +558,7 @@ int axgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		return -ENOMEM;
 	}
 	memset(tz->addr, 0, tsize);
-	txq->ring_phys_addr = (uint64_t)tz->phys_addr;
+	txq->ring_phys_addr = (uint64_t)tz->iova;
 	txq->desc = tz->addr;
 	txq->queue_id = queue_idx;
 	txq->port_id = dev->data->port_id;
@@ -553,7 +581,8 @@ int axgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	if (!pdata->tx_queues)
 		pdata->tx_queues = dev->data->tx_queues;
 
-	if (txq->vector_disable)
+	if (txq->vector_disable ||
+			rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128)
 		dev->tx_pkt_burst = &axgbe_xmit_pkts;
 	else
 #ifdef RTE_ARCH_X86
@@ -722,6 +751,10 @@ static int axgbe_xmit_hw(struct axgbe_tx_queue *txq,
 	/* Total msg length to transmit */
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, FL,
 			   mbuf->pkt_len);
+	/* Timestamp enablement check */
+	if (mbuf->ol_flags & PKT_TX_IEEE1588_TMST)
+		AXGMAC_SET_BITS_LE(desc->desc2, TX_NORMAL_DESC2, TTSE, 1);
+	rte_wmb();
 	/* Mark it as First and Last Descriptor */
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, FD, 1);
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, LD, 1);

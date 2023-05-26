@@ -159,10 +159,6 @@ typedef int (*rte_bus_parse_t)(const char *name, void *addr);
  */
 typedef int (*rte_dev_dma_map_t)(struct rte_device *dev, void *addr,
 				  uint64_t iova, size_t len);
-typedef int (*rte_dev_alloc_dm_t)(struct rte_device *dev, void **addr,
-				  size_t *len);
-typedef int (*rte_dev_get_dma_map_t)(struct rte_device *dev, void *addr,
-				  uint64_t iova, size_t len);
 
 /**
  * Device level DMA unmap function.
@@ -219,9 +215,15 @@ typedef int (*rte_bus_sigbus_handler_t)(const void *failure_addr);
  */
 enum rte_bus_scan_mode {
 	RTE_BUS_SCAN_UNDEFINED,
-	RTE_BUS_SCAN_WHITELIST,
-	RTE_BUS_SCAN_BLACKLIST,
+	RTE_BUS_SCAN_ALLOWLIST,
+	RTE_BUS_SCAN_BLOCKLIST,
 };
+
+/* Backwards compatibility will be removed */
+#define RTE_BUS_SCAN_WHITELIST \
+	RTE_DEPRECATED(RTE_BUS_SCAN_WHITELIST) RTE_BUS_SCAN_ALLOWLIST
+#define RTE_BUS_SCAN_BLACKLIST \
+	RTE_DEPRECATED(RTE_BUS_SCAN_BLACKLIST) RTE_BUS_SCAN_BLOCKLIST
 
 /**
  * A structure used to configure bus operations.
@@ -256,8 +258,6 @@ struct rte_bus {
 	rte_bus_plug_t plug;         /**< Probe single device for drivers */
 	rte_bus_unplug_t unplug;     /**< Remove single device from driver */
 	rte_bus_parse_t parse;       /**< Parse a device name */
-	rte_dev_alloc_dm_t alloc_dm;   /**< allocate device memory */
-	rte_dev_get_dma_map_t get_dma_map;   /**< get DMA map for device in the bus */
 	rte_dev_dma_map_t dma_map;   /**< DMA map for device in the bus */
 	rte_dev_dma_unmap_t dma_unmap; /**< DMA unmap for device in the bus */
 	struct rte_bus_conf conf;    /**< Bus configuration */

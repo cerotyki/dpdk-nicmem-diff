@@ -5,15 +5,21 @@
 #ifndef _RTE_OS_H_
 #define _RTE_OS_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
- * This is header should contain any function/macro definition
- * which are not supported natively or named differently in the
- * freebsd OS. Functions will be added in future releases.
+ * This header should contain any definition
+ * which is not supported natively or named differently in FreeBSD.
  */
 
 #include <pthread_np.h>
 
 typedef cpuset_t rte_cpuset_t;
+#define RTE_HAS_CPUSET
+
+#ifdef RTE_EAL_FREEBSD_CPUSET_LEGACY
 #define RTE_CPU_AND(dst, src1, src2) do \
 { \
 	cpuset_t tmp; \
@@ -47,6 +53,23 @@ typedef cpuset_t rte_cpuset_t;
 	CPU_ANDNOT(&tmp, src); \
 	CPU_COPY(&tmp, dst); \
 } while (0)
+#endif /* CPU_NAND */
+
+#else /* RTE_EAL_FREEBSD_CPUSET_LEGACY */
+
+#define RTE_CPU_AND CPU_AND
+#define RTE_CPU_OR CPU_OR
+#define RTE_CPU_FILL CPU_FILL
+#define RTE_CPU_NOT(dst, src) do { \
+	cpu_set_t tmp; \
+	CPU_FILL(&tmp); \
+	CPU_XOR(dst, src, &tmp); \
+} while (0)
+
+#endif /* RTE_EAL_FREEBSD_CPUSET_LEGACY */
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* _RTE_OS_H_ */

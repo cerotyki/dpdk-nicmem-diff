@@ -5,14 +5,14 @@
 #ifndef _QAT_COMP_PMD_H_
 #define _QAT_COMP_PMD_H_
 
-#ifdef RTE_LIBRTE_COMPRESSDEV
+#ifdef RTE_LIB_COMPRESSDEV
 
 #include <rte_compressdev.h>
 #include <rte_compressdev_pmd.h>
 
 #include "qat_device.h"
 
-/**< Intel(R) QAT Compression PMD driver name */
+/**< Intel(R) QAT Compression PMD name */
 #define COMPRESSDEV_NAME_QAT_PMD	compress_qat
 
 /** private data structure for a QAT compression device.

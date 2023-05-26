@@ -9,14 +9,14 @@
 
 #include <rte_ether.h>
 #include <rte_cryptodev.h>
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 #include <rte_security.h>
 #endif
 
 #include "qat_sym_capabilities.h"
 #include "qat_device.h"
 
-/** Intel(R) QAT Symmetric Crypto PMD driver name */
+/** Intel(R) QAT Symmetric Crypto PMD name */
 #define CRYPTODEV_NAME_QAT_SYM_PMD	crypto_qat
 
 /* Internal capabilities */

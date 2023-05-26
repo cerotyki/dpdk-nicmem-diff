@@ -17,7 +17,7 @@ With this enhancement, virtio could achieve quite promising performance.
 For basic qemu-KVM installation and other Intel EM poll mode driver in guest VM,
 please refer to Chapter "Driver for VM Emulated Devices".
 
-In this chapter, we will demonstrate usage of virtio PMD driver with two backends,
+In this chapter, we will demonstrate usage of virtio PMD with two backends,
 standard qemu vhost back end and vhost kni back end.
 
 Virtio Implementation in DPDK
@@ -40,10 +40,10 @@ end if necessary.
 Features and Limitations of virtio PMD
 --------------------------------------
 
-In this release, the virtio PMD driver provides the basic functionality of packet reception and transmission.
+In this release, the virtio PMD provides the basic functionality of packet reception and transmission.
 
 *   It supports merge-able buffers per packet when receiving packets and scattered buffer per packet
-    when transmitting packets. The packet size supported is from 64 to 1518.
+    when transmitting packets. The packet size supported is from 64 to 9728.
 
 *   It supports multicast packets and promiscuous mode.
 
@@ -71,7 +71,7 @@ In this release, the virtio PMD driver provides the basic functionality of packe
 
 *   Virtio supports software vlan stripping and inserting.
 
-*   Virtio supports using port IO to get PCI resource when uio/igb_uio module is not available.
+*   Virtio supports using port IO to get PCI resource when UIO module is not available.
 
 Prerequisites
 -------------
@@ -103,14 +103,15 @@ Host2VM communication example
 
         insmod rte_kni.ko
 
-    Other basic DPDK preparations like hugepage enabling, uio port binding are not listed here.
+    Other basic DPDK preparations like hugepage enabling,
+    UIO port binding are not listed here.
     Please refer to the *DPDK Getting Started Guide* for detailed instructions.
 
 #.  Launch the kni user application:
 
     .. code-block:: console
 
-        examples/kni/build/app/kni -l 0-3 -n 4 -- -p 0x1 -P --config="(0,1,3)"
+        <build_dir>/examples/dpdk-kni -l 0-3 -n 4 -- -p 0x1 -P --config="(0,1,3)"
 
     This command generates one network device vEth0 for physical port.
     If specify more physical ports, the generated network device will be vEth1, vEth2, and so on.
@@ -154,7 +155,7 @@ Host2VM communication example
         modprobe uio
         echo 512 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
         modprobe uio_pci_generic
-        python usertools/dpdk-devbind.py -b uio_pci_generic 00:03.0
+        ./usertools/dpdk-devbind.py -b uio_pci_generic 00:03.0
 
     We use testpmd as the forwarding application in this example.
 
@@ -329,7 +330,7 @@ To support Rx interrupts,
 
     .. code-block:: console
 
-        python usertools/dpdk-devbind.py -b vfio-pci 00:03.0
+        ./usertools/dpdk-devbind.py -b vfio-pci 00:03.0
 
 Example
 ~~~~~~~
@@ -340,7 +341,7 @@ Here we use l3fwd-power as an example to show how to get started.
 
     .. code-block:: console
 
-        $ l3fwd-power -l 0-1 -- -p 1 -P --config="(0,0,1)" \
+        $ dpdk-l3fwd-power -l 0-1 -- -p 1 -P --config="(0,0,1)" \
                                                --no-numa --parse-ptype
 
 
@@ -361,7 +362,7 @@ Below devargs are supported by the PCI virtio driver:
     It is used to specify link speed of virtio device. Link speed is a part of
     link status structure. It could be requested by application using
     rte_eth_link_get_nowait function.
-    (Default: 10000 (10G))
+    (Default: 0xffffffff (Unknown))
 
 #.  ``vectorized``:
 
@@ -422,7 +423,7 @@ Below devargs are supported by the virtio-user vdev:
     It is used to specify link speed of virtio device. Link speed is a part of
     link status structure. It could be requested by application using
     rte_eth_link_get_nowait function.
-    (Default: 10000 (10G))
+    (Default: 0xffffffff (Unknown))
 
 #.  ``vectorized``:
 
@@ -508,7 +509,7 @@ are shown in below table:
    Split virtqueue in-order non-mergeable path  virtio_recv_pkts_inorder          virtio_xmit_pkts_inorder
    Split virtqueue vectorized Rx path           virtio_recv_pkts_vec              virtio_xmit_pkts
    Packed virtqueue mergeable path              virtio_recv_mergeable_pkts_packed virtio_xmit_pkts_packed
-   Packed virtqueue non-meregable path          virtio_recv_pkts_packed           virtio_xmit_pkts_packed
+   Packed virtqueue non-mergeable path          virtio_recv_pkts_packed           virtio_xmit_pkts_packed
    Packed virtqueue in-order mergeable path     virtio_recv_mergeable_pkts_packed virtio_xmit_pkts_packed
    Packed virtqueue in-order non-mergeable path virtio_recv_pkts_packed           virtio_xmit_pkts_packed
    Packed virtqueue vectorized Rx path          virtio_recv_pkts_packed_vec       virtio_xmit_pkts_packed

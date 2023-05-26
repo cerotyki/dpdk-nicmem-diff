@@ -24,8 +24,8 @@ static int  ionic_dev_info_get(struct rte_eth_dev *eth_dev,
 static int  ionic_dev_configure(struct rte_eth_dev *dev);
 static int  ionic_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int  ionic_dev_start(struct rte_eth_dev *dev);
-static void ionic_dev_stop(struct rte_eth_dev *dev);
-static void ionic_dev_close(struct rte_eth_dev *dev);
+static int  ionic_dev_stop(struct rte_eth_dev *dev);
+static int  ionic_dev_close(struct rte_eth_dev *dev);
 static int  ionic_dev_set_link_up(struct rte_eth_dev *dev);
 static int  ionic_dev_set_link_down(struct rte_eth_dev *dev);
 static int  ionic_dev_link_update(struct rte_eth_dev *eth_dev,
@@ -218,15 +218,18 @@ ionic_dev_fw_version_get(struct rte_eth_dev *eth_dev,
 {
 	struct ionic_lif *lif = IONIC_ETH_DEV_TO_LIF(eth_dev);
 	struct ionic_adapter *adapter = lif->adapter;
+	int ret;
 
-	if (fw_version == NULL || fw_size <= 0)
+	ret = snprintf(fw_version, fw_size, "%s",
+		 adapter->fw_version);
+	if (ret < 0)
 		return -EINVAL;
 
-	snprintf(fw_version, fw_size, "%s",
-		 adapter->fw_version);
-	fw_version[fw_size - 1] = '\0';
-
-	return 0;
+	ret += 1; /* add the size of '\0' */
+	if (fw_size < (size_t)ret)
+		return ret;
+	else
+		return 0;
 }
 
 /*
@@ -289,7 +292,10 @@ ionic_dev_link_update(struct rte_eth_dev *eth_dev,
 
 	/* Initialize */
 	memset(&link, 0, sizeof(link));
-	link.link_autoneg = ETH_LINK_AUTONEG;
+
+	if (adapter->idev.port_info->config.an_enable) {
+		link.link_autoneg = ETH_LINK_AUTONEG;
+	}
 
 	if (!adapter->link_up) {
 		/* Interface is down */
@@ -571,7 +577,7 @@ ionic_dev_rss_reta_update(struct rte_eth_dev *eth_dev,
 
 	if (reta_size != ident->lif.eth.rss_ind_tbl_sz) {
 		IONIC_PRINT(ERR, "The size of hash lookup table configured "
-			"(%d) doesn't match the number hardware can supported "
+			"(%d) does not match the number hardware can support "
 			"(%d)",
 			reta_size, ident->lif.eth.rss_ind_tbl_sz);
 		return -EINVAL;
@@ -605,7 +611,7 @@ ionic_dev_rss_reta_query(struct rte_eth_dev *eth_dev,
 
 	if (reta_size != ident->lif.eth.rss_ind_tbl_sz) {
 		IONIC_PRINT(ERR, "The size of hash lookup table configured "
-			"(%d) doesn't match the number hardware can supported "
+			"(%d) does not match the number hardware can support "
 			"(%d)",
 			reta_size, ident->lif.eth.rss_ind_tbl_sz);
 		return -EINVAL;
@@ -901,7 +907,8 @@ ionic_dev_start(struct rte_eth_dev *eth_dev)
 	struct ionic_lif *lif = IONIC_ETH_DEV_TO_LIF(eth_dev);
 	struct ionic_adapter *adapter = lif->adapter;
 	struct ionic_dev *idev = &adapter->idev;
-	uint32_t allowed_speeds;
+	uint32_t speed = 0, allowed_speeds;
+	uint8_t an_enable;
 	int err;
 
 	IONIC_PRINT_CALL();
@@ -925,11 +932,23 @@ ionic_dev_start(struct rte_eth_dev *eth_dev)
 		return err;
 	}
 
-	if (eth_dev->data->dev_conf.link_speeds & ETH_LINK_SPEED_FIXED) {
-		uint32_t speed = ionic_parse_link_speeds(dev_conf->link_speeds);
+	/* Configure link */
+	an_enable = (dev_conf->link_speeds & ETH_LINK_SPEED_FIXED) == 0;
 
-		if (speed)
-			ionic_dev_cmd_port_speed(idev, speed);
+	ionic_dev_cmd_port_autoneg(idev, an_enable);
+	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
+	if (err)
+		IONIC_PRINT(WARNING, "Failed to %s autonegotiation",
+			an_enable ? "enable" : "disable");
+
+	if (!an_enable)
+		speed = ionic_parse_link_speeds(dev_conf->link_speeds);
+	if (speed) {
+		ionic_dev_cmd_port_speed(idev, speed);
+		err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
+		if (err)
+			IONIC_PRINT(WARNING, "Failed to set link speed %u",
+				speed);
 	}
 
 	ionic_dev_link_update(eth_dev, 0);
@@ -940,7 +959,7 @@ ionic_dev_start(struct rte_eth_dev *eth_dev)
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-static void
+static int
 ionic_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct ionic_lif *lif = IONIC_ETH_DEV_TO_LIF(eth_dev);
@@ -951,30 +970,36 @@ ionic_dev_stop(struct rte_eth_dev *eth_dev)
 	err = ionic_lif_stop(lif);
 	if (err)
 		IONIC_PRINT(ERR, "Cannot stop LIF: %d", err);
+
+	return err;
 }
 
 /*
  * Reset and stop device.
  */
-static void
+static int
 ionic_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct ionic_lif *lif = IONIC_ETH_DEV_TO_LIF(eth_dev);
 	int err;
 
 	IONIC_PRINT_CALL();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	err = ionic_lif_stop(lif);
 	if (err) {
 		IONIC_PRINT(ERR, "Cannot stop LIF: %d", err);
-		return;
+		return -1;
 	}
 
 	err = eth_ionic_dev_uninit(eth_dev);
 	if (err) {
 		IONIC_PRINT(ERR, "Cannot destroy LIF: %d", err);
-		return;
+		return -1;
 	}
+
+	return 0;
 }
 
 static int
@@ -997,6 +1022,7 @@ eth_ionic_dev_init(struct rte_eth_dev *eth_dev, void *init_params)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	lif->index = adapter->nlifs;
 	lif->eth_dev = eth_dev;
@@ -1060,11 +1086,6 @@ eth_ionic_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	ionic_lif_deinit(lif);
 	ionic_lif_free(lif);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->tx_pkt_prepare = NULL;
 
 	return 0;
 }

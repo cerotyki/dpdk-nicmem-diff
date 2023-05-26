@@ -51,7 +51,7 @@ rfc1812_process(struct rte_ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t ptype)
 #endif /* DO_RFC_1812_CHECKS */
 
 /*
- * We group consecutive packets with the same destionation port into one burst.
+ * We group consecutive packets with the same destination port into one burst.
  * To avoid extra latency this is done together with some other packet
  * processing, but after we made a final decision about packet's destination.
  * To do this we maintain:
@@ -76,7 +76,7 @@ rfc1812_process(struct rte_ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t ptype)
 
 static const struct {
 	uint64_t pnum; /* prebuild 4 values for pnum[]. */
-	int32_t  idx;  /* index for new last updated elemnet. */
+	int32_t  idx;  /* index for new last updated element. */
 	uint16_t lpv;  /* add value to the last updated element. */
 } gptbl[GRPSZ] = {
 	{
@@ -189,7 +189,7 @@ send_packetsx4(struct lcore_conf *qconf, uint16_t port, struct rte_mbuf *m[],
 	 * If TX buffer for that queue is empty, and we have enough packets,
 	 * then send them straightway.
 	 */
-	if (num >= (qconf->burst >> 1) && len == 0) {
+	if (num >= MAX_TX_BURST && len == 0) {
 		n = rte_eth_tx_burst(port, qconf->tx_queue_id[port], m, num);
 		if (unlikely(n < num)) {
 			do {
@@ -204,7 +204,7 @@ send_packetsx4(struct lcore_conf *qconf, uint16_t port, struct rte_mbuf *m[],
 	 */
 
 	n = len + num;
-	n = (n > qconf->burst) ? qconf->burst - len : num;
+	n = (n > MAX_PKT_BURST) ? MAX_PKT_BURST - len : num;
 
 	j = 0;
 	switch (n % FWDSTEP) {
@@ -230,12 +230,15 @@ send_packetsx4(struct lcore_conf *qconf, uint16_t port, struct rte_mbuf *m[],
 	len += n;
 
 	/* enough pkts to be sent */
-	if (unlikely(len == qconf->burst)) {
+	if (unlikely(len == MAX_PKT_BURST)) {
 
-		send_burst(qconf, qconf->burst, port);
+		send_burst(qconf, MAX_PKT_BURST, port);
 
 		/* copy rest of the packets into the TX buffer. */
 		len = num - n;
+		if (len == 0)
+			goto exit;
+
 		j = 0;
 		switch (len % FWDSTEP) {
 		while (j < len) {
@@ -258,6 +261,7 @@ send_packetsx4(struct lcore_conf *qconf, uint16_t port, struct rte_mbuf *m[],
 		}
 	}
 
+exit:
 	qconf->tx_mbufs[port].len = len;
 }
 

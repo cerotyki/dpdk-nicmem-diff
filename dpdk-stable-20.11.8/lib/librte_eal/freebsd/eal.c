@@ -41,7 +41,6 @@
 #include <rte_devargs.h>
 #include <rte_version.h>
 #include <rte_vfio.h>
-#include <rte_atomic.h>
 #include <malloc_heap.h>
 #include <rte_telemetry.h>
 
@@ -522,6 +521,10 @@ eal_parse_args(int argc, char **argv)
 			goto out;
 		}
 
+		/* eal_log_level_parse() already handled this option */
+		if (opt == OPT_LOG_LEVEL_NUM)
+			continue;
+
 		ret = eal_parse_common_option(opt, optarg, internal_conf);
 		/* common parser is not happy */
 		if (ret < 0) {
@@ -626,10 +629,10 @@ eal_check_mem_on_local_socket(void)
 	int socket_id;
 	const struct rte_config *config = rte_eal_get_configuration();
 
-	socket_id = rte_lcore_to_socket_id(config->master_lcore);
+	socket_id = rte_lcore_to_socket_id(config->main_lcore);
 
 	if (rte_memseg_list_walk(check_socket, &socket_id) == 0)
-		RTE_LOG(WARNING, EAL, "WARNING: Master core has no memory on local socket!\n");
+		RTE_LOG(WARNING, EAL, "WARNING: Main core has no memory on local socket!\n");
 }
 
 
@@ -665,12 +668,15 @@ rte_eal_init(int argc, char **argv)
 {
 	int i, fctret, ret;
 	pthread_t thread_id;
-	static rte_atomic32_t run_once = RTE_ATOMIC32_INIT(0);
+	static uint32_t run_once;
+	uint32_t has_run = 0;
 	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
 	char thread_name[RTE_MAX_THREAD_NAME_LEN];
 	const struct rte_config *config = rte_eal_get_configuration();
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
+	bool has_phys_addr;
+	enum rte_iova_mode iova_mode;
 
 	/* checks if the machine is adequate */
 	if (!rte_cpu_is_supported()) {
@@ -679,7 +685,8 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	if (!rte_atomic32_test_and_set(&run_once)) {
+	if (!__atomic_compare_exchange_n(&run_once, &has_run, 1, 0,
+					__ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
 		rte_eal_init_alert("already called initialization.");
 		rte_errno = EALREADY;
 		return -1;
@@ -705,30 +712,34 @@ rte_eal_init(int argc, char **argv)
 	if (fctret < 0) {
 		rte_eal_init_alert("Invalid 'command line' arguments.");
 		rte_errno = EINVAL;
-		rte_atomic32_clear(&run_once);
+		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 		return -1;
 	}
 
 	/* FreeBSD always uses legacy memory model */
 	internal_conf->legacy_mem = true;
+	if (internal_conf->in_memory) {
+		RTE_LOG(WARNING, EAL, "Warning: ignoring unsupported flag, '%s'\n", OPT_IN_MEMORY);
+		internal_conf->in_memory = false;
+	}
 
 	if (eal_plugins_init() < 0) {
 		rte_eal_init_alert("Cannot init plugins");
 		rte_errno = EINVAL;
-		rte_atomic32_clear(&run_once);
+		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 		return -1;
 	}
 
 	if (eal_trace_init() < 0) {
 		rte_eal_init_alert("Cannot init trace");
 		rte_errno = EFAULT;
-		rte_atomic32_clear(&run_once);
+		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 		return -1;
 	}
 
 	if (eal_option_device_parse()) {
 		rte_errno = ENODEV;
-		rte_atomic32_clear(&run_once);
+		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 		return -1;
 	}
 
@@ -762,23 +773,34 @@ rte_eal_init(int argc, char **argv)
 	if (rte_bus_scan()) {
 		rte_eal_init_alert("Cannot scan the buses for devices");
 		rte_errno = ENODEV;
-		rte_atomic32_clear(&run_once);
+		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 		return -1;
 	}
 
-	/* if no EAL option "--iova-mode=<pa|va>", use bus IOVA scheme */
-	if (internal_conf->iova_mode == RTE_IOVA_DC) {
-		/* autodetect the IOVA mapping mode (default is RTE_IOVA_PA) */
-		enum rte_iova_mode iova_mode = rte_bus_get_iommu_class();
-
-		if (iova_mode == RTE_IOVA_DC)
-			iova_mode = RTE_IOVA_PA;
-		rte_eal_get_configuration()->iova_mode = iova_mode;
-	} else {
-		rte_eal_get_configuration()->iova_mode =
-			internal_conf->iova_mode;
+	/*
+	 * PA are only available for hugepages via contigmem.
+	 * If contigmem is inaccessible, rte_eal_hugepage_init() will fail
+	 * with a message describing the cause.
+	 */
+	has_phys_addr = internal_conf->no_hugetlbfs == 0;
+	iova_mode = internal_conf->iova_mode;
+	if (iova_mode == RTE_IOVA_PA && !has_phys_addr) {
+		rte_eal_init_alert("Cannot use IOVA as 'PA' since physical addresses are not available");
+		rte_errno = EINVAL;
+		return -1;
 	}
-
+	if (iova_mode == RTE_IOVA_DC) {
+		RTE_LOG(DEBUG, EAL, "Specific IOVA mode is not requested, autodetecting\n");
+		if (has_phys_addr) {
+			RTE_LOG(DEBUG, EAL, "Selecting IOVA mode according to bus requests\n");
+			iova_mode = rte_bus_get_iommu_class();
+			if (iova_mode == RTE_IOVA_DC)
+				iova_mode = RTE_IOVA_PA;
+		} else {
+			iova_mode = RTE_IOVA_VA;
+		}
+	}
+	rte_eal_get_configuration()->iova_mode = iova_mode;
 	RTE_LOG(INFO, EAL, "Selected IOVA mode '%s'\n",
 		rte_eal_iova_mode() == RTE_IOVA_PA ? "PA" : "VA");
 
@@ -790,7 +812,7 @@ rte_eal_init(int argc, char **argv)
 		if (ret < 0) {
 			rte_eal_init_alert("Cannot get hugepage information.");
 			rte_errno = EACCES;
-			rte_atomic32_clear(&run_once);
+			__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
 			return -1;
 		}
 	}
@@ -850,29 +872,29 @@ rte_eal_init(int argc, char **argv)
 	eal_check_mem_on_local_socket();
 
 	if (pthread_setaffinity_np(pthread_self(), sizeof(rte_cpuset_t),
-			&lcore_config[config->master_lcore].cpuset) != 0) {
+			&lcore_config[config->main_lcore].cpuset) != 0) {
 		rte_eal_init_alert("Cannot set affinity");
 		rte_errno = EINVAL;
 		return -1;
 	}
-	__rte_thread_init(config->master_lcore,
-		&lcore_config[config->master_lcore].cpuset);
+	__rte_thread_init(config->main_lcore,
+		&lcore_config[config->main_lcore].cpuset);
 
 	ret = eal_thread_dump_current_affinity(cpuset, sizeof(cpuset));
 
-	RTE_LOG(DEBUG, EAL, "Master lcore %u is ready (tid=%p;cpuset=[%s%s])\n",
-		config->master_lcore, thread_id, cpuset,
+	RTE_LOG(DEBUG, EAL, "Main lcore %u is ready (tid=%p;cpuset=[%s%s])\n",
+		config->main_lcore, thread_id, cpuset,
 		ret == 0 ? "" : "...");
 
-	RTE_LCORE_FOREACH_SLAVE(i) {
+	RTE_LCORE_FOREACH_WORKER(i) {
 
 		/*
-		 * create communication pipes between master thread
+		 * create communication pipes between main thread
 		 * and children
 		 */
-		if (pipe(lcore_config[i].pipe_master2slave) < 0)
+		if (pipe(lcore_config[i].pipe_main2worker) < 0)
 			rte_panic("Cannot create pipe\n");
-		if (pipe(lcore_config[i].pipe_slave2master) < 0)
+		if (pipe(lcore_config[i].pipe_worker2main) < 0)
 			rte_panic("Cannot create pipe\n");
 
 		lcore_config[i].state = WAIT;
@@ -885,7 +907,7 @@ rte_eal_init(int argc, char **argv)
 
 		/* Set thread_name for aid in debugging. */
 		snprintf(thread_name, sizeof(thread_name),
-				"lcore-slave-%d", i);
+				"lcore-worker-%d", i);
 		rte_thread_setname(lcore_config[i].thread_id, thread_name);
 
 		ret = pthread_setaffinity_np(lcore_config[i].thread_id,
@@ -895,17 +917,17 @@ rte_eal_init(int argc, char **argv)
 	}
 
 	/*
-	 * Launch a dummy function on all slave lcores, so that master lcore
+	 * Launch a dummy function on all worker lcores, so that main lcore
 	 * knows they are all ready when this function returns.
 	 */
-	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MASTER);
+	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MAIN);
 	rte_eal_mp_wait_lcore();
 
 	/* initialize services so vdevs register service during bus_probe. */
 	ret = rte_service_init();
 	if (ret) {
 		rte_eal_init_alert("rte_service_init() failed");
-		rte_errno = ENOEXEC;
+		rte_errno = -ret;
 		return -1;
 	}
 
@@ -921,7 +943,7 @@ rte_eal_init(int argc, char **argv)
 	 */
 	ret = rte_service_start_with_defaults();
 	if (ret < 0 && ret != -ENOTSUP) {
-		rte_errno = ENOEXEC;
+		rte_errno = -ret;
 		return -1;
 	}
 
@@ -992,6 +1014,7 @@ int rte_vfio_setup_device(__rte_unused const char *sysfs_base,
 		      __rte_unused int *vfio_dev_fd,
 		      __rte_unused struct vfio_device_info *device_info)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -999,11 +1022,13 @@ int rte_vfio_release_device(__rte_unused const char *sysfs_base,
 			__rte_unused const char *dev_addr,
 			__rte_unused int fd)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
 int rte_vfio_enable(__rte_unused const char *modname)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -1019,7 +1044,8 @@ int rte_vfio_noiommu_is_enabled(void)
 
 int rte_vfio_clear_group(__rte_unused int vfio_group_fd)
 {
-	return 0;
+	rte_errno = ENOTSUP;
+	return -1;
 }
 
 int
@@ -1027,30 +1053,35 @@ rte_vfio_get_group_num(__rte_unused const char *sysfs_base,
 		       __rte_unused const char *dev_addr,
 		       __rte_unused int *iommu_group_num)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
 int
 rte_vfio_get_container_fd(void)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
 int
 rte_vfio_get_group_fd(__rte_unused int iommu_group_num)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
 int
 rte_vfio_container_create(void)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
 int
 rte_vfio_container_destroy(__rte_unused int container_fd)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -1058,6 +1089,7 @@ int
 rte_vfio_container_group_bind(__rte_unused int container_fd,
 		__rte_unused int iommu_group_num)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -1065,6 +1097,7 @@ int
 rte_vfio_container_group_unbind(__rte_unused int container_fd,
 		__rte_unused int iommu_group_num)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -1074,6 +1107,7 @@ rte_vfio_container_dma_map(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -1083,5 +1117,6 @@ rte_vfio_container_dma_unmap(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }

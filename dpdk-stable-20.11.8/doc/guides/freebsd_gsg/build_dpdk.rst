@@ -41,7 +41,7 @@ Building DPDK
 The following commands can be used to build and install DPDK on a system.
 The final, install, step generally needs to be run as root::
 
-  meson build
+  meson setup build
   cd build
   ninja
   ninja install
@@ -122,7 +122,7 @@ up time.  This can be achieved by placing lines similar to the following into
 
 An error such as::
 
-    kldload: can't load ./x86_64-native-freebsd-gcc/kmod/contigmem.ko:
+    kldload: can't load <build_dir>/kernel/freebsd/contigmem.ko:
              Exec format error
 
 is generally attributed to not having enough contiguous memory

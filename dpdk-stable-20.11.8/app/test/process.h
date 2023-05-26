@@ -24,8 +24,8 @@
 #define exe "exe"
 #endif
 
-#ifdef RTE_LIBRTE_PDUMP
-#ifdef RTE_LIBRTE_RING_PMD
+#ifdef RTE_LIB_PDUMP
+#ifdef RTE_NET_RING
 #include <pthread.h>
 extern void *send_pkts(void *empty);
 extern uint16_t flag_for_send_pkts;
@@ -45,9 +45,10 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 	char *argv_cpy[numargs + 1];
 	int i, status;
 	char path[32];
-#ifdef RTE_LIBRTE_PDUMP
-#ifdef RTE_LIBRTE_RING_PMD
+#ifdef RTE_LIB_PDUMP
+#ifdef RTE_NET_RING
 	pthread_t thread;
+	int rc;
 #endif
 #endif
 
@@ -124,17 +125,22 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 		}
 	}
 	/* parent process does a wait */
-#ifdef RTE_LIBRTE_PDUMP
-#ifdef RTE_LIBRTE_RING_PMD
-	if ((strcmp(env_value, "run_pdump_server_tests") == 0))
-		pthread_create(&thread, NULL, &send_pkts, NULL);
+#ifdef RTE_LIB_PDUMP
+#ifdef RTE_NET_RING
+	if ((strcmp(env_value, "run_pdump_server_tests") == 0)) {
+		rc = pthread_create(&thread, NULL, &send_pkts, NULL);
+		if (rc != 0) {
+			rte_panic("Cannot start send pkts thread: %s\n",
+				  strerror(rc));
+		}
+	}
 #endif
 #endif
 
 	while (wait(&status) != pid)
 		;
-#ifdef RTE_LIBRTE_PDUMP
-#ifdef RTE_LIBRTE_RING_PMD
+#ifdef RTE_LIB_PDUMP
+#ifdef RTE_NET_RING
 	if ((strcmp(env_value, "run_pdump_server_tests") == 0)) {
 		flag_for_send_pkts = 0;
 		pthread_join(thread, NULL);

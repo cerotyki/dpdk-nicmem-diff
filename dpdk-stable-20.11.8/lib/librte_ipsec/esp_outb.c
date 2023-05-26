@@ -172,8 +172,10 @@ outb_tun_pkt_prepare(struct rte_ipsec_sa *sa, rte_be64_t sqc,
 	/* pad length */
 	pdlen -= sizeof(*espt);
 
+	RTE_ASSERT(pdlen <= sizeof(esp_pad_bytes));
+
 	/* copy padding data */
-	rte_memcpy(pt, esp_pad_bytes, pdlen);
+	rte_memcpy(pt, esp_pad_bytes, RTE_MIN(pdlen, sizeof(esp_pad_bytes)));
 
 	/* update esp trailer */
 	espt = (struct rte_esp_tail *)(pt + pdlen);
@@ -339,8 +341,10 @@ outb_trs_pkt_prepare(struct rte_ipsec_sa *sa, rte_be64_t sqc,
 	/* pad length */
 	pdlen -= sizeof(*espt);
 
+	RTE_ASSERT(pdlen <= sizeof(esp_pad_bytes));
+
 	/* copy padding data */
-	rte_memcpy(pt, esp_pad_bytes, pdlen);
+	rte_memcpy(pt, esp_pad_bytes, RTE_MIN(pdlen, sizeof(esp_pad_bytes)));
 
 	/* update esp trailer */
 	espt = (struct rte_esp_tail *)(pt + pdlen);
@@ -449,9 +453,9 @@ cpu_outb_pkt_prepare(const struct rte_ipsec_session *ss,
 	uint32_t i, k, n;
 	uint32_t l2, l3;
 	union sym_op_data icv;
-	void *iv[num];
-	void *aad[num];
-	void *dgst[num];
+	struct rte_crypto_va_iova_ptr iv[num];
+	struct rte_crypto_va_iova_ptr aad[num];
+	struct rte_crypto_va_iova_ptr dgst[num];
 	uint32_t dr[num];
 	uint32_t l4ofs[num];
 	uint32_t clen[num];
@@ -488,9 +492,9 @@ cpu_outb_pkt_prepare(const struct rte_ipsec_session *ss,
 				ivbuf[k]);
 
 			/* fill iv, digest and aad */
-			iv[k] = ivbuf[k];
-			aad[k] = icv.va + sa->icv_len;
-			dgst[k++] = icv.va;
+			iv[k].va = ivbuf[k];
+			aad[k].va = icv.va + sa->icv_len;
+			dgst[k++].va = icv.va;
 		} else {
 			dr[i - k] = i;
 			rte_errno = -rc;
@@ -525,7 +529,7 @@ cpu_outb_trs_pkt_prepare(const struct rte_ipsec_session *ss,
 
 /*
  * process outbound packets for SA with ESN support,
- * for algorithms that require SQN.hibits to be implictly included
+ * for algorithms that require SQN.hibits to be implicitly included
  * into digest computation.
  * In that case we have to move ICV bytes back to their proper place.
  */

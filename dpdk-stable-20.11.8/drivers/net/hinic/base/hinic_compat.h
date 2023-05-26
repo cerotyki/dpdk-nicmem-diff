@@ -166,11 +166,18 @@ static inline u32 readl(const volatile void *addr)
 #define spin_lock(spinlock_prt)		rte_spinlock_lock(spinlock_prt)
 #define spin_unlock(spinlock_prt)	rte_spinlock_unlock(spinlock_prt)
 
+#ifdef CLOCK_MONOTONIC_RAW /* Defined in glibc bits/time.h */
+#define CLOCK_TYPE CLOCK_MONOTONIC_RAW
+#else
+#define CLOCK_TYPE CLOCK_MONOTONIC
+#endif
+#define HINIC_MUTEX_TIMEOUT  10
+
 static inline unsigned long clock_gettime_ms(void)
 {
 	struct timespec tv;
 
-	(void)clock_gettime(CLOCK_MONOTONIC, &tv);
+	(void)clock_gettime(CLOCK_TYPE, &tv);
 
 	return (unsigned long)tv.tv_sec * 1000 +
 	       (unsigned long)tv.tv_nsec / 1000000;
@@ -219,24 +226,14 @@ static inline int hinic_mutex_destroy(pthread_mutex_t *pthreadmutex)
 static inline int hinic_mutex_lock(pthread_mutex_t *pthreadmutex)
 {
 	int err;
+	struct timespec tout;
 
-	err = pthread_mutex_lock(pthreadmutex);
-	if (!err) {
-		return err;
-	} else if (err == EOWNERDEAD) {
-		PMD_DRV_LOG(ERR, "Mutex lock failed. (ErrorNo=%d)", errno);
-#if defined(__GLIBC__)
-#if __GLIBC_PREREQ(2, 12)
-		(void)pthread_mutex_consistent(pthreadmutex);
-#else
-		(void)pthread_mutex_consistent_np(pthreadmutex);
-#endif
-#else
-		(void)pthread_mutex_consistent(pthreadmutex);
-#endif
-	} else {
-		PMD_DRV_LOG(ERR, "Mutex lock failed. (ErrorNo=%d)", errno);
-	}
+	(void)clock_gettime(CLOCK_TYPE, &tout);
+
+	tout.tv_sec += HINIC_MUTEX_TIMEOUT;
+	err = pthread_mutex_timedlock(pthreadmutex, &tout);
+	if (err)
+		PMD_DRV_LOG(ERR, "Mutex lock failed. (ErrorNo=%d)", err);
 
 	return err;
 }

@@ -9,6 +9,7 @@
 #include <rte_mempool.h>
 #include <rte_lcore.h>
 #include "axgbe_common.h"
+#include "rte_time.h"
 
 #define IRQ				0xff
 #define VLAN_HLEN			4
@@ -63,6 +64,13 @@
 #define AXGBE_V2_DMA_CLOCK_FREQ		500000000
 #define AXGBE_V2_PTP_CLOCK_FREQ		125000000
 
+/* Timestamp support - values based on 50MHz PTP clock
+ *   50MHz => 20 nsec
+ */
+#define AXGBE_TSTAMP_SSINC       20
+#define AXGBE_TSTAMP_SNSINC      0
+#define AXGBE_CYCLECOUNTER_MASK 0xffffffffffffffffULL
+
 #define AXGMAC_FIFO_MIN_ALLOC		2048
 #define AXGMAC_FIFO_UNIT		256
 #define AXGMAC_FIFO_ALIGN(_x)                            \
@@ -116,6 +124,12 @@
 
 /* MDIO port types */
 #define AXGMAC_MAX_C22_PORT		3
+
+/* The max frame size with default MTU */
+#define AXGBE_ETH_MAX_LEN ( \
+	RTE_ETHER_MTU + \
+	RTE_ETHER_HDR_LEN + \
+	RTE_ETHER_CRC_LEN)
 
 /* Helper macro for descriptor handling
  *  Always use AXGBE_GET_DESC_DATA to access the descriptor data
@@ -615,7 +629,7 @@ struct axgbe_port {
 
 	unsigned int kr_redrv;
 
-	/* Auto-negotiation atate machine support */
+	/* Auto-negotiation state machine support */
 	unsigned int an_int;
 	unsigned int an_status;
 	enum axgbe_an an_result;
@@ -645,6 +659,12 @@ struct axgbe_port {
 	unsigned int hash_table_count;
 	unsigned int uc_hash_mac_addr;
 	unsigned int uc_hash_table[AXGBE_MAC_HASH_TABLE_SIZE];
+
+	/* For IEEE1588 PTP */
+	struct rte_timecounter systime_tc;
+	struct rte_timecounter tx_tstamp;
+	unsigned int tstamp_addend;
+
 };
 
 void axgbe_init_function_ptrs_dev(struct axgbe_hw_if *hw_if);

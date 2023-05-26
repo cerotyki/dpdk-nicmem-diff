@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <rte_memory.h>
 /*
  * Not needed by this file; included to work around the lack of off_t
  * definition for mlx5dv.h with unpatched rdma-core versions.
@@ -16,7 +15,6 @@
 #include <sys/types.h>
 
 #include "mlx5_glue.h"
-#include "../mlx5_malloc.h"
 
 static int
 mlx5_glue_fork_init(void)
@@ -34,42 +32,6 @@ static int
 mlx5_glue_dealloc_pd(struct ibv_pd *pd)
 {
 	return ibv_dealloc_pd(pd);
-}
-
-static int
-mlx5_glue_get_dm_size(struct ibv_context *context)
-{
-	struct ibv_device_attr_ex attrx;
-
-	memset(&attrx, 0, sizeof(attrx));
-	if (ibv_query_device_ex(context, NULL, &attrx)) {
-		fprintf(stderr, "Couldn't query device for its features\n");
-		return 0;
-	}
-
-	return attrx.max_dm_size;
-}
-
-static struct ibv_dm *
-mlx5_glue_alloc_dm(struct ibv_context *context)
-{
-	struct ibv_device_attr_ex attrx;
-	struct ibv_alloc_dm_attr dm_attr;
-
-	memset(&attrx, 0, sizeof(attrx));
-	memset(&dm_attr, 0, sizeof(dm_attr));
-	if (ibv_query_device_ex(context, NULL, &attrx)) {
-		fprintf(stderr, "Couldn't query device for its features\n");
-		return NULL;
-	}
-
-	if (!attrx.max_dm_size) {
-		fprintf(stderr, "Device doesn't support dm allocation\n");
-		return NULL;
-	}
-
-	dm_attr.length = attrx.max_dm_size;
-	return ibv_alloc_dm(context, &dm_attr);
 }
 
 static struct ibv_device **
@@ -222,7 +184,7 @@ mlx5_glue_destroy_flow_action(void *action)
 		res = ibv_destroy_flow_action(attr->action);
 		break;
 	}
-	mlx5_free(action);
+	free(action);
 	return res;
 #endif
 #else
@@ -263,9 +225,20 @@ mlx5_glue_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access)
 }
 
 static struct ibv_mr *
-mlx5_glue_reg_dm_mr(struct ibv_pd *pd, struct ibv_dm *dm, void *addr, size_t length, int access)
+mlx5_glue_reg_mr_iova(struct ibv_pd *pd, void *addr, size_t length,
+		      uint64_t iova, int access)
 {
-	return ibv_reg_dm_mr(pd, dm, (uint64_t) addr, length, access);
+#ifdef HAVE_MLX5_IBV_REG_MR_IOVA
+		return ibv_reg_mr_iova(pd, addr, length, iova, access);
+#else
+	(void)pd;
+	(void)addr;
+	(void)length;
+	(void)iova;
+	(void)access;
+	errno = ENOTSUP;
+	return NULL;
+#endif
 }
 
 static struct ibv_mr *
@@ -435,7 +408,7 @@ mlx5_glue_dr_create_flow_action_dest_flow_tbl(void *tbl)
 static void *
 mlx5_glue_dr_create_flow_action_dest_port(void *domain, uint32_t port)
 {
-#ifdef HAVE_MLX5DV_DR_DEVX_PORT
+#ifdef HAVE_MLX5DV_DR_CREATE_DEST_IB_PORT
 	return mlx5dv_dr_action_create_dest_ib_port(domain, port);
 #else
 #ifdef HAVE_MLX5DV_DR_ESWITCH
@@ -531,6 +504,19 @@ mlx5_glue_dr_destroy_domain(void *domain)
 	return mlx5dv_dr_domain_destroy(domain);
 #else
 	(void)domain;
+	errno = ENOTSUP;
+	return errno;
+#endif
+}
+
+static int
+mlx5_glue_dr_sync_domain(void *domain, uint32_t flags)
+{
+#ifdef HAVE_MLX5DV_DR
+	return mlx5dv_dr_domain_sync(domain, flags);
+#else
+	(void)domain;
+	(void)flags;
 	errno = ENOTSUP;
 	return errno;
 #endif
@@ -661,7 +647,7 @@ mlx5_glue_dv_create_flow_action_counter(void *counter_obj, uint32_t offset)
 	struct mlx5dv_flow_action_attr *action;
 
 	(void)offset;
-	action = mlx5_malloc(0, sizeof(*action), 0, SOCKET_ID_ANY);
+	action = malloc(sizeof(*action));
 	if (!action)
 		return NULL;
 	action->type = MLX5DV_FLOW_ACTION_COUNTERS_DEVX;
@@ -685,7 +671,7 @@ mlx5_glue_dv_create_flow_action_dest_ibv_qp(void *qp)
 #else
 	struct mlx5dv_flow_action_attr *action;
 
-	action = mlx5_malloc(0, sizeof(*action), 0, SOCKET_ID_ANY);
+	action = malloc(sizeof(*action));
 	if (!action)
 		return NULL;
 	action->type = MLX5DV_FLOW_ACTION_DEST_IBV_QP;
@@ -730,7 +716,7 @@ mlx5_glue_dv_create_flow_action_modify_header
 
 	(void)domain;
 	(void)flags;
-	action = mlx5_malloc(0, sizeof(*action), 0, SOCKET_ID_ANY);
+	action = malloc(sizeof(*action));
 	if (!action)
 		return NULL;
 	action->type = MLX5DV_FLOW_ACTION_IBV_FLOW_ACTION;
@@ -770,7 +756,7 @@ mlx5_glue_dv_create_flow_action_packet_reformat
 	(void)flags;
 	struct mlx5dv_flow_action_attr *action;
 
-	action = mlx5_malloc(0, sizeof(*action), 0, SOCKET_ID_ANY);
+	action = malloc(sizeof(*action));
 	if (!action)
 		return NULL;
 	action->type = MLX5DV_FLOW_ACTION_IBV_FLOW_ACTION;
@@ -800,7 +786,7 @@ mlx5_glue_dv_create_flow_action_tag(uint32_t tag)
 #else /* HAVE_MLX5DV_DR */
 	struct mlx5dv_flow_action_attr *action;
 
-	action = mlx5_malloc(0, sizeof(*action), 0, SOCKET_ID_ANY);
+	action = malloc(sizeof(*action));
 	if (!action)
 		return NULL;
 	action->type = MLX5DV_FLOW_ACTION_TAG;
@@ -839,6 +825,27 @@ mlx5_glue_dv_modify_flow_action_meter(void *action,
 	(void)modify_bits;
 	errno = ENOTSUP;
 	return errno;
+#endif
+}
+
+static void *
+mlx5_glue_dv_create_flow_action_aso(struct mlx5dv_dr_domain *domain,
+				    void *aso_obj,
+				    uint32_t offset,
+				    uint32_t flags,
+				    uint8_t return_reg_c)
+{
+#if defined(HAVE_MLX5DV_DR) && defined(HAVE_MLX5_DR_CREATE_ACTION_ASO)
+	return mlx5dv_dr_action_create_aso(domain, aso_obj, offset,
+					   flags, return_reg_c);
+#else
+	(void)domain;
+	(void)aso_obj;
+	(void)offset;
+	(void)flags;
+	(void)return_reg_c;
+	errno = ENOTSUP;
+	return NULL;
 #endif
 }
 
@@ -1078,19 +1085,73 @@ mlx5_glue_devx_qp_query(struct ibv_qp *qp,
 }
 
 static int
-mlx5_glue_devx_port_query(struct ibv_context *ctx,
-			  uint32_t port_num,
-			  struct mlx5dv_devx_port *mlx5_devx_port)
+mlx5_glue_devx_wq_query(struct ibv_wq *wq, const void *in, size_t inlen,
+			void *out, size_t outlen)
 {
-#ifdef HAVE_MLX5DV_DR_DEVX_PORT
-	return mlx5dv_query_devx_port(ctx, port_num, mlx5_devx_port);
+#ifdef HAVE_IBV_DEVX_QP
+	return mlx5dv_devx_wq_query(wq, in, inlen, out, outlen);
 #else
-	(void)ctx;
-	(void)port_num;
-	(void)mlx5_devx_port;
+	(void)wq;
+	(void)in;
+	(void)inlen;
+	(void)out;
+	(void)outlen;
 	errno = ENOTSUP;
 	return errno;
 #endif
+}
+
+static int
+mlx5_glue_devx_port_query(struct ibv_context *ctx,
+			  uint32_t port_num,
+			  struct mlx5_port_info *info)
+{
+	int err = 0;
+
+	info->query_flags = 0;
+#ifdef HAVE_MLX5DV_DR_DEVX_PORT_V35
+	/* The DevX port query API is implemented (rdma-core v35 and above). */
+	struct mlx5_ib_uapi_query_port devx_port;
+
+	memset(&devx_port, 0, sizeof(devx_port));
+	err = mlx5dv_query_port(ctx, port_num, &devx_port);
+	if (err)
+		return err;
+	if (devx_port.flags & MLX5DV_QUERY_PORT_VPORT_REG_C0) {
+		info->vport_meta_tag = devx_port.reg_c0.value;
+		info->vport_meta_mask = devx_port.reg_c0.mask;
+		info->query_flags |= MLX5_PORT_QUERY_REG_C0;
+	}
+	if (devx_port.flags & MLX5DV_QUERY_PORT_VPORT) {
+		info->vport_id = devx_port.vport;
+		info->query_flags |= MLX5_PORT_QUERY_VPORT;
+	}
+#else
+#ifdef HAVE_MLX5DV_DR_DEVX_PORT
+	/* The legacy DevX port query API is implemented (prior v35). */
+	struct mlx5dv_devx_port devx_port = {
+		.comp_mask = MLX5DV_DEVX_PORT_VPORT |
+			     MLX5DV_DEVX_PORT_MATCH_REG_C_0
+	};
+
+	err = mlx5dv_query_devx_port(ctx, port_num, &devx_port);
+	if (err)
+		return err;
+	if (devx_port.comp_mask & MLX5DV_DEVX_PORT_MATCH_REG_C_0) {
+		info->vport_meta_tag = devx_port.reg_c_0.value;
+		info->vport_meta_mask = devx_port.reg_c_0.mask;
+		info->query_flags |= MLX5_PORT_QUERY_REG_C0;
+	}
+	if (devx_port.comp_mask & MLX5DV_DEVX_PORT_VPORT) {
+		info->vport_id = devx_port.vport_num;
+		info->query_flags |= MLX5_PORT_QUERY_VPORT;
+	}
+#else
+	RTE_SET_USED(ctx);
+	RTE_SET_USED(port_num);
+#endif /* HAVE_MLX5DV_DR_DEVX_PORT */
+#endif /* HAVE_MLX5DV_DR_DEVX_PORT_V35 */
+	return err;
 }
 
 static int
@@ -1102,6 +1163,39 @@ mlx5_glue_dr_dump_domain(FILE *file, void *domain)
 	RTE_SET_USED(file);
 	RTE_SET_USED(domain);
 	return -ENOTSUP;
+#endif
+}
+
+static void *
+mlx5_glue_dr_create_flow_action_sampler
+			(struct mlx5dv_dr_flow_sampler_attr *attr)
+{
+#ifdef HAVE_MLX5_DR_CREATE_ACTION_FLOW_SAMPLE
+	return mlx5dv_dr_action_create_flow_sampler(attr);
+#else
+	(void)attr;
+	errno = ENOTSUP;
+	return NULL;
+#endif
+}
+
+static void *
+mlx5_glue_dr_action_create_dest_array
+			(void *domain,
+			 size_t num_dest,
+			 struct mlx5dv_dr_action_dest_attr *dests[])
+{
+#ifdef HAVE_MLX5_DR_CREATE_ACTION_DEST_ARRAY
+	return mlx5dv_dr_action_create_dest_array
+				(domain,
+				num_dest,
+				dests);
+#else
+	(void)domain;
+	(void)num_dest;
+	(void)dests;
+	errno = ENOTSUP;
+	return NULL;
 #endif
 }
 
@@ -1285,8 +1379,6 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue) {
 	.fork_init = mlx5_glue_fork_init,
 	.alloc_pd = mlx5_glue_alloc_pd,
 	.dealloc_pd = mlx5_glue_dealloc_pd,
-	.get_dm_size = mlx5_glue_get_dm_size,
-	.alloc_dm = mlx5_glue_alloc_dm,
 	.get_device_list = mlx5_glue_get_device_list,
 	.free_device_list = mlx5_glue_free_device_list,
 	.open_device = mlx5_glue_open_device,
@@ -1314,7 +1406,7 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue) {
 	.destroy_qp = mlx5_glue_destroy_qp,
 	.modify_qp = mlx5_glue_modify_qp,
 	.reg_mr = mlx5_glue_reg_mr,
-	.reg_dm_mr = mlx5_glue_reg_dm_mr,
+	.reg_mr_iova = mlx5_glue_reg_mr_iova,
 	.alloc_null_mr = mlx5_glue_alloc_null_mr,
 	.dereg_mr = mlx5_glue_dereg_mr,
 	.create_counter_set = mlx5_glue_create_counter_set,
@@ -1343,6 +1435,7 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue) {
 	.dr_destroy_flow_tbl = mlx5_glue_dr_destroy_flow_tbl,
 	.dr_create_domain = mlx5_glue_dr_create_domain,
 	.dr_destroy_domain = mlx5_glue_dr_destroy_domain,
+	.dr_sync_domain = mlx5_glue_dr_sync_domain,
 	.dv_create_cq = mlx5_glue_dv_create_cq,
 	.dv_create_wq = mlx5_glue_dv_create_wq,
 	.dv_query_device = mlx5_glue_dv_query_device,
@@ -1364,6 +1457,7 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue) {
 	.dv_create_flow_action_tag =  mlx5_glue_dv_create_flow_action_tag,
 	.dv_create_flow_action_meter = mlx5_glue_dv_create_flow_action_meter,
 	.dv_modify_flow_action_meter = mlx5_glue_dv_modify_flow_action_meter,
+	.dv_create_flow_action_aso = mlx5_glue_dv_create_flow_action_aso,
 	.dr_create_flow_action_default_miss =
 		mlx5_glue_dr_create_flow_action_default_miss,
 	.dv_destroy_flow = mlx5_glue_dv_destroy_flow,
@@ -1381,9 +1475,14 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue) {
 	.devx_umem_reg = mlx5_glue_devx_umem_reg,
 	.devx_umem_dereg = mlx5_glue_devx_umem_dereg,
 	.devx_qp_query = mlx5_glue_devx_qp_query,
+	.devx_wq_query = mlx5_glue_devx_wq_query,
 	.devx_port_query = mlx5_glue_devx_port_query,
 	.dr_dump_domain = mlx5_glue_dr_dump_domain,
 	.dr_reclaim_domain_memory = mlx5_glue_dr_reclaim_domain_memory,
+	.dr_create_flow_action_sampler =
+		mlx5_glue_dr_create_flow_action_sampler,
+	.dr_create_flow_action_dest_array =
+		mlx5_glue_dr_action_create_dest_array,
 	.devx_query_eqn = mlx5_glue_devx_query_eqn,
 	.devx_create_event_channel = mlx5_glue_devx_create_event_channel,
 	.devx_destroy_event_channel = mlx5_glue_devx_destroy_event_channel,

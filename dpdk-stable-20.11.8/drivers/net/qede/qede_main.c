@@ -37,6 +37,7 @@ static void qed_init_pci(struct ecore_dev *edev, struct rte_pci_device *pci_dev)
 	edev->regview = pci_dev->mem_resource[0].addr;
 	edev->doorbells = pci_dev->mem_resource[2].addr;
 	edev->db_size = pci_dev->mem_resource[2].len;
+	edev->pci_dev = pci_dev;
 }
 
 static int
@@ -220,7 +221,9 @@ static void qed_stop_iov_task(struct ecore_dev *edev)
 
 	for_each_hwfn(edev, i) {
 		p_hwfn = &edev->hwfns[i];
-		if (!IS_PF(edev))
+		if (IS_PF(edev))
+			rte_eal_alarm_cancel(qed_iov_pf_task, p_hwfn);
+		else
 			rte_eal_alarm_cancel(qede_vf_task, p_hwfn);
 	}
 }
@@ -378,7 +381,7 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 	dev_info->mtu = ECORE_LEADING_HWFN(edev)->hw_info.mtu;
 	dev_info->dev_type = edev->type;
 
-	rte_memcpy(&dev_info->hw_mac, &edev->hwfns[0].hw_info.hw_mac_addr,
+	memcpy(&dev_info->hw_mac, &edev->hwfns[0].hw_info.hw_mac_addr,
 	       RTE_ETHER_ADDR_LEN);
 
 	dev_info->fw_major = FW_MAJOR_VERSION;
@@ -446,7 +449,7 @@ qed_fill_eth_dev_info(struct ecore_dev *edev, struct qed_dev_eth_info *info)
 		info->num_vlan_filters = RESC_NUM(&edev->hwfns[0], ECORE_VLAN) -
 					 max_vf_vlan_filters;
 
-		rte_memcpy(&info->port_mac, &edev->hwfns[0].hw_info.hw_mac_addr,
+		memcpy(&info->port_mac, &edev->hwfns[0].hw_info.hw_mac_addr,
 			   RTE_ETHER_ADDR_LEN);
 	} else {
 		ecore_vf_get_num_rxqs(ECORE_LEADING_HWFN(edev),
@@ -477,7 +480,7 @@ static void qed_set_name(struct ecore_dev *edev, char name[NAME_SIZE])
 {
 	int i;
 
-	rte_memcpy(edev->name, name, NAME_SIZE);
+	memcpy(edev->name, name, NAME_SIZE);
 	for_each_hwfn(edev, i) {
 		snprintf(edev->hwfns[i].name, NAME_SIZE, "%s-%d", name, i);
 	}
@@ -519,10 +522,9 @@ static void qed_fill_link(struct ecore_hwfn *hwfn,
 
 	/* Prepare source inputs */
 	if (IS_PF(hwfn->p_dev)) {
-		rte_memcpy(&params, ecore_mcp_get_link_params(hwfn),
-		       sizeof(params));
-		rte_memcpy(&link, ecore_mcp_get_link_state(hwfn), sizeof(link));
-		rte_memcpy(&link_caps, ecore_mcp_get_link_capabilities(hwfn),
+		memcpy(&params, ecore_mcp_get_link_params(hwfn), sizeof(params));
+		memcpy(&link, ecore_mcp_get_link_state(hwfn), sizeof(link));
+		memcpy(&link_caps, ecore_mcp_get_link_capabilities(hwfn),
 		       sizeof(link_caps));
 	} else {
 		ecore_vf_read_bulletin(hwfn, &change);
@@ -584,13 +586,12 @@ qed_get_current_link(struct ecore_dev *edev, struct qed_link_output *if_link)
 	hwfn = &edev->hwfns[0];
 	if (IS_PF(edev)) {
 		ptt = ecore_ptt_acquire(hwfn);
-		if (!ptt)
-			DP_NOTICE(hwfn, true, "Failed to fill link; No PTT\n");
-
+		if (ptt) {
 			qed_fill_link(hwfn, ptt, if_link);
-
-		if (ptt)
 			ecore_ptt_release(hwfn, ptt);
+		} else {
+			DP_NOTICE(hwfn, true, "Failed to fill link; No PTT\n");
+		}
 	} else {
 		qed_fill_link(hwfn, NULL, if_link);
 	}
@@ -648,10 +649,13 @@ void qed_link_update(struct ecore_hwfn *hwfn)
 	struct ecore_dev *edev = hwfn->p_dev;
 	struct qede_dev *qdev = (struct qede_dev *)edev;
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)qdev->ethdev;
+	int rc;
 
-	if (!qede_link_update(dev, 0))
-		_rte_eth_dev_callback_process(dev,
-					      RTE_ETH_EVENT_INTR_LSC, NULL);
+	rc = qede_link_update(dev, 0);
+	qed_inform_vf_link_state(hwfn);
+
+	if (!rc)
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
 static int qed_drain(struct ecore_dev *edev)
@@ -821,6 +825,7 @@ const struct qed_common_ops qed_common_ops_pass = {
 const struct qed_eth_ops qed_eth_ops_pass = {
 	INIT_STRUCT_FIELD(common, &qed_common_ops_pass),
 	INIT_STRUCT_FIELD(fill_dev_info, &qed_fill_eth_dev_info),
+	INIT_STRUCT_FIELD(sriov_configure, &qed_sriov_configure),
 };
 
 const struct qed_eth_ops *qed_get_eth_ops(void)

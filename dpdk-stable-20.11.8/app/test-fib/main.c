@@ -99,6 +99,7 @@ static struct {
 	uint8_t		ent_sz;
 	uint8_t		rnd_lookup_ips_ratio;
 	uint8_t		print_fract;
+	uint8_t		lookup_fn;
 } config = {
 	.routes_file = NULL,
 	.lookup_ips_file = NULL,
@@ -110,7 +111,8 @@ static struct {
 	.tbl8 = DEFAULT_LPM_TBL8,
 	.ent_sz = 4,
 	.rnd_lookup_ips_ratio = 0,
-	.print_fract = 10
+	.print_fract = 10,
+	.lookup_fn = 0
 };
 
 struct rt_rule_4 {
@@ -622,15 +624,15 @@ print_usage(void)
 		"(if -f is not specified)>]\n"
 		"[-r <percentage ratio of random ip's to lookup"
 		"(if -t is not specified)>]\n"
-		"[-c <do comarison with LPM library>]\n"
+		"[-c <do comparison with LPM library>]\n"
 		"[-6 <do tests with ipv6 (default ipv4)>]\n"
 		"[-s <shuffle randomly generated routes>]\n"
 		"[-a <check nexthops for all ipv4 address space"
 		"(only valid with -c)>]\n"
-		"[-b <fib algorithm>]\n\tavailible options for ipv4\n"
+		"[-b <fib algorithm>]\n\tavailable options for ipv4\n"
 		"\t\trib - RIB based FIB\n"
 		"\t\tdir - DIR24_8 based FIB\n"
-		"\tavailible options for ipv6:\n"
+		"\tavailable options for ipv6:\n"
 		"\t\trib - RIB based FIB\n"
 		"\t\ttrie - TRIE based FIB\n"
 		"defaults are: dir for ipv4 and trie for ipv6\n"
@@ -638,7 +640,11 @@ print_usage(void)
 		"1/2/4/8 (default 4)>]\n"
 		"[-g <number of tbl8's for dir24_8 or trie FIBs>]\n"
 		"[-w <path to the file to dump routing table>]\n"
-		"[-u <path to the file to dump ip's for lookup>]\n",
+		"[-u <path to the file to dump ip's for lookup>]\n"
+		"[-v <type of lookup function:"
+		"\ts1, s2, s3 (3 types of scalar), v (vector) -"
+		" for DIR24_8 based FIB\n"
+		"\ts, v - for TRIE based ipv6 FIB>]\n",
 		config.prgname);
 }
 
@@ -681,7 +687,7 @@ parse_opts(int argc, char **argv)
 	int opt;
 	char *endptr;
 
-	while ((opt = getopt(argc, argv, "f:t:n:d:l:r:c6ab:e:g:w:u:s")) !=
+	while ((opt = getopt(argc, argv, "f:t:n:d:l:r:c6ab:e:g:w:u:sv:")) !=
 			-1) {
 		switch (opt) {
 		case 'f':
@@ -705,6 +711,10 @@ parse_opts(int argc, char **argv)
 				print_usage();
 				rte_exit(-EINVAL, "Invalid option -n\n");
 			}
+
+			if (config.nb_routes < config.print_fract)
+				config.print_fract = config.nb_routes;
+
 			break;
 		case 'd':
 			distrib_string = optarg;
@@ -769,6 +779,23 @@ parse_opts(int argc, char **argv)
 				rte_exit(-EINVAL, "Invalid option -g\n");
 			}
 			break;
+		case 'v':
+			if ((strcmp(optarg, "s1") == 0) ||
+					(strcmp(optarg, "s") == 0)) {
+				config.lookup_fn = 1;
+				break;
+			} else if (strcmp(optarg, "v") == 0) {
+				config.lookup_fn = 2;
+				break;
+			} else if (strcmp(optarg, "s2") == 0) {
+				config.lookup_fn = 3;
+				break;
+			} else if (strcmp(optarg, "s3") == 0) {
+				config.lookup_fn = 4;
+				break;
+			}
+			print_usage();
+			rte_exit(-EINVAL, "Invalid option -v %s\n", optarg);
 		default:
 			print_usage();
 			rte_exit(-EINVAL, "Invalid options\n");
@@ -844,6 +871,27 @@ run_v4(void)
 	if (fib == NULL) {
 		printf("Can not alloc FIB, err %d\n", rte_errno);
 		return -rte_errno;
+	}
+
+	if (config.lookup_fn != 0) {
+		if (config.lookup_fn == 1)
+			ret = rte_fib_select_lookup(fib,
+				RTE_FIB_LOOKUP_DIR24_8_SCALAR_MACRO);
+		else if (config.lookup_fn == 2)
+			ret = rte_fib_select_lookup(fib,
+				RTE_FIB_LOOKUP_DIR24_8_VECTOR_AVX512);
+		else if (config.lookup_fn == 3)
+			ret = rte_fib_select_lookup(fib,
+				RTE_FIB_LOOKUP_DIR24_8_SCALAR_INLINE);
+		else if (config.lookup_fn == 4)
+			ret = rte_fib_select_lookup(fib,
+				RTE_FIB_LOOKUP_DIR24_8_SCALAR_UNI);
+		else
+			ret = -EINVAL;
+		if (ret != 0) {
+			printf("Can not init lookup function\n");
+			return ret;
+		}
 	}
 
 	for (k = config.print_fract, i = 0; k > 0; k--) {
@@ -1025,6 +1073,21 @@ run_v6(void)
 		return -rte_errno;
 	}
 
+	if (config.lookup_fn != 0) {
+		if (config.lookup_fn == 1)
+			ret = rte_fib6_select_lookup(fib,
+				RTE_FIB6_LOOKUP_TRIE_SCALAR);
+		else if (config.lookup_fn == 2)
+			ret = rte_fib6_select_lookup(fib,
+				RTE_FIB6_LOOKUP_TRIE_VECTOR_AVX512);
+		else
+			ret = -EINVAL;
+		if (ret != 0) {
+			printf("Can not init lookup function\n");
+			return ret;
+		}
+	}
+
 	for (k = config.print_fract, i = 0; k > 0; k--) {
 		start = rte_rdtsc_precise();
 		for (j = 0; j < (config.nb_routes - i) / k; j++) {
@@ -1181,6 +1244,10 @@ main(int argc, char **argv)
 		config.nb_routes = 0;
 		while (fgets(line, sizeof(line), fr) != NULL)
 			config.nb_routes++;
+
+		if (config.nb_routes < config.print_fract)
+			config.print_fract = config.nb_routes;
+
 		rewind(fr);
 	}
 

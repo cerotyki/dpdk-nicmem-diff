@@ -67,7 +67,7 @@ comp_perf_check_capabilities(struct comp_test_data *test_data, uint8_t cdev_id)
 
 	uint64_t comp_flags = cap->comp_feature_flags;
 
-	/* Huffman enconding */
+	/* Huffman encoding */
 	if (test_data->huffman_enc == RTE_COMP_HUFFMAN_FIXED &&
 			(comp_flags & RTE_COMP_FF_HUFFMAN_FIXED) == 0) {
 		RTE_LOG(ERR, USER1,
@@ -168,7 +168,7 @@ comp_perf_initialize_compressdev(struct comp_test_data *test_data,
 		cdev_id = enabled_cdevs[i];
 
 		struct rte_compressdev_info cdev_info;
-		uint8_t socket_id = rte_compressdev_socket_id(cdev_id);
+		int socket_id = rte_compressdev_socket_id(cdev_id);
 
 		rte_compressdev_info_get(cdev_id, &cdev_info);
 		if (cdev_info.max_nb_queue_pairs &&
@@ -194,6 +194,7 @@ comp_perf_initialize_compressdev(struct comp_test_data *test_data,
 			.max_nb_priv_xforms = NUM_MAX_XFORMS,
 			.max_nb_streams = 0
 		};
+		test_data->nb_qps = config.nb_queue_pairs;
 
 		if (rte_compressdev_configure(cdev_id, &config) < 0) {
 			RTE_LOG(ERR, USER1, "Device configuration failed\n");
@@ -249,6 +250,14 @@ comp_perf_dump_input_data(struct comp_test_data *test_data)
 	if (test_data->input_data_sz <= 0 || actual_file_sz <= 0 ||
 			fseek(f, 0, SEEK_SET) != 0) {
 		RTE_LOG(ERR, USER1, "Size of input could not be calculated\n");
+		goto end;
+	}
+
+	if (!(test_data->test_op & COMPRESS) &&
+	    test_data->input_data_sz >
+	    (size_t) test_data->seg_sz * (size_t) test_data->max_sgl_segs) {
+		RTE_LOG(ERR, USER1,
+			"Size of input must be less than total segments\n");
 		goto end;
 	}
 
@@ -389,7 +398,7 @@ main(int argc, char **argv)
 	i = 0;
 	uint8_t qp_id = 0, cdev_index = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 
 		if (i == total_nb_qps)
 			break;
@@ -413,7 +422,7 @@ main(int argc, char **argv)
 	while (test_data->level <= test_data->level_lst.max) {
 
 		i = 0;
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 
 			if (i == total_nb_qps)
 				break;
@@ -424,7 +433,7 @@ main(int argc, char **argv)
 			i++;
 		}
 		i = 0;
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 
 			if (i == total_nb_qps)
 				break;
@@ -449,7 +458,7 @@ end:
 
 	case ST_DURING_TEST:
 		i = 0;
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 			if (i == total_nb_qps)
 				break;
 

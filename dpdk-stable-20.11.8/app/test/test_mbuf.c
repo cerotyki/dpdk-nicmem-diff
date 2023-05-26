@@ -72,7 +72,7 @@
 
 #ifdef RTE_MBUF_REFCNT_ATOMIC
 
-static volatile uint32_t refcnt_stop_slaves;
+static volatile uint32_t refcnt_stop_workers;
 static unsigned refcnt_lcore[RTE_MAX_LCORE];
 
 #endif
@@ -1000,7 +1000,7 @@ test_pktmbuf_free_segment(struct rte_mempool *pktmbuf_pool)
 #ifdef RTE_MBUF_REFCNT_ATOMIC
 
 static int
-test_refcnt_slave(void *arg)
+test_refcnt_worker(void *arg)
 {
 	unsigned lcore, free;
 	void *mp = 0;
@@ -1010,7 +1010,7 @@ test_refcnt_slave(void *arg)
 	printf("%s started at lcore %u\n", __func__, lcore);
 
 	free = 0;
-	while (refcnt_stop_slaves == 0) {
+	while (refcnt_stop_workers == 0) {
 		if (rte_ring_dequeue(refcnt_mbuf_ring, &mp) == 0) {
 			free++;
 			rte_pktmbuf_free(mp);
@@ -1038,7 +1038,7 @@ test_refcnt_iter(unsigned int lcore, unsigned int iter,
 	/* For each mbuf in the pool:
 	 * - allocate mbuf,
 	 * - increment it's reference up to N+1,
-	 * - enqueue it N times into the ring for slave cores to free.
+	 * - enqueue it N times into the ring for worker cores to free.
 	 */
 	for (i = 0, n = rte_mempool_avail_count(refcnt_pool);
 	    i != n && (m = rte_pktmbuf_alloc(refcnt_pool)) != NULL;
@@ -1062,7 +1062,7 @@ test_refcnt_iter(unsigned int lcore, unsigned int iter,
 		rte_panic("(lcore=%u, iter=%u): was able to allocate only "
 		          "%u from %u mbufs\n", lcore, iter, i, n);
 
-	/* wait till slave lcores  will consume all mbufs */
+	/* wait till worker lcores  will consume all mbufs */
 	while (!rte_ring_empty(refcnt_mbuf_ring))
 		;
 
@@ -1083,7 +1083,7 @@ test_refcnt_iter(unsigned int lcore, unsigned int iter,
 }
 
 static int
-test_refcnt_master(struct rte_mempool *refcnt_pool,
+test_refcnt_main(struct rte_mempool *refcnt_pool,
 		   struct rte_ring *refcnt_mbuf_ring)
 {
 	unsigned i, lcore;
@@ -1094,7 +1094,7 @@ test_refcnt_master(struct rte_mempool *refcnt_pool,
 	for (i = 0; i != REFCNT_MAX_ITER; i++)
 		test_refcnt_iter(lcore, i, refcnt_pool, refcnt_mbuf_ring);
 
-	refcnt_stop_slaves = 1;
+	refcnt_stop_workers = 1;
 	rte_wmb();
 
 	printf("%s finished at lcore %u\n", __func__, lcore);
@@ -1107,7 +1107,7 @@ static int
 test_refcnt_mbuf(void)
 {
 #ifdef RTE_MBUF_REFCNT_ATOMIC
-	unsigned int master, slave, tref;
+	unsigned int main_lcore, worker, tref;
 	int ret = -1;
 	struct rte_mempool *refcnt_pool = NULL;
 	struct rte_ring *refcnt_mbuf_ring = NULL;
@@ -1126,39 +1126,38 @@ test_refcnt_mbuf(void)
 					      SOCKET_ID_ANY);
 	if (refcnt_pool == NULL) {
 		printf("%s: cannot allocate " MAKE_STRING(refcnt_pool) "\n",
-		    __func__);
+		       __func__);
 		return -1;
 	}
 
 	refcnt_mbuf_ring = rte_ring_create("refcnt_mbuf_ring",
-			rte_align32pow2(REFCNT_RING_SIZE), SOCKET_ID_ANY,
-					RING_F_SP_ENQ);
+					   rte_align32pow2(REFCNT_RING_SIZE), SOCKET_ID_ANY,
+					   RING_F_SP_ENQ);
 	if (refcnt_mbuf_ring == NULL) {
 		printf("%s: cannot allocate " MAKE_STRING(refcnt_mbuf_ring)
-		    "\n", __func__);
+		       "\n", __func__);
 		goto err;
 	}
 
-	refcnt_stop_slaves = 0;
+	refcnt_stop_workers = 0;
 	memset(refcnt_lcore, 0, sizeof (refcnt_lcore));
 
-	rte_eal_mp_remote_launch(test_refcnt_slave, refcnt_mbuf_ring,
-				 SKIP_MASTER);
+	rte_eal_mp_remote_launch(test_refcnt_worker, refcnt_mbuf_ring, SKIP_MAIN);
 
-	test_refcnt_master(refcnt_pool, refcnt_mbuf_ring);
+	test_refcnt_main(refcnt_pool, refcnt_mbuf_ring);
 
 	rte_eal_mp_wait_lcore();
 
-	/* check that we porcessed all references */
+	/* check that we processed all references */
 	tref = 0;
-	master = rte_get_master_lcore();
+	main_lcore = rte_get_main_lcore();
 
-	RTE_LCORE_FOREACH_SLAVE(slave)
-		tref += refcnt_lcore[slave];
+	RTE_LCORE_FOREACH_WORKER(worker)
+		tref += refcnt_lcore[worker];
 
-	if (tref != refcnt_lcore[master])
+	if (tref != refcnt_lcore[main_lcore])
 		rte_panic("referenced mbufs: %u, freed mbufs: %u\n",
-		          tref, refcnt_lcore[master]);
+			  tref, refcnt_lcore[main_lcore]);
 
 	rte_mempool_dump(stdout, refcnt_pool);
 	rte_ring_dump(stdout, refcnt_mbuf_ring);
@@ -1175,6 +1174,8 @@ err:
 }
 
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 
 /* use fork() to test mbuf errors panic */
@@ -1187,9 +1188,14 @@ verify_mbuf_check_panics(struct rte_mbuf *buf)
 	pid = fork();
 
 	if (pid == 0) {
+		struct rlimit rl;
+
+		/* No need to generate a coredump when panicking. */
+		rl.rlim_cur = rl.rlim_max = 0;
+		setrlimit(RLIMIT_CORE, &rl);
 		rte_mbuf_sanity_check(buf, 1); /* should panic */
 		exit(0);  /* return normally if it doesn't panic */
-	} else if (pid < 0){
+	} else if (pid < 0) {
 		printf("Fork Failed\n");
 		return -1;
 	}
@@ -1622,7 +1628,6 @@ test_get_rx_ol_flag_name(void)
 		VAL_NAME(PKT_RX_FDIR_FLX),
 		VAL_NAME(PKT_RX_QINQ_STRIPPED),
 		VAL_NAME(PKT_RX_LRO),
-		VAL_NAME(PKT_RX_TIMESTAMP),
 		VAL_NAME(PKT_RX_SEC_OFFLOAD),
 		VAL_NAME(PKT_RX_SEC_OFFLOAD_FAILED),
 		VAL_NAME(PKT_RX_OUTER_L4_CKSUM_BAD),
@@ -2025,8 +2030,6 @@ test_pktmbuf_read_from_offset(struct rte_mempool *pktmbuf_pool)
 			NULL);
 	if (data_copy == NULL)
 		GOTO_FAIL("%s: Error in reading packet data!\n", __func__);
-	if (strlen(data_copy) != MBUF_TEST_DATA_LEN2 - 5)
-		GOTO_FAIL("%s: Incorrect data length!\n", __func__);
 	for (off = 0; off < MBUF_TEST_DATA_LEN2 - 5; off++) {
 		if (data_copy[off] != (char)0xcc)
 			GOTO_FAIL("Data corrupted at offset %u", off);
@@ -2048,8 +2051,6 @@ test_pktmbuf_read_from_offset(struct rte_mempool *pktmbuf_pool)
 	data_copy = rte_pktmbuf_read(m, hdr_len, 0, NULL);
 	if (data_copy == NULL)
 		GOTO_FAIL("%s: Error in reading packet data!\n", __func__);
-	if (strlen(data_copy) != MBUF_TEST_DATA_LEN2)
-		GOTO_FAIL("%s: Corrupted data content!\n", __func__);
 	for (off = 0; off < MBUF_TEST_DATA_LEN2; off++) {
 		if (data_copy[off] != (char)0xcc)
 			GOTO_FAIL("Data corrupted at offset %u", off);
@@ -2300,16 +2301,16 @@ fail:
 
 /* Define a free call back function to be used for external buffer */
 static void
-ext_buf_free_callback_fn(void *addr __rte_unused, void *opaque)
+ext_buf_free_callback_fn(void *addr, void *opaque)
 {
-	void *ext_buf_addr = opaque;
+	bool *freed = opaque;
 
-	if (ext_buf_addr == NULL) {
+	if (addr == NULL) {
 		printf("External buffer address is invalid\n");
 		return;
 	}
-	rte_free(ext_buf_addr);
-	ext_buf_addr = NULL;
+	rte_free(addr);
+	*freed = true;
 	printf("External buffer freed via callback\n");
 }
 
@@ -2333,6 +2334,7 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 	void *ext_buf_addr = NULL;
 	uint16_t buf_len = EXT_BUF_TEST_DATA_LEN +
 				sizeof(struct rte_mbuf_ext_shared_info);
+	bool freed = false;
 
 	/* alloc a mbuf */
 	m = rte_pktmbuf_alloc(pktmbuf_pool);
@@ -2348,7 +2350,7 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 		GOTO_FAIL("%s: External buffer allocation failed\n", __func__);
 
 	ret_shinfo = rte_pktmbuf_ext_shinfo_init_helper(ext_buf_addr, &buf_len,
-		ext_buf_free_callback_fn, ext_buf_addr);
+		ext_buf_free_callback_fn, &freed);
 	if (ret_shinfo == NULL)
 		GOTO_FAIL("%s: Shared info initialization failed!\n", __func__);
 
@@ -2358,7 +2360,7 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 	if (rte_mbuf_refcnt_read(m) != 1)
 		GOTO_FAIL("%s: Invalid refcnt in mbuf\n", __func__);
 
-	buf_iova = rte_mempool_virt2iova(ext_buf_addr);
+	buf_iova = rte_mem_virt2iova(ext_buf_addr);
 	rte_pktmbuf_attach_extbuf(m, ext_buf_addr, buf_iova, buf_len,
 		ret_shinfo);
 	if (m->ol_flags != EXT_ATTACHED_MBUF)
@@ -2381,26 +2383,35 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 2)
 		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* test to manually update ext_buf_ref_cnt from 2 to 3*/
 	rte_mbuf_ext_refcnt_update(ret_shinfo, 1);
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 3)
 		GOTO_FAIL("%s: Update ext_buf ref_cnt failed\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* reset the ext_refcnt before freeing the external buffer */
 	rte_mbuf_ext_refcnt_set(ret_shinfo, 2);
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 2)
 		GOTO_FAIL("%s: set ext_buf ref_cnt failed\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* detach the external buffer from mbufs */
 	rte_pktmbuf_detach_extbuf(m);
 	/* check if ref cnt is decremented */
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 1)
 		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	rte_pktmbuf_detach_extbuf(clone);
-	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 0)
-		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (!freed)
+		GOTO_FAIL("%s: extbuf should be freed\n", __func__);
+	freed = false;
 
 	rte_pktmbuf_free(m);
 	m = NULL;
@@ -2572,6 +2583,16 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 		.align = 3,
 		.flags = 0,
 	};
+	const struct rte_mbuf_dynfield dynfield_fail_flag = {
+		.name = "test-dynfield",
+		.size = sizeof(uint8_t),
+		.align = __alignof__(uint8_t),
+		.flags = 1,
+	};
+	const struct rte_mbuf_dynflag dynflag_fail_flag = {
+		.name = "test-dynflag",
+		.flags = 1,
+	};
 	const struct rte_mbuf_dynflag dynflag = {
 		.name = "test-dynflag",
 		.flags = 0,
@@ -2609,9 +2630,13 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 
 	offset3 = rte_mbuf_dynfield_register_offset(&dynfield3,
 				offsetof(struct rte_mbuf, dynfield1[1]));
-	if (offset3 != offsetof(struct rte_mbuf, dynfield1[1]))
-		GOTO_FAIL("failed to register dynamic field 3, offset=%d: %s",
-			offset3, strerror(errno));
+	if (offset3 != offsetof(struct rte_mbuf, dynfield1[1])) {
+		if (rte_errno == EBUSY)
+			printf("mbuf test error skipped: dynfield is busy\n");
+		else
+			GOTO_FAIL("failed to register dynamic field 3, offset="
+				"%d: %s", offset3, strerror(errno));
+	}
 
 	printf("dynfield: offset=%d, offset2=%d, offset3=%d\n",
 		offset, offset2, offset3);
@@ -2628,6 +2653,14 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 				offsetof(struct rte_mbuf, ol_flags));
 	if (ret != -1)
 		GOTO_FAIL("dynamic field creation should fail (not avail)");
+
+	ret = rte_mbuf_dynfield_register(&dynfield_fail_flag);
+	if (ret != -1)
+		GOTO_FAIL("dynamic field creation should fail (invalid flag)");
+
+	ret = rte_mbuf_dynflag_register(&dynflag_fail_flag);
+	if (ret != -1)
+		GOTO_FAIL("dynamic flag creation should fail (invalid flag)");
 
 	flag = rte_mbuf_dynflag_register(&dynflag);
 	if (flag == -1)
@@ -2672,6 +2705,72 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 	return 0;
 fail:
 	rte_pktmbuf_free(m);
+	return -1;
+}
+
+/* check that m->nb_segs and m->next are reset on mbuf free */
+static int
+test_nb_segs_and_next_reset(void)
+{
+	struct rte_mbuf *m0 = NULL, *m1 = NULL, *m2 = NULL;
+	struct rte_mempool *pool = NULL;
+
+	pool = rte_pktmbuf_pool_create("test_mbuf_reset",
+			3, 0, 0, MBUF_DATA_SIZE, SOCKET_ID_ANY);
+	if (pool == NULL)
+		GOTO_FAIL("Failed to create mbuf pool");
+
+	/* alloc mbufs */
+	m0 = rte_pktmbuf_alloc(pool);
+	m1 = rte_pktmbuf_alloc(pool);
+	m2 = rte_pktmbuf_alloc(pool);
+	if (m0 == NULL || m1 == NULL || m2 == NULL)
+		GOTO_FAIL("Failed to allocate mbuf");
+
+	/* append data in all of them */
+	if (rte_pktmbuf_append(m0, 500) == NULL ||
+			rte_pktmbuf_append(m1, 500) == NULL ||
+			rte_pktmbuf_append(m2, 500) == NULL)
+		GOTO_FAIL("Failed to append data in mbuf");
+
+	/* chain them in one mbuf m0 */
+	rte_pktmbuf_chain(m1, m2);
+	rte_pktmbuf_chain(m0, m1);
+	if (m0->nb_segs != 3 || m0->next != m1 || m1->next != m2 ||
+			m2->next != NULL) {
+		m1 = m2 = NULL;
+		GOTO_FAIL("Failed to chain mbufs");
+	}
+
+	/* split m0 chain in two, between m1 and m2 */
+	m0->nb_segs = 2;
+	m0->pkt_len -= m2->data_len;
+	m1->next = NULL;
+	m2->nb_segs = 1;
+
+	/* free the 2 mbuf chains m0 and m2  */
+	rte_pktmbuf_free(m0);
+	rte_pktmbuf_free(m2);
+
+	/* realloc the 3 mbufs */
+	m0 = rte_mbuf_raw_alloc(pool);
+	m1 = rte_mbuf_raw_alloc(pool);
+	m2 = rte_mbuf_raw_alloc(pool);
+	if (m0 == NULL || m1 == NULL || m2 == NULL)
+		GOTO_FAIL("Failed to reallocate mbuf");
+
+	/* ensure that m->next and m->nb_segs are reset allocated mbufs */
+	if (m0->nb_segs != 1 || m0->next != NULL ||
+			m1->nb_segs != 1 || m1->next != NULL ||
+			m2->nb_segs != 1 || m2->next != NULL)
+		GOTO_FAIL("nb_segs or next was not reset properly");
+
+	rte_mempool_free(pool);
+	return 0;
+
+fail:
+	if (pool != NULL)
+		rte_mempool_free(pool);
 	return -1;
 }
 
@@ -2865,6 +2964,11 @@ test_mbuf(void)
 		goto err;
 	}
 
+	/* test reset of m->nb_segs and m->next on mbuf free */
+	if (test_nb_segs_and_next_reset() < 0) {
+		printf("test_nb_segs_and_next_reset() failed\n");
+		goto err;
+	}
 
 	ret = 0;
 err:

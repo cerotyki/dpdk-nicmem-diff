@@ -72,6 +72,7 @@ bus_cmdline_options_handler(__rte_unused const char *key,
 	int class_val;
 	char *found;
 	char *nstr;
+	char *refstr = NULL;
 
 	*ret = 0;
 	nstr = strdup(class_names);
@@ -80,21 +81,22 @@ bus_cmdline_options_handler(__rte_unused const char *key,
 		return *ret;
 	}
 	nstr_org = nstr;
-	while (nstr) {
+	found = strtok_r(nstr, ":", &refstr);
+	if (!found)
+		goto err;
+	do {
 		/* Extract each individual class name. Multiple
 		 * class key,value is supplied as class=net:vdpa:foo:bar.
 		 */
-		found = strsep(&nstr, ":");
-		if (!found)
-			continue;
-		/* Check if its a valid class. */
 		class_val = class_name_to_value(found);
+		/* Check if its a valid class. */
 		if (class_val < 0) {
 			*ret = -EINVAL;
 			goto err;
 		}
 		*ret |= class_val;
-	}
+		found = strtok_r(NULL, ":", &refstr);
+	} while (found);
 err:
 	free(nstr_org);
 	if (*ret < 0)
@@ -201,7 +203,6 @@ drivers_remove(struct mlx5_pci_device *dev, uint32_t enabled_classes)
 	unsigned int i = 0;
 	int ret = 0;
 
-	enabled_classes &= dev->classes_loaded;
 	while (enabled_classes) {
 		driver = driver_get(RTE_BIT64(i));
 		if (driver) {
@@ -252,9 +253,11 @@ drivers_probe(struct mlx5_pci_device *dev, struct rte_pci_driver *pci_drv,
 	dev->classes_loaded |= enabled_classes;
 	return 0;
 probe_err:
-	/* Only unload drivers which are enabled which were enabled
-	 * in this probe instance.
+	/*
+	 * Need to remove only drivers which were not probed before this probe
+	 * instance, but have already been probed before this failure.
 	 */
+	enabled_classes &= ~dev->classes_loaded;
 	drivers_remove(dev, enabled_classes);
 	return ret;
 }
@@ -341,52 +344,6 @@ mlx5_common_pci_remove(struct rte_pci_device *pci_dev)
 }
 
 static int
-mlx5_common_pci_alloc_dm(struct rte_pci_device *pci_dev, void **addr,
-			 size_t *len)
-{
-	struct mlx5_pci_driver *driver = NULL;
-	struct mlx5_pci_device *dev;
-	int ret = -EINVAL;
-
-	dev = pci_to_mlx5_device(pci_dev);
-	if (!dev)
-		return -ENODEV;
-	TAILQ_FOREACH(driver, &drv_list, next) {
-		if (device_class_enabled(dev, driver->driver_class) &&
-		    driver->pci_driver.alloc_dm) {
-			ret = driver->pci_driver.alloc_dm(pci_dev, addr,
-							 len);
-			if (ret)
-				return ret;
-		}
-	}
-	return ret;
-}
-
-static int
-mlx5_common_pci_get_dma_map(struct rte_pci_device *pci_dev, void *addr,
-			    uint64_t iova, size_t len)
-{
-	struct mlx5_pci_driver *driver = NULL;
-	struct mlx5_pci_device *dev;
-	int ret = -EINVAL;
-
-	dev = pci_to_mlx5_device(pci_dev);
-	if (!dev)
-		return -ENODEV;
-	TAILQ_FOREACH(driver, &drv_list, next) {
-		if (device_class_enabled(dev, driver->driver_class) &&
-		    driver->pci_driver.get_dma_map) {
-			ret = driver->pci_driver.get_dma_map(pci_dev, addr,
-							 iova, len);
-			if (ret)
-				return ret;
-		}
-	}
-	return ret;
-}
-
-static int
 mlx5_common_pci_dma_map(struct rte_pci_device *pci_dev, void *addr,
 			uint64_t iova, size_t len)
 {
@@ -452,13 +409,11 @@ static struct rte_pci_id *mlx5_pci_id_table;
 
 static struct rte_pci_driver mlx5_pci_driver = {
 	.driver = {
-		.name = "mlx5_pci",
+		.name = MLX5_DRIVER_NAME,
 	},
 	.probe = mlx5_common_pci_probe,
 	.remove = mlx5_common_pci_remove,
 	.dma_map = mlx5_common_pci_dma_map,
-	.alloc_dm = mlx5_common_pci_alloc_dm,
-	.get_dma_map = mlx5_common_pci_get_dma_map,
 	.dma_unmap = mlx5_common_pci_dma_unmap,
 };
 

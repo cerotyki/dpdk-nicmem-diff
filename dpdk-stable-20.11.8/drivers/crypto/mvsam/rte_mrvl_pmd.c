@@ -67,7 +67,7 @@ __rte_aligned(32);
  * Map of supported cipher algorithms.
  */
 static const
-struct cipher_params_mapping cipher_map[RTE_CRYPTO_CIPHER_LIST_END] = {
+struct cipher_params_mapping cipher_map[] = {
 	[RTE_CRYPTO_CIPHER_NULL] = {
 		.supported = ALGO_SUPPORTED,
 		.cipher_alg = SAM_CIPHER_NONE },
@@ -107,7 +107,7 @@ struct cipher_params_mapping cipher_map[RTE_CRYPTO_CIPHER_LIST_END] = {
  * Map of supported auth algorithms.
  */
 static const
-struct auth_params_mapping auth_map[RTE_CRYPTO_AUTH_LIST_END] = {
+struct auth_params_mapping auth_map[] = {
 	[RTE_CRYPTO_AUTH_NULL] = {
 		.supported = ALGO_SUPPORTED,
 		.auth_alg = SAM_AUTH_NONE },
@@ -156,7 +156,7 @@ struct auth_params_mapping auth_map[RTE_CRYPTO_AUTH_LIST_END] = {
  * Map of supported aead algorithms.
  */
 static const
-struct cipher_params_mapping aead_map[RTE_CRYPTO_AEAD_LIST_END] = {
+struct cipher_params_mapping aead_map[] = {
 	[RTE_CRYPTO_AEAD_AES_GCM] = {
 		.supported = ALGO_SUPPORTED,
 		.cipher_alg = SAM_CIPHER_AES,
@@ -359,6 +359,14 @@ mrvl_crypto_set_aead_session_parameters(struct mrvl_crypto_session *sess,
 		aead_map[aead_xform->aead.algo].cipher_alg;
 	sess->sam_sess_params.cipher_mode =
 		aead_map[aead_xform->aead.algo].cipher_mode;
+
+	if (sess->sam_sess_params.cipher_mode == SAM_CIPHER_GCM) {
+		/* IV must include nonce for all counter modes */
+		sess->cipher_iv_offset = aead_xform->cipher.iv.offset;
+
+		/* Set order of authentication then encryption to 0 in GCM */
+		sess->sam_sess_params.u.basic.auth_then_encrypt = 0;
+	}
 
 	/* Assume IV will be passed together with data. */
 	sess->sam_sess_params.cipher_iv = NULL;
@@ -916,14 +924,14 @@ mrvl_pmd_parse_input_args(struct mrvl_pmd_init_params *params,
 		ret = rte_kvargs_process(kvlist,
 					 RTE_CRYPTODEV_PMD_NAME_ARG,
 					 &parse_name_arg,
-					 &params->common);
+					 &params->common.name);
 		if (ret < 0)
 			goto free_kvlist;
 
 		ret = rte_kvargs_process(kvlist,
 					 MRVL_PMD_MAX_NB_SESS_ARG,
 					 &parse_integer_arg,
-					 params);
+					 &params->max_nb_sessions);
 		if (ret < 0)
 			goto free_kvlist;
 

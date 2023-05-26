@@ -8,6 +8,7 @@
 #include <rte_string_fns.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
+#include <rte_mbuf_dyn.h>
 #include <rte_eal_memconfig.h>
 #include <rte_errno.h>
 #include <rte_malloc.h>
@@ -28,6 +29,9 @@ EAL_REGISTER_TAILQ(rte_reorder_tailq)
 
 /* Macros for printing using RTE_LOG */
 #define RTE_LOGTYPE_REORDER	RTE_LOGTYPE_USER1
+
+#define RTE_REORDER_SEQN_DYNFIELD_NAME "rte_reorder_seqn_dynfield"
+int rte_reorder_seqn_dynfield_offset = -1;
 
 /* A generic circular buffer */
 struct cir_buffer {
@@ -57,6 +61,11 @@ rte_reorder_init(struct rte_reorder_buffer *b, unsigned int bufsize,
 {
 	const unsigned int min_bufsize = sizeof(*b) +
 					(2 * size * sizeof(struct rte_mbuf *));
+	static const struct rte_mbuf_dynfield reorder_seqn_dynfield_desc = {
+		.name = RTE_REORDER_SEQN_DYNFIELD_NAME,
+		.size = sizeof(rte_reorder_seqn_t),
+		.align = __alignof__(rte_reorder_seqn_t),
+	};
 
 	if (b == NULL) {
 		RTE_LOG(ERR, REORDER, "Invalid reorder buffer parameter:"
@@ -83,6 +92,15 @@ rte_reorder_init(struct rte_reorder_buffer *b, unsigned int bufsize,
 		return NULL;
 	}
 
+	rte_reorder_seqn_dynfield_offset = rte_mbuf_dynfield_register(&reorder_seqn_dynfield_desc);
+	if (rte_reorder_seqn_dynfield_offset < 0) {
+		RTE_LOG(ERR, REORDER,
+			"Failed to register mbuf field for reorder sequence number, rte_errno: %i\n",
+			rte_errno);
+		rte_errno = ENOMEM;
+		return NULL;
+	}
+
 	memset(b, 0, bufsize);
 	strlcpy(b->name, name, sizeof(b->name));
 	b->memsize = bufsize;
@@ -95,16 +113,45 @@ rte_reorder_init(struct rte_reorder_buffer *b, unsigned int bufsize,
 	return b;
 }
 
+/*
+ * Insert new entry into global list.
+ * Returns pointer to already inserted entry if such exists, or to newly inserted one.
+ */
+static struct rte_tailq_entry *
+rte_reorder_entry_insert(struct rte_tailq_entry *new_te)
+{
+	struct rte_reorder_list *reorder_list;
+	struct rte_reorder_buffer *b, *nb;
+	struct rte_tailq_entry *te;
+
+	rte_mcfg_tailq_write_lock();
+
+	reorder_list = RTE_TAILQ_CAST(rte_reorder_tailq.head, rte_reorder_list);
+	/* guarantee there's no existing */
+	TAILQ_FOREACH(te, reorder_list, next) {
+		b = (struct rte_reorder_buffer *) te->data;
+		nb = (struct rte_reorder_buffer *) new_te->data;
+		if (strncmp(nb->name, b->name, RTE_REORDER_NAMESIZE) == 0)
+			break;
+	}
+
+	if (te == NULL) {
+		TAILQ_INSERT_TAIL(reorder_list, new_te, next);
+		te = new_te;
+	}
+
+	rte_mcfg_tailq_write_unlock();
+
+	return te;
+}
+
 struct rte_reorder_buffer*
 rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 {
 	struct rte_reorder_buffer *b = NULL;
-	struct rte_tailq_entry *te;
-	struct rte_reorder_list *reorder_list;
+	struct rte_tailq_entry *te, *te_inserted;
 	const unsigned int bufsize = sizeof(struct rte_reorder_buffer) +
 					(2 * size * sizeof(struct rte_mbuf *));
-
-	reorder_list = RTE_TAILQ_CAST(rte_reorder_tailq.head, rte_reorder_list);
 
 	/* Check user arguments. */
 	if (!rte_is_power_of_2(size)) {
@@ -120,24 +167,12 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 		return NULL;
 	}
 
-	rte_mcfg_tailq_write_lock();
-
-	/* guarantee there's no existing */
-	TAILQ_FOREACH(te, reorder_list, next) {
-		b = (struct rte_reorder_buffer *) te->data;
-		if (strncmp(name, b->name, RTE_REORDER_NAMESIZE) == 0)
-			break;
-	}
-	if (te != NULL)
-		goto exit;
-
 	/* allocate tailq entry */
 	te = rte_zmalloc("REORDER_TAILQ_ENTRY", sizeof(*te), 0);
 	if (te == NULL) {
 		RTE_LOG(ERR, REORDER, "Failed to allocate tailq entry\n");
 		rte_errno = ENOMEM;
-		b = NULL;
-		goto exit;
+		return NULL;
 	}
 
 	/* Allocate memory to store the reorder buffer structure. */
@@ -146,14 +181,23 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 		RTE_LOG(ERR, REORDER, "Memzone allocation failed\n");
 		rte_errno = ENOMEM;
 		rte_free(te);
+		return NULL;
 	} else {
-		rte_reorder_init(b, bufsize, name, size);
+		if (rte_reorder_init(b, bufsize, name, size) == NULL) {
+			rte_free(b);
+			rte_free(te);
+			return NULL;
+		}
 		te->data = (void *)b;
-		TAILQ_INSERT_TAIL(reorder_list, te, next);
 	}
 
-exit:
-	rte_mcfg_tailq_write_unlock();
+	te_inserted = rte_reorder_entry_insert(te);
+	if (te_inserted != te) {
+		rte_free(b);
+		rte_free(te);
+		return te_inserted->data;
+	}
+
 	return b;
 }
 
@@ -310,7 +354,7 @@ rte_reorder_insert(struct rte_reorder_buffer *b, struct rte_mbuf *mbuf)
 
 	order_buf = &b->order_buf;
 	if (!b->is_initialized) {
-		b->min_seqn = mbuf->seqn;
+		b->min_seqn = *rte_reorder_seqn(mbuf);
 		b->is_initialized = 1;
 	}
 
@@ -322,7 +366,7 @@ rte_reorder_insert(struct rte_reorder_buffer *b, struct rte_mbuf *mbuf)
 	 *	mbuf_seqn = 0x0010
 	 *	offset    = 0x0010 - 0xFFFD = 0x13
 	 */
-	offset = mbuf->seqn - b->min_seqn;
+	offset = *rte_reorder_seqn(mbuf) - b->min_seqn;
 
 	/*
 	 * action to take depends on offset.
@@ -352,7 +396,7 @@ rte_reorder_insert(struct rte_reorder_buffer *b, struct rte_mbuf *mbuf)
 			rte_errno = ENOSPC;
 			return -1;
 		}
-		offset = mbuf->seqn - b->min_seqn;
+		offset = *rte_reorder_seqn(mbuf) - b->min_seqn;
 		position = (order_buf->head + offset) & order_buf->mask;
 		order_buf->entries[position] = mbuf;
 	} else {
@@ -375,6 +419,7 @@ rte_reorder_drain(struct rte_reorder_buffer *b, struct rte_mbuf **mbufs,
 	/* Try to fetch requested number of mbufs from ready buffer */
 	while ((drain_cnt < max_mbufs) && (ready_buf->tail != ready_buf->head)) {
 		mbufs[drain_cnt++] = ready_buf->entries[ready_buf->tail];
+		ready_buf->entries[ready_buf->tail] = NULL;
 		ready_buf->tail = (ready_buf->tail + 1) & ready_buf->mask;
 	}
 

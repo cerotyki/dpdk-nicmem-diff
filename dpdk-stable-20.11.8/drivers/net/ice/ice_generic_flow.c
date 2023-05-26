@@ -1896,6 +1896,8 @@ ice_register_parser(struct ice_flow_parser *parser,
 			TAILQ_INSERT_TAIL(list, parser_node, node);
 		else if (parser->engine->type == ICE_FLOW_ENGINE_FDIR)
 			TAILQ_INSERT_HEAD(list, parser_node, node);
+		else if (parser->engine->type == ICE_FLOW_ENGINE_ACL)
+			TAILQ_INSERT_HEAD(list, parser_node, node);
 		else
 			return -EINVAL;
 	}
@@ -1941,6 +1943,14 @@ ice_flow_valid_attr(struct ice_adapter *ad,
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 				attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* Not supported */
+	if (attr->transfer) {
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				   attr, "Not support transfer.");
 		return -rte_errno;
 	}
 
@@ -2321,7 +2331,9 @@ ice_flow_flush(struct rte_eth_dev *dev,
 		ret = ice_flow_destroy(dev, p_flow, error);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to flush flows");
-			return -EINVAL;
+			if (ret != -EAGAIN)
+				ret = -EINVAL;
+			return ret;
 		}
 	}
 
@@ -2358,15 +2370,16 @@ ice_flow_query(struct rte_eth_dev *dev,
 			ret = flow->engine->query_count(ad, flow, count, error);
 			break;
 		default:
-			return rte_flow_error_set(error, ENOTSUP,
+			ret = rte_flow_error_set(error, ENOTSUP,
 					RTE_FLOW_ERROR_TYPE_ACTION,
 					actions,
 					"action not supported");
+			goto out;
 		}
 	}
 
+out:
 	rte_spinlock_unlock(&pf->flow_ops_lock);
-
 	return ret;
 }
 
@@ -2377,7 +2390,7 @@ ice_flow_redirect(struct ice_adapter *ad,
 	struct ice_pf *pf = &ad->pf;
 	struct rte_flow *p_flow;
 	void *temp;
-	int ret;
+	int ret = 0;
 
 	rte_spinlock_lock(&pf->flow_ops_lock);
 
@@ -2387,11 +2400,11 @@ ice_flow_redirect(struct ice_adapter *ad,
 		ret = p_flow->engine->redirect(ad, p_flow, rd);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to redirect flows");
-			return ret;
+			break;
 		}
 	}
 
 	rte_spinlock_unlock(&pf->flow_ops_lock);
 
-	return 0;
+	return ret;
 }

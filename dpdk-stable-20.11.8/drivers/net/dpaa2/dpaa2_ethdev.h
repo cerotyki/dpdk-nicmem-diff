@@ -26,6 +26,10 @@
 
 #define DPAA2_RX_DEFAULT_NBDESC 512
 
+#define DPAA2_ETH_MAX_LEN (RTE_ETHER_MTU + \
+			   RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + \
+			   VLAN_TAG_SIZE)
+
 /*default tc to be used for ,congestion, distribution etc configuration. */
 #define DPAA2_DEF_TC		0
 
@@ -55,6 +59,8 @@
 
 /* Disable RX tail drop, default is enable */
 #define DPAA2_RX_TAILDROP_OFF	0x04
+/* Tx confirmation enabled */
+#define DPAA2_TX_CONF_ENABLE	0x06
 
 #define DPAA2_RSS_OFFLOAD_ALL ( \
 	ETH_RSS_L2_PAYLOAD | \
@@ -92,6 +98,8 @@
 
 /* enable timestamp in mbuf*/
 extern bool dpaa2_enable_ts[];
+extern uint64_t dpaa2_timestamp_rx_dynflag;
+extern int dpaa2_timestamp_dynfield_offset;
 
 #define DPAA2_QOS_TABLE_RECONFIGURE	1
 #define DPAA2_FS_TABLE_RECONFIGURE	2
@@ -101,7 +109,7 @@ extern bool dpaa2_enable_ts[];
 
 #define DPAA2_FLOW_MAX_KEY_SIZE		16
 
-/*Externaly defined*/
+/* Externally defined */
 extern const struct rte_flow_ops dpaa2_flow_ops;
 extern enum rte_filter_type dpaa2_filter_type;
 
@@ -160,7 +168,6 @@ struct dpaa2_dev_priv {
 	uint16_t ss_offset;
 	uint64_t ss_iova;
 	uint64_t ss_param_iova;
-#if defined(RTE_LIBRTE_IEEE1588)
 	/*stores timestamp of last received packet on dev*/
 	uint64_t rx_timestamp;
 	/*stores timestamp of last received tx confirmation packet on dev*/
@@ -169,7 +176,6 @@ struct dpaa2_dev_priv {
 	 * it corresponds to last packet transmitted
 	 */
 	struct dpaa2_queue *next_tx_conf_queue;
-#endif
 
 	struct rte_eth_dev *eth_dev; /**< Pointer back to holding ethdev */
 
@@ -227,7 +233,6 @@ void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
 uint16_t dpaa2_dev_tx_conf(void *queue)  __rte_unused;
 
-#if defined(RTE_LIBRTE_IEEE1588)
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);
 int dpaa2_timesync_disable(struct rte_eth_dev *dev);
 int dpaa2_timesync_read_time(struct rte_eth_dev *dev,
@@ -240,5 +245,4 @@ int dpaa2_timesync_read_rx_timestamp(struct rte_eth_dev *dev,
 						uint32_t flags __rte_unused);
 int dpaa2_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
 					  struct timespec *timestamp);
-#endif
 #endif /* _DPAA2_ETHDEV_H */

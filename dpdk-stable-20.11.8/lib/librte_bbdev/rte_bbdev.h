@@ -33,7 +33,6 @@ extern "C" {
 #include <string.h>
 
 #include <rte_compat.h>
-#include <rte_atomic.h>
 #include <rte_bus.h>
 #include <rte_cpuflags.h>
 #include <rte_memory.h>
@@ -175,7 +174,7 @@ rte_bbdev_queue_configure(uint16_t dev_id, uint16_t queue_id,
  *
  * @return
  *   - 0 on success
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int
@@ -221,7 +220,7 @@ rte_bbdev_close(uint16_t dev_id);
  *
  * @return
  *   - 0 on success
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int
@@ -237,7 +236,7 @@ rte_bbdev_queue_start(uint16_t dev_id, uint16_t queue_id);
  *
  * @return
  *   - 0 on success
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int
@@ -426,8 +425,7 @@ struct rte_bbdev_data {
 	uint16_t dev_id;  /**< Device ID */
 	int socket_id;  /**< NUMA socket that device is on */
 	bool started;  /**< Device run-time state */
-	/** Counter of processes using the device */
-	rte_atomic16_t process_cnt;
+	uint16_t process_cnt;  /** Counter of processes using the device */
 };
 
 /* Forward declarations */
@@ -809,7 +807,7 @@ rte_bbdev_callback_unregister(uint16_t dev_id, enum rte_bbdev_event_type event,
  *
  * @return
  *   - 0 on success
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int
@@ -826,7 +824,7 @@ rte_bbdev_queue_intr_enable(uint16_t dev_id, uint16_t queue_id);
  *
  * @return
  *   - 0 on success
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int
@@ -854,7 +852,7 @@ rte_bbdev_queue_intr_disable(uint16_t dev_id, uint16_t queue_id);
  * @return
  *   - 0 on success
  *   - ENOTSUP if interrupts are not supported by the identified device
- *   - negative value on failure - as returned from PMD driver
+ *   - negative value on failure - as returned from PMD
  */
 __rte_experimental
 int

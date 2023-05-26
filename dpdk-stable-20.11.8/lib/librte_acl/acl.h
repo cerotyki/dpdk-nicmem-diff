@@ -45,7 +45,7 @@ struct rte_acl_bitset {
  * Each transition is 64 bit value with the following format:
  * | node_type_specific : 32 | node_type : 3 | node_addr : 29 |
  * For all node types except RTE_ACL_NODE_MATCH, node_addr is an index
- * to the start of the node in the transtions array.
+ * to the start of the node in the transitions array.
  * Few different node types are used:
  * RTE_ACL_NODE_MATCH:
  * node_addr value is and index into an array that contains the return value
@@ -66,7 +66,7 @@ struct rte_acl_bitset {
  * RTE_ACL_NODE_SINGLE:
  * always transitions to the same node regardless of the input value.
  * RTE_ACL_NODE_DFA:
- * that node consits of up to 256 transitions.
+ * that node consists of up to 256 transitions.
  * In attempt to conserve space all transitions are divided into 4 consecutive
  * groups, by 64 transitions per group:
  * group64[i] contains transitions[i * 64, .. i * 64 + 63].
@@ -75,6 +75,13 @@ struct rte_acl_bitset {
  * So to calculate transition index within the node for given input byte value:
  * input_byte - ((uint8_t *)&transition)[4 + input_byte / 64].
  */
+
+/*
+ * Each ACL RT contains an idle nomatch node:
+ * a SINGLE node at predefined position (RTE_ACL_DFA_SIZE)
+ * that points to itself.
+ */
+#define RTE_ACL_IDLE_NODE	(RTE_ACL_DFA_SIZE | RTE_ACL_NODE_SINGLE)
 
 /*
  * Structure of a node is a set of ptrs and each ptr has a bit map
@@ -162,6 +169,7 @@ struct rte_acl_ctx {
 	int32_t             socket_id;
 	/** Socket ID to allocate memory from. */
 	enum rte_acl_classify_alg alg;
+	uint32_t           first_load_sz;
 	void               *rules;
 	uint32_t            max_rules;
 	uint32_t            rule_sz;
@@ -199,6 +207,14 @@ rte_acl_classify_sse(const struct rte_acl_ctx *ctx, const uint8_t **data,
 
 int
 rte_acl_classify_avx2(const struct rte_acl_ctx *ctx, const uint8_t **data,
+	uint32_t *results, uint32_t num, uint32_t categories);
+
+int
+rte_acl_classify_avx512x16(const struct rte_acl_ctx *ctx, const uint8_t **data,
+	uint32_t *results, uint32_t num, uint32_t categories);
+
+int
+rte_acl_classify_avx512x32(const struct rte_acl_ctx *ctx, const uint8_t **data,
 	uint32_t *results, uint32_t num, uint32_t categories);
 
 int

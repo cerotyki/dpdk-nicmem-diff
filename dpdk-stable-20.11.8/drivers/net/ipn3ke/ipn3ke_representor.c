@@ -193,7 +193,7 @@ ipn3ke_rpst_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 ipn3ke_rpst_dev_stop(struct rte_eth_dev *dev)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
@@ -206,13 +206,18 @@ ipn3ke_rpst_dev_stop(struct rte_eth_dev *dev)
 		/* Disable the RX path */
 		ipn3ke_xmac_rx_disable(hw, rpst->port_id, 0);
 	}
+
+	return 0;
 }
 
-static void
+static int
 ipn3ke_rpst_dev_close(struct rte_eth_dev *dev)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
 	struct ipn3ke_rpst *rpst = IPN3KE_DEV_PRIVATE_TO_RPST(dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	if (hw->retimer.mac_type == IFPGA_RAWDEV_RETIMER_MAC_TYPE_10GE_XFI) {
 		/* Disable the TX path */
@@ -221,6 +226,8 @@ ipn3ke_rpst_dev_close(struct rte_eth_dev *dev)
 		/* Disable the RX path */
 		ipn3ke_xmac_rx_disable(hw, rpst->port_id, 0);
 	}
+
+	return 0;
 }
 
 /*
@@ -2221,9 +2228,6 @@ ipn3ke_rpst_xstats_get
 	struct ipn3ke_rpst_hw_port_stats hw_stats;
 	struct rte_eth_stats stats;
 
-	if (!xstats)
-		return 0;
-
 	if (!ethdev) {
 		IPN3KE_AFU_PMD_ERR("ethernet device to get statistics is NULL");
 		return -EINVAL;
@@ -2285,7 +2289,7 @@ ipn3ke_rpst_xstats_get
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_hw_port */
+	/* Get individual stats from ipn3ke_rpst_hw_port */
 	for (i = 0; i < IPN3KE_RPST_HW_PORT_XSTATS_CNT; i++) {
 		xstats[count].value = *(uint64_t *)(((char *)(&hw_stats)) +
 			ipn3ke_rpst_hw_port_strings[i].offset);
@@ -2293,7 +2297,7 @@ ipn3ke_rpst_xstats_get
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_rxq_pri */
+	/* Get individual stats from ipn3ke_rpst_rxq_pri */
 	for (i = 0; i < IPN3KE_RPST_RXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < IPN3KE_RPST_PRIO_XSTATS_CNT; prio++) {
 			xstats[count].value =
@@ -2305,7 +2309,7 @@ ipn3ke_rpst_xstats_get
 		}
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_txq_prio */
+	/* Get individual stats from ipn3ke_rpst_txq_prio */
 	for (i = 0; i < IPN3KE_RPST_TXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < IPN3KE_RPST_PRIO_XSTATS_CNT; prio++) {
 			xstats[count].value =
@@ -2343,7 +2347,7 @@ __rte_unused unsigned int limit)
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_hw_port */
+	/* Get individual stats from ipn3ke_rpst_hw_port */
 	for (i = 0; i < IPN3KE_RPST_HW_PORT_XSTATS_CNT; i++) {
 		snprintf(xstats_names[count].name,
 			 sizeof(xstats_names[count].name),
@@ -2352,7 +2356,7 @@ __rte_unused unsigned int limit)
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_rxq_pri */
+	/* Get individual stats from ipn3ke_rpst_rxq_pri */
 	for (i = 0; i < IPN3KE_RPST_RXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < 8; prio++) {
 			snprintf(xstats_names[count].name,
@@ -2364,7 +2368,7 @@ __rte_unused unsigned int limit)
 		}
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_txq_prio */
+	/* Get individual stats from ipn3ke_rpst_txq_prio */
 	for (i = 0; i < IPN3KE_RPST_TXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < 8; prio++) {
 			snprintf(xstats_names[count].name,
@@ -2585,7 +2589,7 @@ ipn3ke_rpst_scan_handle_request(__rte_unused void *param)
 		}
 		rte_delay_us(50 * MS);
 
-		if (num == 0xffffff)
+		if (num == 0 || num == 0xffffff)
 			return NULL;
 	}
 
@@ -2794,7 +2798,7 @@ ipn3ke_rpst_mtu_set(struct rte_eth_dev *ethdev, uint16_t mtu)
 		return -EBUSY;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > IPN3KE_ETH_MAX_LEN)
 		dev_data->dev_conf.rxmode.offloads |=
 			(uint64_t)(DEV_RX_OFFLOAD_JUMBO_FRAME);
 	else
@@ -2959,7 +2963,8 @@ ipn3ke_rpst_init(struct rte_eth_dev *ethdev, void *init_params)
 		return -ENODEV;
 	}
 
-	ethdev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
+	ethdev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR |
+					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	rte_spinlock_lock(&ipn3ke_link_notify_list_lk);
 	TAILQ_INSERT_TAIL(&ipn3ke_rpst_list, rpst, next);

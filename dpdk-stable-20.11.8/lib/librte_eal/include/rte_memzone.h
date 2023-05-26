@@ -51,11 +51,7 @@ struct rte_memzone {
 #define RTE_MEMZONE_NAMESIZE 32       /**< Maximum length of memory zone name.*/
 	char name[RTE_MEMZONE_NAMESIZE];  /**< Name of the memory zone. */
 
-	RTE_STD_C11
-	union {
-		phys_addr_t phys_addr;        /**< deprecated - Start physical address. */
-		rte_iova_t iova;              /**< Start IO address. */
-	};
+	rte_iova_t iova;                  /**< Start IO address. */
 	RTE_STD_C11
 	union {
 		void *addr;                   /**< Start virtual address. */
@@ -122,7 +118,6 @@ struct rte_memzone {
  *   on error.
  *   On error case, rte_errno will be set appropriately:
  *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
- *    - E_RTE_SECONDARY - function was called from a secondary process instance
  *    - ENOSPC - the maximum number of memzones has already been allocated
  *    - EEXIST - a memzone with the same name already exists
  *    - ENOMEM - no appropriate memory area found in which to create memzone
@@ -188,7 +183,6 @@ const struct rte_memzone *rte_memzone_reserve(const char *name,
  *   on error.
  *   On error case, rte_errno will be set appropriately:
  *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
- *    - E_RTE_SECONDARY - function was called from a secondary process instance
  *    - ENOSPC - the maximum number of memzones has already been allocated
  *    - EEXIST - a memzone with the same name already exists
  *    - ENOMEM - no appropriate memory area found in which to create memzone
@@ -260,7 +254,6 @@ const struct rte_memzone *rte_memzone_reserve_aligned(const char *name,
  *   on error.
  *   On error case, rte_errno will be set appropriately:
  *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
- *    - E_RTE_SECONDARY - function was called from a secondary process instance
  *    - ENOSPC - the maximum number of memzones has already been allocated
  *    - EEXIST - a memzone with the same name already exists
  *    - ENOMEM - no appropriate memory area found in which to create memzone

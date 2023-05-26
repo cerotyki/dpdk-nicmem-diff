@@ -826,7 +826,7 @@ static int set_vf_dma_attr_entry(struct hinic_hwdev *hwdev, u8 entry_idx,
 }
 
 /**
- * dma_attr_table_init - initialize the the default dma attributes
+ * dma_attr_table_init - initialize the default dma attributes
  * @hwdev: the pointer to the private hardware device object
  */
 static int dma_attr_table_init(struct hinic_hwdev *hwdev)
@@ -1362,9 +1362,9 @@ static void hinic_lsc_process(struct hinic_hwdev *hwdev,
 	ret = hinic_link_event_process(hwdev, rte_dev, status);
 	/* check if link has changed, notify callback */
 	if (ret == 0)
-		_rte_eth_dev_callback_process(rte_dev,
-					      RTE_ETH_EVENT_INTR_LSC,
-					      NULL);
+		rte_eth_dev_callback_process(rte_dev,
+					     RTE_ETH_EVENT_INTR_LSC,
+					     NULL);
 }
 
 void hinic_l2nic_async_event_handle(struct hinic_hwdev *hwdev,

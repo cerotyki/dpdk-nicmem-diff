@@ -204,7 +204,7 @@ main(int argc, char **argv)
 		return -1;
 
 	/* launch per-lcore init on every lcore */
-	rte_eal_mp_remote_launch(app_main_loop, NULL, SKIP_MASTER);
+	rte_eal_mp_remote_launch(app_main_loop, NULL, SKIP_MAIN);
 
 	if (interactive) {
 		sleep(1);
@@ -217,6 +217,9 @@ main(int argc, char **argv)
 			app_stat();
 		}
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

@@ -122,7 +122,7 @@ lcore_main(void)
 	 * for best performance.
 	 */
 	RTE_ETH_FOREACH_DEV(port)
-		if (rte_eth_dev_socket_id(port) > 0 &&
+		if (rte_eth_dev_socket_id(port) >= 0 &&
 				rte_eth_dev_socket_id(port) !=
 						(int)rte_socket_id())
 			printf("WARNING, port %u is on remote NUMA node to "
@@ -202,8 +202,11 @@ main(int argc, char *argv[])
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
-	/* Call lcore_main on the master core only. */
+	/* Call lcore_main on the main core only. */
 	lcore_main();
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

@@ -51,6 +51,9 @@ static uint64_t start_cycles;
 static uint64_t hz;
 static uint8_t iface_idx;
 
+static uint64_t timestamp_rx_dynflag;
+static int timestamp_dynfield_offset = -1;
+
 struct queue_stat {
 	volatile unsigned long pkts;
 	volatile unsigned long bytes;
@@ -265,9 +268,11 @@ eth_pcap_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 
 		mbuf->pkt_len = (uint16_t)header.caplen;
-		mbuf->timestamp = (uint64_t)header.ts.tv_sec * 1000000
-							+ header.ts.tv_usec;
-		mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+		*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset,
+			rte_mbuf_timestamp_t *) =
+				(uint64_t)header.ts.tv_sec * 1000000 +
+				header.ts.tv_usec;
+		mbuf->ol_flags |= timestamp_rx_dynflag;
 		mbuf->port = pcap_q->port_id;
 		bufs[num_rx] = mbuf;
 		num_rx++;
@@ -381,7 +386,7 @@ eth_tx_drop(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		return 0;
 
 	for (i = 0; i < nb_pkts; i++) {
-		tx_bytes += bufs[i]->data_len;
+		tx_bytes += bufs[i]->pkt_len;
 		rte_pktmbuf_free(bufs[i]);
 	}
 
@@ -607,7 +612,7 @@ status_up:
  * Is the only place for us to close all the tx streams dumpers.
  * If not called the dumpers will be flushed within each tx burst.
  */
-static void
+static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
 	unsigned int i;
@@ -616,9 +621,11 @@ eth_dev_stop(struct rte_eth_dev *dev)
 
 	/* Special iface case. Single pcap is open and shared between tx/rx. */
 	if (internals->single_iface) {
-		pcap_close(pp->tx_pcap[0]);
-		pp->tx_pcap[0] = NULL;
-		pp->rx_pcap[0] = NULL;
+		if (pp->tx_pcap[0] != NULL) {
+			pcap_close(pp->tx_pcap[0]);
+			pp->tx_pcap[0] = NULL;
+			pp->rx_pcap[0] = NULL;
+		}
 		goto status_down;
 	}
 
@@ -649,6 +656,8 @@ status_down:
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+
+	return 0;
 }
 
 static int
@@ -728,26 +737,54 @@ eth_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static inline void
+infinite_rx_ring_free(struct rte_ring *pkts)
+{
+	struct rte_mbuf *bufs;
+
+	while (!rte_ring_dequeue(pkts, (void **)&bufs))
+		rte_pktmbuf_free(bufs);
+
+	rte_ring_free(pkts);
+}
+
+static int
 eth_dev_close(struct rte_eth_dev *dev)
 {
 	unsigned int i;
 	struct pmd_internals *internals = dev->data->dev_private;
 
+	PMD_LOG(INFO, "Closing pcap ethdev on NUMA socket %d",
+			rte_socket_id());
+
+	eth_dev_stop(dev);
+
+	rte_free(dev->process_private);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
 	/* Device wide flag, but cleanup must be performed per queue. */
 	if (internals->infinite_rx) {
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			struct pcap_rx_queue *pcap_q = &internals->rx_queue[i];
-			struct rte_mbuf *pcap_buf;
 
-			while (!rte_ring_dequeue(pcap_q->pkts,
-					(void **)&pcap_buf))
-				rte_pktmbuf_free(pcap_buf);
+			/*
+			 * 'pcap_q->pkts' can be NULL if 'eth_dev_close()'
+			 * called before 'eth_rx_queue_setup()' has been called
+			 */
+			if (pcap_q->pkts == NULL)
+				continue;
 
-			rte_ring_free(pcap_q->pkts);
+			infinite_rx_ring_free(pcap_q->pkts);
 		}
 	}
 
+	if (internals->phy_mac == 0)
+		/* not dynamically allocated, must not be freed */
+		dev->data->mac_addrs = NULL;
+
+	return 0;
 }
 
 static void
@@ -794,7 +831,7 @@ eth_rx_queue_setup(struct rte_eth_dev *dev,
 
 		pcap_pkt_count = count_packets_in_pcap(pcap, pcap_q);
 
-		snprintf(ring_name, sizeof(ring_name), "PCAP_RING%" PRIu16,
+		snprintf(ring_name, sizeof(ring_name), "PCAP_RING%" PRIu32,
 				ring_number);
 
 		pcap_q->pkts = rte_ring_create(ring_name,
@@ -808,21 +845,25 @@ eth_rx_queue_setup(struct rte_eth_dev *dev,
 		while (eth_pcap_rx(pcap_q, bufs, 1)) {
 			/* Check for multiseg mbufs. */
 			if (bufs[0]->nb_segs != 1) {
-				rte_pktmbuf_free(*bufs);
-
-				while (!rte_ring_dequeue(pcap_q->pkts,
-						(void **)bufs))
-					rte_pktmbuf_free(*bufs);
-
-				rte_ring_free(pcap_q->pkts);
-				PMD_LOG(ERR, "Multiseg mbufs are not supported in infinite_rx "
-						"mode.");
+				infinite_rx_ring_free(pcap_q->pkts);
+				PMD_LOG(ERR,
+					"Multiseg mbufs are not supported in infinite_rx mode.");
 				return -EINVAL;
 			}
 
 			rte_ring_enqueue_bulk(pcap_q->pkts,
 					(void * const *)bufs, 1, NULL);
 		}
+
+		if (rte_ring_count(pcap_q->pkts) < pcap_pkt_count) {
+			infinite_rx_ring_free(pcap_q->pkts);
+			PMD_LOG(ERR,
+				"Not enough mbufs to accommodate packets in pcap file. "
+				"At least %" PRIu64 " mbufs per queue is required.",
+				pcap_pkt_count);
+			return -EINVAL;
+		}
+
 		/*
 		 * Reset the stats for this queue since eth_pcap_rx calls above
 		 * didn't result in the application receiving packets.
@@ -1136,6 +1177,7 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 	data->mac_addrs = &(*internals)->eth_addr;
 	data->promiscuous = 1;
 	data->all_multicast = 1;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/*
 	 * NOTE: we'll replace the data element, of originally allocated
@@ -1296,9 +1338,8 @@ eth_from_pcaps(struct rte_vdev_device *vdev,
 
 		/* phy_mac arg is applied only only if "iface" devarg is provided */
 		if (rx_queues->phy_mac) {
-			int ret = eth_pcap_update_mac(rx_queues->queue[0].name,
-					eth_dev, vdev->device.numa_node);
-			if (ret == 0)
+			if (eth_pcap_update_mac(rx_queues->queue[0].name,
+					eth_dev, vdev->device.numa_node) == 0)
 				internals->phy_mac = 1;
 		}
 	}
@@ -1325,6 +1366,33 @@ eth_from_pcaps(struct rte_vdev_device *vdev,
 	return 0;
 }
 
+static void
+eth_release_pcaps(struct pmd_devargs *pcaps,
+		struct pmd_devargs *dumpers,
+		int single_iface)
+{
+	unsigned int i;
+
+	if (single_iface) {
+		if (pcaps->queue[0].pcap)
+			pcap_close(pcaps->queue[0].pcap);
+		return;
+	}
+
+	for (i = 0; i < dumpers->num_of_queue; i++) {
+		if (dumpers->queue[i].dumper)
+			pcap_dump_close(dumpers->queue[i].dumper);
+
+		if (dumpers->queue[i].pcap)
+			pcap_close(dumpers->queue[i].pcap);
+	}
+
+	for (i = 0; i < pcaps->num_of_queue; i++) {
+		if (pcaps->queue[i].pcap)
+			pcap_close(pcaps->queue[i].pcap);
+	}
+}
+
 static int
 pmd_pcap_probe(struct rte_vdev_device *dev)
 {
@@ -1349,6 +1417,13 @@ pmd_pcap_probe(struct rte_vdev_device *dev)
 	gettimeofday(&start_time, NULL);
 	start_cycles = rte_get_timer_cycles();
 	hz = rte_get_timer_hz();
+
+	ret = rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset,
+			&timestamp_rx_dynflag);
+	if (ret != 0) {
+		PMD_LOG(ERR, "Failed to register Rx timestamp field/flag");
+		return -1;
+	}
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);
@@ -1403,7 +1478,8 @@ pmd_pcap_probe(struct rte_vdev_device *dev)
 	devargs_all.is_rx_pcap =
 		rte_kvargs_count(kvlist, ETH_PCAP_RX_PCAP_ARG) ? 1 : 0;
 	devargs_all.is_rx_iface =
-		rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_ARG) ? 1 : 0;
+		(rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_ARG) +
+		 rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_IN_ARG)) ? 1 : 0;
 	pcaps.num_of_queue = 0;
 
 	devargs_all.is_tx_pcap =
@@ -1537,36 +1613,25 @@ create_eth:
 free_kvlist:
 	rte_kvargs_free(kvlist);
 
+	if (ret < 0)
+		eth_release_pcaps(&pcaps, &dumpers, devargs_all.single_iface);
+
 	return ret;
 }
 
 static int
 pmd_pcap_remove(struct rte_vdev_device *dev)
 {
-	struct pmd_internals *internals = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
-
-	PMD_LOG(INFO, "Closing pcap ethdev on numa socket %d",
-			rte_socket_id());
 
 	if (!dev)
 		return -1;
 
-	/* reserve an ethdev entry */
 	eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(dev));
 	if (eth_dev == NULL)
-		return -1;
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		internals = eth_dev->data->dev_private;
-		if (internals != NULL && internals->phy_mac == 0)
-			/* not dynamically allocated, must not be freed */
-			eth_dev->data->mac_addrs = NULL;
-	}
+		return 0; /* port already released */
 
 	eth_dev_close(eth_dev);
-
-	rte_free(eth_dev->process_private);
 	rte_eth_dev_release_port(eth_dev);
 
 	return 0;

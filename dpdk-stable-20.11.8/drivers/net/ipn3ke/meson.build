@@ -2,18 +2,14 @@
 # Copyright(c) 2019 Intel Corporation
 
 #
-# Add the experimenatal APIs called from this PMD
+# Add the experimental APIs called from this PMD
 #  rte_eth_switch_domain_alloc()
 #  rte_eth_dev_create()
 #  rte_eth_dev_destroy()
 #  rte_eth_switch_domain_free()
 #
 
-dep = dependency('libfdt', required: false)
-if not dep.found()
-	dep = cc.find_library('libfdt', required: false)
-endif
-if not dep.found()
+if has_libfdt == 0
 	build = false
 	reason = 'missing dependency, "libfdt"'
 	subdir_done()

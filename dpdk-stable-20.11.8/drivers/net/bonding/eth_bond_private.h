@@ -50,6 +50,8 @@ extern const struct rte_flow_ops bond_flow_ops;
 /** Port Queue Mapping Structure */
 struct bond_rx_queue {
 	uint16_t queue_id;
+	/**< Next active_slave to poll */
+	uint16_t active_slave;
 	/**< Queue Id */
 	struct bond_dev_private *dev_private;
 	/**< Reference to eth_dev private structure */
@@ -132,13 +134,12 @@ struct bond_dev_private {
 	uint16_t nb_rx_queues;			/**< Total number of rx queues */
 	uint16_t nb_tx_queues;			/**< Total number of tx queues*/
 
-	uint16_t active_slave;		/**< Next active_slave to poll */
 	uint16_t active_slave_count;		/**< Number of active slaves */
 	uint16_t active_slaves[RTE_MAX_ETHPORTS];    /**< Active slave list */
 
 	uint16_t slave_count;			/**< Number of bonded slaves */
 	struct bond_slave_details slaves[RTE_MAX_ETHPORTS];
-	/**< Arary of bonded slaves details */
+	/**< Array of bonded slaves details */
 
 	struct mode8023ad_private mode4;
 	uint16_t tlb_slaves_order[RTE_MAX_ETHPORTS];
@@ -211,7 +212,7 @@ int
 valid_bonded_port_id(uint16_t port_id);
 
 int
-valid_slave_port_id(uint16_t port_id, uint8_t mode);
+valid_slave_port_id(struct bond_dev_private *internals, uint16_t port_id);
 
 void
 deactivate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id);
@@ -239,7 +240,7 @@ slave_remove_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
 		uint16_t slave_port_id);
 
 int
-bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, int mode);
+bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, uint8_t mode);
 
 int
 slave_configure(struct rte_eth_dev *bonded_eth_dev,
@@ -315,10 +316,10 @@ bond_tlb_enable(struct bond_dev_private *internals);
 void
 bond_tlb_activate_slave(struct bond_dev_private *internals);
 
-void
+int
 bond_ethdev_stop(struct rte_eth_dev *eth_dev);
 
-void
+int
 bond_ethdev_close(struct rte_eth_dev *dev);
 
 #endif

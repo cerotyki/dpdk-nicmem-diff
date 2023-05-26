@@ -471,7 +471,7 @@ cmdline_parse_token_string_t cmd_device_stats_ =
 cmdline_parse_token_string_t cmd_device_bdf =
 	TOKEN_STRING_INITIALIZER(struct cmd_stats_result, bdf, NULL);
 cmdline_parse_token_num_t cmd_queue_id =
-	TOKEN_NUM_INITIALIZER(struct cmd_stats_result, qid, UINT32);
+	TOKEN_NUM_INITIALIZER(struct cmd_stats_result, qid, RTE_UINT32);
 
 cmdline_parse_inst_t cmd_device_stats = {
 	.f = cmd_device_stats_parsed,
@@ -575,6 +575,9 @@ main(int argc, char *argv[])
 		}
 		vdpa_sample_quit();
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

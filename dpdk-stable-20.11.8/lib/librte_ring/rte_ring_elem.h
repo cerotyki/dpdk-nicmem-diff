@@ -95,7 +95,6 @@ ssize_t rte_ring_get_memsize_elem(unsigned int esize, unsigned int count);
  *   On success, the pointer to the new allocated ring. NULL on error with
  *    rte_errno set appropriately. Possible errno values include:
  *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
- *    - E_RTE_SECONDARY - function was called from a secondary process instance
  *    - EINVAL - esize is not a multiple of 4 or count provided is not a
  *		 power of 2.
  *    - ENOSPC - the maximum number of memzones has already been allocated
@@ -105,6 +104,12 @@ ssize_t rte_ring_get_memsize_elem(unsigned int esize, unsigned int count);
 struct rte_ring *rte_ring_create_elem(const char *name, unsigned int esize,
 			unsigned int count, int socket_id, unsigned int flags);
 
+#if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION >= 120000)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Wstringop-overread"
+#endif
+
 static __rte_always_inline void
 __rte_ring_enqueue_elems_32(struct rte_ring *r, const uint32_t size,
 		uint32_t idx, const void *obj_table, uint32_t n)
@@ -112,7 +117,7 @@ __rte_ring_enqueue_elems_32(struct rte_ring *r, const uint32_t size,
 	unsigned int i;
 	uint32_t *ring = (uint32_t *)&r[1];
 	const uint32_t *obj = (const uint32_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x7); i += 8, idx += 8) {
 			ring[idx] = obj[i];
 			ring[idx + 1] = obj[i + 1];
@@ -157,7 +162,7 @@ __rte_ring_enqueue_elems_64(struct rte_ring *r, uint32_t prod_head,
 	uint32_t idx = prod_head & r->mask;
 	uint64_t *ring = (uint64_t *)&r[1];
 	const unaligned_uint64_t *obj = (const unaligned_uint64_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x3); i += 4, idx += 4) {
 			ring[idx] = obj[i];
 			ring[idx + 1] = obj[i + 1];
@@ -190,7 +195,7 @@ __rte_ring_enqueue_elems_128(struct rte_ring *r, uint32_t prod_head,
 	uint32_t idx = prod_head & r->mask;
 	rte_int128_t *ring = (rte_int128_t *)&r[1];
 	const rte_int128_t *obj = (const rte_int128_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x1); i += 2, idx += 2)
 			memcpy((void *)(ring + idx),
 				(const void *)(obj + i), 32);
@@ -246,7 +251,7 @@ __rte_ring_dequeue_elems_32(struct rte_ring *r, const uint32_t size,
 	unsigned int i;
 	uint32_t *ring = (uint32_t *)&r[1];
 	uint32_t *obj = (uint32_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x7); i += 8, idx += 8) {
 			obj[i] = ring[idx];
 			obj[i + 1] = ring[idx + 1];
@@ -291,7 +296,7 @@ __rte_ring_dequeue_elems_64(struct rte_ring *r, uint32_t prod_head,
 	uint32_t idx = prod_head & r->mask;
 	uint64_t *ring = (uint64_t *)&r[1];
 	unaligned_uint64_t *obj = (unaligned_uint64_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x3); i += 4, idx += 4) {
 			obj[i] = ring[idx];
 			obj[i + 1] = ring[idx + 1];
@@ -324,7 +329,7 @@ __rte_ring_dequeue_elems_128(struct rte_ring *r, uint32_t prod_head,
 	uint32_t idx = prod_head & r->mask;
 	rte_int128_t *ring = (rte_int128_t *)&r[1];
 	rte_int128_t *obj = (rte_int128_t *)obj_table;
-	if (likely(idx + n < size)) {
+	if (likely(idx + n <= size)) {
 		for (i = 0; i < (n & ~0x1); i += 2, idx += 2)
 			memcpy((void *)(obj + i), (void *)(ring + idx), 32);
 		switch (n & 0x1) {
@@ -373,8 +378,7 @@ __rte_ring_dequeue_elems(struct rte_ring *r, uint32_t cons_head,
  * (powerpc/arm).
  * There are 2 choices for the users
  * 1.use rmb() memory barrier
- * 2.use one-direction load_acquire/store_release barrier,defined by
- * CONFIG_RTE_USE_C11_MEM_MODEL=y
+ * 2.use one-direction load_acquire/store_release barrier
  * It depends on performance test results.
  * By default, move common functions to rte_ring_generic.h
  */
@@ -1078,8 +1082,13 @@ rte_ring_dequeue_burst_elem(struct rte_ring *r, void *obj_table,
 	return 0;
 }
 
+#if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION >= 120000)
+#pragma GCC diagnostic pop
+#endif
+
 #ifdef ALLOW_EXPERIMENTAL_API
 #include <rte_ring_peek.h>
+#include <rte_ring_peek_zc.h>
 #endif
 
 #include <rte_ring.h>

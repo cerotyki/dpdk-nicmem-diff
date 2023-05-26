@@ -31,6 +31,8 @@
 
 #define DRIVER_LOOPBACK_MODE "drv_loopback"
 #define DRIVER_NO_PREFETCH_MODE "drv_no_prefetch"
+#define CHECK_INTERVAL         100  /* 100ms */
+#define MAX_REPEAT_TIME        90   /* 9s (90 * 100ms) in total */
 
 /* Supported Rx offloads */
 static uint64_t dev_rx_offloads_sup =
@@ -65,6 +67,8 @@ static uint64_t dev_tx_offloads_nodis =
 
 /* enable timestamp in mbuf */
 bool dpaa2_enable_ts[RTE_MAX_ETHPORTS];
+uint64_t dpaa2_timestamp_rx_dynflag;
+int dpaa2_timestamp_dynfield_offset = -1;
 
 struct rte_dpaa2_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
@@ -91,15 +95,10 @@ static const struct rte_dpaa2_xstats_name_off dpaa2_xstats_strings[] = {
 };
 
 static const enum rte_filter_op dpaa2_supported_filter_ops[] = {
-	RTE_ETH_FILTER_ADD,
-	RTE_ETH_FILTER_DELETE,
-	RTE_ETH_FILTER_UPDATE,
-	RTE_ETH_FILTER_FLUSH,
 	RTE_ETH_FILTER_GET
 };
 
 static struct rte_dpaa2_driver rte_dpaa2_pmd;
-static int dpaa2_dev_uninit(struct rte_eth_dev *eth_dev);
 static int dpaa2_dev_link_update(struct rte_eth_dev *dev,
 				 int wait_to_complete);
 static int dpaa2_dev_set_link_up(struct rte_eth_dev *dev);
@@ -144,7 +143,7 @@ dpaa2_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	PMD_INIT_FUNC_TRACE();
 
 	if (mask & ETH_VLAN_FILTER_MASK) {
-		/* VLAN Filter not avaialble */
+		/* VLAN Filter not available */
 		if (!priv->max_vlan_filters) {
 			DPAA2_PMD_INFO("VLAN filter not available");
 			return -ENOTSUP;
@@ -226,9 +225,11 @@ dpaa2_fw_version_get(struct rte_eth_dev *dev,
 		       mc_ver_info.major,
 		       mc_ver_info.minor,
 		       mc_ver_info.revision);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (uint32_t)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -240,8 +241,6 @@ dpaa2_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 
 	PMD_INIT_FUNC_TRACE();
-
-	dev_info->if_index = priv->hw_id;
 
 	dev_info->max_mac_addrs = priv->max_mac_filters;
 	dev_info->max_rx_pktlen = DPAA2_MAX_RX_PKT_LEN;
@@ -590,7 +589,16 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 #if !defined(RTE_LIBRTE_IEEE1588)
 	if (rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP)
 #endif
+	{
+		ret = rte_mbuf_dyn_rx_timestamp_register(
+				&dpaa2_timestamp_dynfield_offset,
+				&dpaa2_timestamp_rx_dynflag);
+		if (ret != 0) {
+			DPAA2_PMD_ERR("Error to register timestamp field/flag");
+			return -rte_errno;
+		}
 		dpaa2_enable_ts[dev->data->port_id] = true;
+	}
 
 	if (tx_offloads & DEV_TX_OFFLOAD_IPV4_CKSUM)
 		tx_l3_csum_offload = true;
@@ -882,7 +890,7 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		cong_notif_cfg.units = DPNI_CONGESTION_UNIT_FRAMES;
 		cong_notif_cfg.threshold_entry = nb_tx_desc;
 		/* Notify that the queue is not congested when the data in
-		 * the queue is below this thershold.
+		 * the queue is below this threshold.
 		 */
 		cong_notif_cfg.threshold_exit = nb_tx_desc - 24;
 		cong_notif_cfg.message_ctx = 0;
@@ -1031,7 +1039,7 @@ dpaa2_supported_ptypes_get(struct rte_eth_dev *dev)
  * Dpaa2 link Interrupt handler
  *
  * @param param
- *  The address of parameter (struct rte_eth_dev *) regsitered before.
+ *  The address of parameter (struct rte_eth_dev *) registered before.
  *
  * @return
  *  void
@@ -1065,8 +1073,7 @@ dpaa2_interrupt_handler(void *param)
 		clear = DPNI_IRQ_EVENT_LINK_CHANGED;
 		dpaa2_dev_link_update(dev, 0);
 		/* calling all the apps registered for link status event */
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-					      NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 out:
 	ret = dpni_clear_irq_status(dpni, CMD_PRI_LOW, priv->token,
@@ -1199,14 +1206,19 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
  *  This routine disables all traffic on the adapter by issuing a
  *  global reset on the MAC.
  */
-static void
+static int
 dpaa2_dev_stop(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
 	int ret;
 	struct rte_eth_link link;
-	struct rte_intr_handle *intr_handle = dev->intr_handle;
+	struct rte_device *rdev = dev->device;
+	struct rte_intr_handle *intr_handle;
+	struct rte_dpaa2_device *dpaa2_dev;
+
+	dpaa2_dev = container_of(rdev, struct rte_dpaa2_device, device);
+	intr_handle = &dpaa2_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1231,35 +1243,67 @@ dpaa2_dev_stop(struct rte_eth_dev *dev)
 	if (ret) {
 		DPAA2_PMD_ERR("Failure (ret %d) in disabling dpni %d dev",
 			      ret, priv->hw_id);
-		return;
+		return ret;
 	}
 
 	/* clear the recorded link status */
 	memset(&link, 0, sizeof(link));
 	rte_eth_linkstatus_set(dev, &link);
+
+	return 0;
 }
 
-static void
+static int
 dpaa2_dev_close(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
-	int ret;
+	int i, ret;
 	struct rte_eth_link link;
 
 	PMD_INIT_FUNC_TRACE();
 
-	dpaa2_flow_clean(dev);
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
+	if (!dpni) {
+		DPAA2_PMD_WARN("Already closed or not started");
+		return -1;
+	}
+
+	dpaa2_flow_clean(dev);
 	/* Clean the device first */
 	ret = dpni_reset(dpni, CMD_PRI_LOW, priv->token);
 	if (ret) {
 		DPAA2_PMD_ERR("Failure cleaning dpni device: err=%d", ret);
-		return;
+		return -1;
 	}
 
 	memset(&link, 0, sizeof(link));
 	rte_eth_linkstatus_set(dev, &link);
+
+	/* Free private queues memory */
+	dpaa2_free_rx_tx_queues(dev);
+	/* Close the device at underlying layer*/
+	ret = dpni_close(dpni, CMD_PRI_LOW, priv->token);
+	if (ret) {
+		DPAA2_PMD_ERR("Failure closing dpni device with err code %d",
+			      ret);
+	}
+
+	/* Free the allocated memory for ethernet private data and dpni*/
+	priv->hw = NULL;
+	dev->process_private = NULL;
+	rte_free(dpni);
+
+	for (i = 0; i < MAX_TCS; i++)
+		rte_free((void *)(size_t)priv->extract.tc_extract_param[i]);
+
+	if (priv->extract.qos_extract_param)
+		rte_free((void *)(size_t)priv->extract.qos_extract_param);
+
+	DPAA2_PMD_INFO("%s: netdev deleted", dev->data->name);
+	return 0;
 }
 
 static int
@@ -1385,7 +1429,7 @@ dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if (mtu < RTE_ETHER_MIN_MTU || frame_size > DPAA2_MAX_RX_PKT_LEN)
 		return -EINVAL;
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > DPAA2_ETH_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads |=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -1770,23 +1814,32 @@ error:
 /* return 0 means link status changed, -1 means not changed */
 static int
 dpaa2_dev_link_update(struct rte_eth_dev *dev,
-			int wait_to_complete __rte_unused)
+		      int wait_to_complete)
 {
 	int ret;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
 	struct rte_eth_link link;
 	struct dpni_link_state state = {0};
+	uint8_t count;
 
 	if (dpni == NULL) {
 		DPAA2_PMD_ERR("dpni is NULL");
 		return 0;
 	}
 
-	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
-	if (ret < 0) {
-		DPAA2_PMD_DEBUG("error: dpni_get_link_state %d", ret);
-		return -1;
+	for (count = 0; count <= MAX_REPEAT_TIME; count++) {
+		ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token,
+					  &state);
+		if (ret < 0) {
+			DPAA2_PMD_DEBUG("error: dpni_get_link_state %d", ret);
+			return -1;
+		}
+		if (state.up == ETH_LINK_DOWN &&
+		    wait_to_complete)
+			rte_delay_ms(CHECK_INTERVAL);
+		else
+			break;
 	}
 
 	memset(&link, 0, sizeof(struct rte_eth_link));
@@ -2161,7 +2214,7 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		ocfg.oa = 1;
 		/* Late arrival window size disabled */
 		ocfg.olws = 0;
-		/* ORL resource exhaustaion advance NESN disabled */
+		/* ORL resource exhaustion advance NESN disabled */
 		ocfg.oeane = 0;
 		/* Loose ordering enabled */
 		ocfg.oloe = 1;
@@ -2331,7 +2384,6 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.tx_queue_release  = dpaa2_dev_tx_queue_release,
 	.rx_burst_mode_get = dpaa2_dev_rx_burst_mode_get,
 	.tx_burst_mode_get = dpaa2_dev_tx_burst_mode_get,
-	.rx_queue_count       = dpaa2_dev_rx_queue_count,
 	.flow_ctrl_get	      = dpaa2_flow_ctrl_get,
 	.flow_ctrl_set	      = dpaa2_flow_ctrl_set,
 	.mac_addr_add         = dpaa2_dev_add_mac_addr,
@@ -2486,6 +2538,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		 * plugged.
 		 */
 		eth_dev->dev_ops = &dpaa2_ethdev_ops;
+		eth_dev->rx_queue_count = dpaa2_dev_rx_queue_count;
 		if (dpaa2_get_devargs(dev->devargs, DRIVER_LOOPBACK_MODE))
 			eth_dev->rx_pkt_burst = dpaa2_dev_loopback_rx;
 		else if (dpaa2_get_devargs(dev->devargs,
@@ -2638,13 +2691,13 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	}
 	eth_dev->tx_pkt_burst = dpaa2_dev_tx;
 
-	/*Init fields w.r.t. classficaition*/
+	/* Init fields w.r.t. classification */
 	memset(&priv->extract.qos_key_extract, 0,
 		sizeof(struct dpaa2_key_extract));
 	priv->extract.qos_extract_param = (size_t)rte_malloc(NULL, 256, 64);
 	if (!priv->extract.qos_extract_param) {
 		DPAA2_PMD_ERR(" Error(%d) in allocation resources for flow "
-			    " classificaiton ", ret);
+			    " classification ", ret);
 		goto init_err;
 	}
 	priv->extract.qos_key_extract.key_info.ipv4_src_offset =
@@ -2662,7 +2715,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		priv->extract.tc_extract_param[i] =
 			(size_t)rte_malloc(NULL, 256, 64);
 		if (!priv->extract.tc_extract_param[i]) {
-			DPAA2_PMD_ERR(" Error(%d) in allocation resources for flow classificaiton",
+			DPAA2_PMD_ERR(" Error(%d) in allocation resources for flow classification",
 				     ret);
 			goto init_err;
 		}
@@ -2710,56 +2763,9 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	RTE_LOG(INFO, PMD, "%s: netdev created\n", eth_dev->data->name);
 	return 0;
 init_err:
-	dpaa2_dev_uninit(eth_dev);
-	return ret;
-}
-
-static int
-dpaa2_dev_uninit(struct rte_eth_dev *eth_dev)
-{
-	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
-	struct fsl_mc_io *dpni = (struct fsl_mc_io *)eth_dev->process_private;
-	int i, ret;
-
-	PMD_INIT_FUNC_TRACE();
-
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
-	if (!dpni) {
-		DPAA2_PMD_WARN("Already closed or not started");
-		return -1;
-	}
-
 	dpaa2_dev_close(eth_dev);
 
-	dpaa2_free_rx_tx_queues(eth_dev);
-
-	/* Close the device at underlying layer*/
-	ret = dpni_close(dpni, CMD_PRI_LOW, priv->token);
-	if (ret) {
-		DPAA2_PMD_ERR(
-			     "Failure closing dpni device with err code %d",
-			     ret);
-	}
-
-	/* Free the allocated memory for ethernet private data and dpni*/
-	priv->hw = NULL;
-	eth_dev->process_private = NULL;
-	rte_free(dpni);
-
-	for (i = 0; i < MAX_TCS; i++)
-		rte_free((void *)(size_t)priv->extract.tc_extract_param[i]);
-
-	if (priv->extract.qos_extract_param)
-		rte_free((void *)(size_t)priv->extract.qos_extract_param);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-
-	DPAA2_PMD_INFO("%s: netdev deleted", eth_dev->data->name);
-	return 0;
+	return ret;
 }
 
 static int
@@ -2813,6 +2819,8 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 	if (dpaa2_drv->drv_flags & RTE_DPAA2_DRV_INTR_LSC)
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	/* Invoke PMD device initialization function */
 	diag = dpaa2_dev_init(eth_dev);
 	if (diag == 0) {
@@ -2828,13 +2836,13 @@ static int
 rte_dpaa2_remove(struct rte_dpaa2_device *dpaa2_dev)
 {
 	struct rte_eth_dev *eth_dev;
+	int ret;
 
 	eth_dev = dpaa2_dev->eth_dev;
-	dpaa2_dev_uninit(eth_dev);
+	dpaa2_dev_close(eth_dev);
+	ret = rte_eth_dev_release_port(eth_dev);
 
-	rte_eth_dev_release_port(eth_dev);
-
-	return 0;
+	return ret;
 }
 
 static struct rte_dpaa2_driver rte_dpaa2_pmd = {

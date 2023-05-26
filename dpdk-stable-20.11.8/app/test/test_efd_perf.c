@@ -33,7 +33,7 @@ static inline uint8_t efd_get_all_sockets_bitmask(void)
 {
 	uint8_t all_cpu_sockets_bitmask = 0;
 	unsigned int i;
-	unsigned int next_lcore = rte_get_master_lcore();
+	unsigned int next_lcore = rte_get_main_lcore();
 	const int val_true = 1, val_false = 0;
 	for (i = 0; i < rte_lcore_count(); i++) {
 		all_cpu_sockets_bitmask |= 1 << rte_lcore_to_socket_id(next_lcore);
@@ -143,7 +143,6 @@ setup_keys_and_data(struct efd_perf_params *params, unsigned int cycle)
 		qsort(keys, KEYS_TO_ADD, MAX_KEYSIZE, key_compare);
 
 		/* Sift through the list of keys and look for duplicates */
-		int num_duplicates = 0;
 		for (i = 0; i < KEYS_TO_ADD - 1; i++) {
 			if (memcmp(keys[i], keys[i + 1], params->key_size) == 0) {
 				/* This key already exists, try again */

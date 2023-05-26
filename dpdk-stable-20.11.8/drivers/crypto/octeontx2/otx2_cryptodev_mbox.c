@@ -29,7 +29,14 @@ otx2_cpt_hardware_caps_get(const struct rte_cryptodev *dev,
 	if (ret)
 		return -EIO;
 
-	memcpy(hw_caps, rsp->eng_caps,
+	if (rsp->cpt_pf_drv_version != OTX2_CPT_PMD_VERSION) {
+		otx2_err("Incompatible CPT PMD version"
+			 "(Kernel: 0x%04x DPDK: 0x%04x)",
+			  rsp->cpt_pf_drv_version, OTX2_CPT_PMD_VERSION);
+		return -EPIPE;
+	}
+
+	otx2_mbox_memcpy(hw_caps, rsp->eng_caps,
 		sizeof(union cpt_eng_caps) * CPT_MAX_ENG_TYPES);
 
 	return 0;

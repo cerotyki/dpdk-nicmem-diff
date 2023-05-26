@@ -55,7 +55,10 @@ ionic_dev_setup(struct ionic_adapter *adapter)
 			ioread8(&idev->dev_info->fw_version[i]);
 	adapter->fw_version[IONIC_DEVINFO_FWVERS_BUFLEN - 1] = '\0';
 
-	IONIC_PRINT(DEBUG, "Firmware version: %s", adapter->fw_version);
+	adapter->name = adapter->pci_dev->device.name;
+
+	IONIC_PRINT(DEBUG, "%s firmware version: %s",
+		adapter->name, adapter->fw_version);
 
 	/* BAR1: doorbells */
 	bar++;
@@ -102,6 +105,9 @@ ionic_dev_cmd_go(struct ionic_dev *idev, union ionic_dev_cmd *cmd)
 	unsigned int i;
 	uint32_t cmd_size = sizeof(cmd->words) /
 		sizeof(cmd->words[0]);
+
+	IONIC_PRINT(DEBUG, "Sending %s (%d) via dev_cmd",
+		    ionic_opcode_to_str(cmd->cmd.opcode), cmd->cmd.opcode);
 
 	for (i = 0; i < cmd_size; i++)
 		iowrite32(cmd->words[i], &idev->dev_cmd->cmd.words[i]);
@@ -349,6 +355,8 @@ ionic_dev_cmd_adminq_init(struct ionic_dev *idev,
 		.q_init.ring_base = q->base_pa,
 		.q_init.cq_ring_base = cq->base_pa,
 	};
+
+	IONIC_PRINT(DEBUG, "adminq.q_init.ver %u", cmd.q_init.ver);
 
 	ionic_dev_cmd_go(idev, &cmd);
 }
