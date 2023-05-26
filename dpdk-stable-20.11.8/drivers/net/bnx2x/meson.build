@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
 
-dep = dependency('zlib', required: false, method: 'pkg-config')
+dep = dependency('zlib', required: false)
 build = dep.found()
 reason = 'missing dependency, "zlib"'
 ext_deps += dep

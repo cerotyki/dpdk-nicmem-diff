@@ -18,7 +18,7 @@ then
 	exit 0
 fi
 
-DUMPFILE=$(mktemp -t dpdk.${0##*/}.objdump.XXXXXX)
+DUMPFILE=$(mktemp -t dpdk.${0##*/}.XXX.objdump)
 trap 'rm -f "$DUMPFILE"' EXIT
 objdump -t $OBJFILE >$DUMPFILE
 

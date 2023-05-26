@@ -15,7 +15,6 @@
 #include <rte_eal.h>
 #include <rte_tailq.h>
 #include <rte_devargs.h>
-#include <rte_lcore.h>
 #include <rte_malloc.h>
 #include <rte_errno.h>
 #include <rte_memory.h>
@@ -102,7 +101,7 @@ vmbus_probe_one_driver(struct rte_vmbus_driver *dr,
 	VMBUS_LOG(INFO, "VMBUS device %s on NUMA socket %i",
 		  guid, dev->device.numa_node);
 
-	/* TODO add block/allow logic */
+	/* TODO add blacklisted */
 
 	/* map resources for device */
 	ret = rte_vmbus_map_device(dev);
@@ -113,9 +112,7 @@ vmbus_probe_one_driver(struct rte_vmbus_driver *dr,
 	dev->driver = dr;
 
 	if (dev->device.numa_node < 0) {
-		if (rte_socket_count() > 1)
-			VMBUS_LOG(INFO, "Device %s is not NUMA-aware, defaulting socket to 0",
-					guid);
+		VMBUS_LOG(WARNING, "  Invalid NUMA socket, default to 0");
 		dev->device.numa_node = 0;
 	}
 
@@ -134,7 +131,7 @@ vmbus_probe_one_driver(struct rte_vmbus_driver *dr,
 
 /*
  * If device class GUID matches, call the probe function of
- * register drivers for the vmbus device.
+ * registere drivers for the vmbus device.
  * Return -1 if initialization failed,
  * and 1 if no driver found for this device.
  */
@@ -180,7 +177,7 @@ rte_vmbus_probe(void)
 
 		rte_uuid_unparse(dev->device_id, ubuf, sizeof(ubuf));
 
-		/* TODO: add allowlist/blocklist */
+		/* TODO: add whitelist/blacklist */
 
 		if (vmbus_probe_all_drivers(dev) < 0) {
 			VMBUS_LOG(NOTICE,
@@ -209,7 +206,7 @@ vmbus_parse(const char *name, void *addr)
 /*
  * scan for matching device args on command line
  * example:
- *	-a 'vmbus:635a7ae3-091e-4410-ad59-667c4f8c04c3,latency=20'
+ *	-w 'vmbus:635a7ae3-091e-4410-ad59-667c4f8c04c3,latency=20'
  */
 struct rte_devargs *
 vmbus_devargs_lookup(struct rte_vmbus_device *dev)

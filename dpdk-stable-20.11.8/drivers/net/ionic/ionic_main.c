@@ -61,7 +61,7 @@ ionic_error_to_str(enum ionic_status_code code)
 	}
 }
 
-const char *
+static const char *
 ionic_opcode_to_str(enum ionic_cmd_opcode opcode)
 {
 	switch (opcode) {
@@ -107,8 +107,6 @@ ionic_opcode_to_str(enum ionic_cmd_opcode opcode)
 		return "IONIC_CMD_Q_INIT";
 	case IONIC_CMD_Q_CONTROL:
 		return "IONIC_CMD_Q_CONTROL";
-	case IONIC_CMD_Q_IDENTIFY:
-		return "IONIC_CMD_Q_IDENTIFY";
 	case IONIC_CMD_RDMA_RESET_LIF:
 		return "IONIC_CMD_RDMA_RESET_LIF";
 	case IONIC_CMD_RDMA_CREATE_EQ:
@@ -128,9 +126,8 @@ ionic_adminq_check_err(struct ionic_admin_ctx *ctx, bool timeout)
 	const char *name;
 	const char *status;
 
-	name = ionic_opcode_to_str(ctx->cmd.cmd.opcode);
-
 	if (ctx->comp.comp.status || timeout) {
+		name = ionic_opcode_to_str(ctx->cmd.cmd.opcode);
 		status = ionic_error_to_str(ctx->comp.comp.status);
 		IONIC_PRINT(ERR, "%s (%d) failed: %s (%d)",
 			name,
@@ -139,8 +136,6 @@ ionic_adminq_check_err(struct ionic_admin_ctx *ctx, bool timeout)
 			timeout ? -1 : ctx->comp.comp.status);
 		return -EIO;
 	}
-
-	IONIC_PRINT(DEBUG, "%s (%d) succeeded", name, ctx->cmd.cmd.opcode);
 
 	return 0;
 }
@@ -179,13 +174,14 @@ ionic_adminq_post_wait(struct ionic_lif *lif, struct ionic_admin_ctx *ctx)
 	bool done;
 	int err;
 
-	IONIC_PRINT(DEBUG, "Sending %s (%d) via the admin queue",
-		ionic_opcode_to_str(ctx->cmd.cmd.opcode), ctx->cmd.cmd.opcode);
+	IONIC_PRINT(DEBUG, "Sending %s to the admin queue",
+		ionic_opcode_to_str(ctx->cmd.cmd.opcode));
 
 	err = ionic_adminq_post(lif, ctx);
 	if (err) {
-		IONIC_PRINT(ERR, "Failure posting %d to the admin queue (%d)",
+		IONIC_PRINT(ERR, "Failure posting to the admin queue %d (%d)",
 			ctx->cmd.cmd.opcode, err);
+
 		return err;
 	}
 
@@ -343,12 +339,12 @@ ionic_port_identify(struct ionic_adapter *adapter)
 				ioread32(&idev->dev_cmd->data[i]);
 	}
 
-	IONIC_PRINT(INFO, "speed %d", ident->port.config.speed);
-	IONIC_PRINT(INFO, "mtu %d", ident->port.config.mtu);
-	IONIC_PRINT(INFO, "state %d", ident->port.config.state);
-	IONIC_PRINT(INFO, "an_enable %d", ident->port.config.an_enable);
-	IONIC_PRINT(INFO, "fec_type %d", ident->port.config.fec_type);
-	IONIC_PRINT(INFO, "pause_type %d", ident->port.config.pause_type);
+	IONIC_PRINT(INFO, "speed %d ", ident->port.config.speed);
+	IONIC_PRINT(INFO, "mtu %d ", ident->port.config.mtu);
+	IONIC_PRINT(INFO, "state %d ", ident->port.config.state);
+	IONIC_PRINT(INFO, "an_enable %d ", ident->port.config.an_enable);
+	IONIC_PRINT(INFO, "fec_type %d ", ident->port.config.fec_type);
+	IONIC_PRINT(INFO, "pause_type %d ", ident->port.config.pause_type);
 	IONIC_PRINT(INFO, "loopback_mode %d",
 		ident->port.config.loopback_mode);
 
@@ -389,7 +385,8 @@ ionic_port_init(struct ionic_adapter *adapter)
 	idev->port_info_sz = RTE_ALIGN(sizeof(*idev->port_info), PAGE_SIZE);
 
 	snprintf(z_name, sizeof(z_name), "%s_port_%s_info",
-		IONIC_DRV_NAME, adapter->name);
+		IONIC_DRV_NAME,
+		adapter->pci_dev->device.name);
 
 	idev->port_info_z = ionic_memzone_reserve(z_name, idev->port_info_sz,
 		SOCKET_ID_ANY);

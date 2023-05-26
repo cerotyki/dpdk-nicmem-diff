@@ -46,14 +46,17 @@ static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
 	int i, ret = 0;
 	uint16_t idx;
 
-	idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
+	if (count > QEDE_MAX_BULK_ALLOC_COUNT)
+		count = QEDE_MAX_BULK_ALLOC_COUNT;
 
 	ret = rte_mempool_get_bulk(rxq->mb_pool, obj_p, count);
 	if (unlikely(ret)) {
 		PMD_RX_LOG(ERR, rxq,
 			   "Failed to allocate %d rx buffers "
 			    "sw_rx_prod %u sw_rx_cons %u mp entries %u free %u",
-			    count, idx, rxq->sw_rx_cons & NUM_RX_BDS(rxq),
+			    count,
+			    rxq->sw_rx_prod & NUM_RX_BDS(rxq),
+			    rxq->sw_rx_cons & NUM_RX_BDS(rxq),
 			    rte_mempool_avail_count(rxq->mb_pool),
 			    rte_mempool_in_use_count(rxq->mb_pool));
 		return -ENOMEM;
@@ -84,7 +87,7 @@ static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
  *    (MTU + Maximum L2 Header Size + 2) / ETH_RX_MAX_BUFF_PER_PKT
  * 3) In regular mode - minimum rx_buf_size should be
  *    (MTU + Maximum L2 Header Size + 2)
- *    In above cases +2 corresponds to 2 bytes padding in front of L2
+ *    In above cases +2 corrosponds to 2 bytes padding in front of L2
  *    header.
  * 4) rx_buf_size should be cacheline-size aligned. So considering
  *    criteria 1, we need to adjust the size to floor instead of ceil,
@@ -100,7 +103,7 @@ qede_calc_rx_buf_size(struct rte_eth_dev *dev, uint16_t mbufsz,
 
 	if (dev->data->scattered_rx) {
 		/* per HW limitation, only ETH_RX_MAX_BUFF_PER_PKT number of
-		 * buffers can be used for single packet. So need to make sure
+		 * bufferes can be used for single packet. So need to make sure
 		 * mbuf size is sufficient enough for this.
 		 */
 		if ((mbufsz * ETH_RX_MAX_BUFF_PER_PKT) <
@@ -241,7 +244,7 @@ qede_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qid,
 
 	/* Fix up RX buffer size */
 	bufsz = (uint16_t)rte_pktmbuf_data_room_size(mp) - RTE_PKTMBUF_HEADROOM;
-	/* cache align the mbuf size to simplify rx_buf_size calculation */
+	/* cache align the mbuf size to simplfy rx_buf_size calculation */
 	bufsz = QEDE_FLOOR_TO_CACHE_LINE_SIZE(bufsz);
 	if ((rxmode->offloads & DEV_RX_OFFLOAD_SCATTER)	||
 	    (max_rx_pkt_len + QEDE_ETH_OVERHEAD) > bufsz) {
@@ -673,9 +676,9 @@ void qede_dealloc_fp_resc(struct rte_eth_dev *eth_dev)
 
 	for (sb_idx = 0; sb_idx < QEDE_RXTX_MAX(qdev); sb_idx++) {
 		fp = &qdev->fp_array[sb_idx];
+		DP_INFO(edev, "Free sb_info index 0x%x\n",
+				fp->sb_info->igu_sb_id);
 		if (fp->sb_info) {
-			DP_INFO(edev, "Free sb_info index 0x%x\n",
-					fp->sb_info->igu_sb_id);
 			OSAL_DMA_FREE_COHERENT(edev, fp->sb_info->sb_virt,
 				fp->sb_info->sb_phys,
 				sizeof(struct status_block));
@@ -714,10 +717,9 @@ qede_update_rx_prod(__rte_unused struct qede_dev *edev,
 {
 	uint16_t bd_prod = ecore_chain_get_prod_idx(&rxq->rx_bd_ring);
 	uint16_t cqe_prod = ecore_chain_get_prod_idx(&rxq->rx_comp_ring);
-	struct eth_rx_prod_data rx_prods;
+	struct eth_rx_prod_data rx_prods = { 0 };
 
 	/* Update producers */
-	memset(&rx_prods, 0, sizeof(rx_prods));
 	rx_prods.bd_prod = rte_cpu_to_le_16(bd_prod);
 	rx_prods.cqe_prod = rte_cpu_to_le_16(cqe_prod);
 
@@ -1540,26 +1542,25 @@ qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	uint8_t bitfield_val;
 #endif
 	uint8_t offset, flags, bd_num;
-	uint16_t count = 0;
+
 
 	/* Allocate buffers that we used in previous loop */
 	if (rxq->rx_alloc_count) {
-		count = rxq->rx_alloc_count > QEDE_MAX_BULK_ALLOC_COUNT ?
-			QEDE_MAX_BULK_ALLOC_COUNT : rxq->rx_alloc_count;
-
-		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq, count))) {
+		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq,
+			     rxq->rx_alloc_count))) {
 			struct rte_eth_dev *dev;
 
 			PMD_RX_LOG(ERR, rxq,
-				   "New buffers allocation failed,"
-				   "dropping incoming packets\n");
+				   "New buffer allocation failed,"
+				   "dropping incoming packetn");
 			dev = &rte_eth_devices[rxq->port_id];
-			dev->data->rx_mbuf_alloc_failed += count;
-			rxq->rx_alloc_errors += count;
+			dev->data->rx_mbuf_alloc_failed +=
+							rxq->rx_alloc_count;
+			rxq->rx_alloc_errors += rxq->rx_alloc_count;
 			return 0;
 		}
 		qede_update_rx_prod(qdev, rxq);
-		rxq->rx_alloc_count -= count;
+		rxq->rx_alloc_count = 0;
 	}
 
 	hw_comp_cons = rte_le_to_cpu_16(*rxq->hw_cons_ptr);
@@ -1727,8 +1728,8 @@ next_cqe:
 		}
 	}
 
-	/* Request number of buffers to be allocated in next loop */
-	rxq->rx_alloc_count += rx_alloc_count;
+	/* Request number of bufferes to be allocated in next loop */
+	rxq->rx_alloc_count = rx_alloc_count;
 
 	rxq->rcv_pkts += rx_pkt;
 	rxq->rx_segs += rx_pkt;
@@ -1768,26 +1769,25 @@ qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct qede_agg_info *tpa_info = NULL;
 	uint32_t rss_hash;
 	int rx_alloc_count = 0;
-	uint16_t count = 0;
+
 
 	/* Allocate buffers that we used in previous loop */
 	if (rxq->rx_alloc_count) {
-		count = rxq->rx_alloc_count > QEDE_MAX_BULK_ALLOC_COUNT ?
-			QEDE_MAX_BULK_ALLOC_COUNT : rxq->rx_alloc_count;
-
-		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq, count))) {
+		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq,
+			     rxq->rx_alloc_count))) {
 			struct rte_eth_dev *dev;
 
 			PMD_RX_LOG(ERR, rxq,
-				   "New buffers allocation failed,"
-				   "dropping incoming packets\n");
+				   "New buffer allocation failed,"
+				   "dropping incoming packetn");
 			dev = &rte_eth_devices[rxq->port_id];
-			dev->data->rx_mbuf_alloc_failed += count;
-			rxq->rx_alloc_errors += count;
+			dev->data->rx_mbuf_alloc_failed +=
+							rxq->rx_alloc_count;
+			rxq->rx_alloc_errors += rxq->rx_alloc_count;
 			return 0;
 		}
 		qede_update_rx_prod(qdev, rxq);
-		rxq->rx_alloc_count -= count;
+		rxq->rx_alloc_count = 0;
 	}
 
 	hw_comp_cons = rte_le_to_cpu_16(*rxq->hw_cons_ptr);
@@ -2025,8 +2025,8 @@ next_cqe:
 		}
 	}
 
-	/* Request number of buffers to be allocated in next loop */
-	rxq->rx_alloc_count += rx_alloc_count;
+	/* Request number of bufferes to be allocated in next loop */
+	rxq->rx_alloc_count = rx_alloc_count;
 
 	rxq->rcv_pkts += rx_pkt;
 
@@ -2489,7 +2489,7 @@ qede_xmit_pkts(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				/* Inner L2 header size in two byte words */
 				inner_l2_hdr_size = (mbuf->l2_len -
 						MPLSINUDP_HDR_SIZE) / 2;
-				/* Inner L4 header offset from the beginning
+				/* Inner L4 header offset from the beggining
 				 * of inner packet in two byte words
 				 */
 				inner_l4_hdr_offset = (mbuf->l2_len -

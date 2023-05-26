@@ -11,7 +11,6 @@
 #include <rte_memzone.h>
 #include <rte_metrics.h>
 #include <rte_bitrate.h>
-#include <rte_ethdev.h>
 
 #include "sample_packet_forward.h"
 #include "test.h"
@@ -33,13 +32,11 @@ test_stats_bitrate_create(void)
 	return TEST_SUCCESS;
 }
 
-/* To test free the resources from bitrate_create test */
+/* To test free the resources from bitrate_reg test */
 static int
 test_stats_bitrate_free(void)
 {
 	int ret = 0;
-
-	rte_stats_bitrate_free(bitrate_data);
 
 	ret = rte_metrics_deinit();
 	TEST_ASSERT(ret >= 0, "Test Failed: rte_metrics_deinit failed");
@@ -102,8 +99,8 @@ test_stats_bitrate_calc_invalid_portid_1(void)
 	int ret = 0;
 
 	ret = rte_stats_bitrate_calc(bitrate_data, 33);
-	TEST_ASSERT(ret == -ENODEV, "Test Failed: Expected -%d for higher "
-			"portid rte_stats_bitrate_calc ret:%d", ENODEV, ret);
+	TEST_ASSERT(ret == -EINVAL, "Test Failed: Expected -%d for higher "
+			"portid rte_stats_bitrate_calc ret:%d", EINVAL, ret);
 
 	return TEST_SUCCESS;
 }
@@ -115,8 +112,8 @@ test_stats_bitrate_calc_invalid_portid_2(void)
 	int ret = 0;
 
 	ret = rte_stats_bitrate_calc(bitrate_data, -1);
-	TEST_ASSERT(ret == -ENODEV, "Test Failed: Expected -%d for invalid "
-			"portid rte_stats_bitrate_calc ret:%d", ENODEV, ret);
+	TEST_ASSERT(ret == -EINVAL, "Test Failed: Expected -%d for invalid "
+			"portid rte_stats_bitrate_calc ret:%d", EINVAL, ret);
 
 	return TEST_SUCCESS;
 }
@@ -128,9 +125,9 @@ test_stats_bitrate_calc_non_existing_portid(void)
 	int ret = 0;
 
 	ret = rte_stats_bitrate_calc(bitrate_data, 31);
-	TEST_ASSERT(ret ==  -ENODEV, "Test Failed: Expected -%d for "
+	TEST_ASSERT(ret ==  -EINVAL, "Test Failed: Expected -%d for "
 			"non-existing portid rte_stats_bitrate_calc ret:%d",
-			ENODEV, ret);
+			EINVAL, ret);
 
 	return TEST_SUCCESS;
 }
@@ -160,21 +157,12 @@ test_bit_packet_forward(void)
 		printf("allocate mbuf pool Failed\n");
 		return TEST_FAILED;
 	}
-	ret = test_dev_start(portid, mp);
-	if (ret < 0) {
-		printf("test_dev_start(%hu, %p) failed, error code: %d\n",
-			portid, mp, ret);
-		return TEST_FAILED;
-	}
-
 	ret = test_packet_forward(pbuf, portid, QUEUE_ID);
 	if (ret < 0)
 		printf("send pkts Failed\n");
-
-	rte_eth_dev_stop(portid);
 	test_put_mbuf_to_pool(mp, pbuf);
 
-	return (ret >= 0) ? TEST_SUCCESS : TEST_FAILED;
+	return TEST_SUCCESS;
 }
 
 static int

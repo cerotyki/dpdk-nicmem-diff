@@ -23,7 +23,6 @@ vs_vhost_net_setup(struct vhost_dev *dev)
 	uint16_t i;
 	int vid = dev->vid;
 	struct vhost_queue *queue;
-	int ret;
 
 	RTE_LOG(INFO, VHOST_CONFIG,
 		"setting builtin vhost-user net driver\n");
@@ -34,12 +33,7 @@ vs_vhost_net_setup(struct vhost_dev *dev)
 	else
 		dev->hdr_len = sizeof(struct virtio_net_hdr);
 
-	ret = rte_vhost_get_mem_table(vid, &dev->mem);
-	if (ret < 0) {
-		RTE_LOG(ERR, VHOST_CONFIG, "Failed to get "
-			"VM memory layout for device(%d)\n", vid);
-		return;
-	}
+	rte_vhost_get_mem_table(vid, &dev->mem);
 
 	dev->nr_vrings = rte_vhost_get_vring_num(vid);
 	for (i = 0; i < dev->nr_vrings; i++) {

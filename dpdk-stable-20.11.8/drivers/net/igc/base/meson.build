@@ -13,7 +13,6 @@ sources = [
 ]
 
 base_lib = static_library('igc_base', sources,
-	dependencies: static_rte_eal,
-	c_args: cflags)
+	dependencies: static_rte_eal)
 
 base_objs = base_lib.extract_all_objects()

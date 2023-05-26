@@ -475,7 +475,7 @@ sdp_ring_doorbell(struct sdp_device *sdpvf __rte_unused,
 	otx2_write64(iq->fill_cnt, iq->doorbell_reg);
 
 	/* Make sure doorbell writes observed by HW */
-	rte_io_wmb();
+	rte_cio_wmb();
 	iq->fill_cnt = 0;
 
 }
@@ -694,6 +694,7 @@ sdp_droq_read_packet(struct sdp_device *sdpvf __rte_unused,
 		     struct sdp_droq_pkt *droq_pkt)
 {
 	struct sdp_droq_info *info;
+	uint32_t total_len = 0;
 	uint32_t pkt_len = 0;
 
 	info = &droq->info_list[droq->read_idx];
@@ -705,6 +706,7 @@ sdp_droq_read_packet(struct sdp_device *sdpvf __rte_unused,
 
 	/* Deduce the actual data size */
 	info->length -= SDP_RH_SIZE;
+	total_len += (uint32_t)info->length;
 
 	otx2_sdp_dbg("OQ: pkt_len[%ld], buffer_size %d",
 			(long)info->length, droq->buffer_size);
@@ -810,7 +812,7 @@ sdp_rawdev_dequeue(struct rte_rawdev *rawdev,
 
 	/* Ack the h/w with no# of pkts read by Host */
 	rte_write32(pkts, droq->pkts_sent_reg);
-	rte_io_wmb();
+	rte_cio_wmb();
 
 	droq->last_pkt_count -= pkts;
 

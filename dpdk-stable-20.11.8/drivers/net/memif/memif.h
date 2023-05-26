@@ -12,8 +12,8 @@
 #define MEMIF_NAME_SZ		32
 
 /*
- * C2S: direction client -> server
- * S2C: direction server -> client
+ * S2M: direction slave -> master
+ * M2S: direction master -> slave
  */
 
 /*
@@ -33,8 +33,8 @@ typedef enum memif_msg_type {
 } memif_msg_type_t;
 
 typedef enum {
-	MEMIF_RING_C2S, /**< buffer ring in direction client -> server */
-	MEMIF_RING_S2C, /**< buffer ring in direction server -> client */
+	MEMIF_RING_S2M, /**< buffer ring in direction slave -> master */
+	MEMIF_RING_M2S, /**< buffer ring in direction master -> slave */
 } memif_ring_type_t;
 
 typedef enum {
@@ -56,23 +56,23 @@ typedef uint8_t memif_log2_ring_size_t;
  */
 
  /**
-  * S2C
-  * Contains server interfaces configuration.
+  * M2S
+  * Contains master interfaces configuration.
   */
 typedef struct __rte_packed {
 	uint8_t name[MEMIF_NAME_SZ]; /**< Client app name. In this case DPDK version */
 	memif_version_t min_version; /**< lowest supported memif version */
 	memif_version_t max_version; /**< highest supported memif version */
 	memif_region_index_t max_region; /**< maximum num of regions */
-	memif_ring_index_t max_s2c_ring; /**< maximum num of S2C ring */
-	memif_ring_index_t max_c2s_ring; /**< maximum num of C2S rings */
+	memif_ring_index_t max_m2s_ring; /**< maximum num of M2S ring */
+	memif_ring_index_t max_s2m_ring; /**< maximum num of S2M rings */
 	memif_log2_ring_size_t max_log2_ring_size; /**< maximum ring size (as log2) */
 } memif_msg_hello_t;
 
 /**
- * C2S
+ * S2M
  * Contains information required to identify interface
- * to which the client wants to connect.
+ * to which the slave wants to connect.
  */
 typedef struct __rte_packed {
 	memif_version_t version;		/**< memif version */
@@ -83,8 +83,8 @@ typedef struct __rte_packed {
 } memif_msg_init_t;
 
 /**
- * C2S
- * Request server to add new shared memory region to server interface.
+ * S2M
+ * Request master to add new shared memory region to master interface.
  * Shared files file descriptor is passed in cmsghdr.
  */
 typedef struct __rte_packed {
@@ -93,12 +93,12 @@ typedef struct __rte_packed {
 } memif_msg_add_region_t;
 
 /**
- * C2S
- * Request server to add new ring to server interface.
+ * S2M
+ * Request master to add new ring to master interface.
  */
 typedef struct __rte_packed {
 	uint16_t flags;				/**< flags */
-#define MEMIF_MSG_ADD_RING_FLAG_C2S 1		/**< ring is in C2S direction */
+#define MEMIF_MSG_ADD_RING_FLAG_S2M 1		/**< ring is in S2M direction */
 	memif_ring_index_t index;		/**< ring index */
 	memif_region_index_t region; /**< region index on which this ring is located */
 	memif_region_offset_t offset;		/**< buffer start offset */
@@ -107,23 +107,23 @@ typedef struct __rte_packed {
 } memif_msg_add_ring_t;
 
 /**
- * C2S
+ * S2M
  * Finalize connection establishment.
  */
 typedef struct __rte_packed {
-	uint8_t if_name[MEMIF_NAME_SZ];		/**< client interface name */
+	uint8_t if_name[MEMIF_NAME_SZ];		/**< slave interface name */
 } memif_msg_connect_t;
 
 /**
- * S2C
+ * M2S
  * Finalize connection establishment.
  */
 typedef struct __rte_packed {
-	uint8_t if_name[MEMIF_NAME_SZ];		/**< server interface name */
+	uint8_t if_name[MEMIF_NAME_SZ];		/**< master interface name */
 } memif_msg_connected_t;
 
 /**
- * C2S & S2C
+ * S2M & M2S
  * Disconnect interfaces.
  */
 typedef struct __rte_packed {

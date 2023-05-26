@@ -45,11 +45,13 @@ Performance tuning parameters
 -----------------------------
 
 - Test with various burst size values (256, 128, 64, 32) using
-  RTE_GRAPH_BURST_SIZE config option.
+  CONFIG_RTE_GRAPH_BURST_SIZE config option.
   The testing shows, on x86 and arm64 servers, The sweet spot is 256 burst
   size. While on arm64 embedded SoCs, it is either 64 or 128.
-- Disable node statistics (using ``RTE_LIBRTE_GRAPH_STATS`` config option)
+- Disable node statistics (using ``CONFIG_RTE_LIBRTE_GRAPH_STATS`` config option)
   if not needed.
+- Use arm64 optimized memory copy for arm64 architecture by
+  selecting ``CONFIG_RTE_ARCH_ARM64_MEMCPY``.
 
 Programming model
 -----------------
@@ -61,7 +63,7 @@ Anatomy of Node:
 
 .. figure:: img/anatomy_of_a_node.*
 
-   Anatomy of a node
+The :numref:`figure_anatomy_of_a_node` diagram depicts the anatomy of a node.
 
 The node is the basic building block of the graph framework.
 
@@ -138,7 +140,8 @@ Link the Nodes to create the graph topology
 
 .. figure:: img/link_the_nodes.*
 
-   Topology after linking the nodes
+The :numref:`figure_link_the_nodes` diagram shows a graph topology after
+linking the N nodes.
 
 Once nodes are available to the program, Application or node public API
 functions can links them together to create a complex packet processing graph.
@@ -220,7 +223,7 @@ the user needs to update the context of the node hence access to
 ``struct rte_node *`` memory.
 
 ``rte_graph_foreach_node()``, ``rte_graph_node_get()``,
-``rte_graph_node_get_by_name()`` APIs can be used to get the
+``rte_graph_node_get_by_name()`` APIs can be used to to get the
 ``struct rte_node*``. ``rte_graph_foreach_node()`` iterator function works on
 ``struct rte_graph *`` fast-path graph object while others works on graph ID or name.
 
@@ -321,9 +324,8 @@ Graph object memory layout
 
 .. figure:: img/graph_mem_layout.*
 
-   Memory layout
-
-Understanding the memory layout helps to debug the graph library and
+The :numref:`figure_graph_mem_layout` diagram shows ``rte_graph`` object memory
+layout. Understanding the memory layout helps to debug the graph library and
 improve the performance if needed.
 
 Graph object consists of a header, circular buffer to store the pending
@@ -392,3 +394,4 @@ null
 ~~~~
 This node ignores the set of objects passed to it and reports that all are
 processed.
+

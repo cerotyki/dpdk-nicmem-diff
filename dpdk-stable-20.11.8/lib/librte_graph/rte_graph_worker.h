@@ -155,7 +155,7 @@ rte_graph_walk(struct rte_graph *graph)
 	 *	+-----+ <= cir_start + mask
 	 */
 	while (likely(head != graph->tail)) {
-		node = (struct rte_node *)RTE_PTR_ADD(graph, cir_start[(int32_t)head++]);
+		node = RTE_PTR_ADD(graph, cir_start[(int32_t)head++]);
 		RTE_ASSERT(node->fence == RTE_GRAPH_FENCE);
 		objs = node->objs;
 		rte_prefetch0(objs);
@@ -224,7 +224,7 @@ __rte_node_enqueue_prologue(struct rte_graph *graph, struct rte_node *node,
 		__rte_node_enqueue_tail_update(graph, node);
 
 	if (unlikely(node->size < (idx + space)))
-		__rte_node_stream_alloc_size(graph, node, node->size + space);
+		__rte_node_stream_alloc(graph, node);
 }
 
 /**
@@ -432,7 +432,7 @@ rte_node_next_stream_get(struct rte_graph *graph, struct rte_node *node,
 	uint16_t free_space = node->size - idx;
 
 	if (unlikely(free_space < nb_objs))
-		__rte_node_stream_alloc_size(graph, node, node->size + nb_objs);
+		__rte_node_stream_alloc_size(graph, node, nb_objs);
 
 	return &node->objs[idx];
 }

@@ -712,16 +712,6 @@ eh_initialize_eventdev(struct eventmode_conf *em_conf)
 		}
 	}
 
-	return 0;
-}
-
-static int
-eh_start_eventdev(struct eventmode_conf *em_conf)
-{
-	struct eventdev_params *eventdev_config;
-	int nb_eventdev = em_conf->nb_eventdev;
-	int i, ret;
-
 	/* Start event devices */
 	for (i = 0; i < nb_eventdev; i++) {
 
@@ -1290,7 +1280,7 @@ eh_display_rx_adapter_conf(struct eventmode_conf *em_conf)
 	for (i = 0; i < nb_rx_adapter; i++) {
 		adapter = &(em_conf->rx_adapter[i]);
 		sprintf(print_buf,
-			"\tRx adapter ID: %-2d\tConnections: %-2d\tEvent dev ID: %-2d",
+			"\tRx adaper ID: %-2d\tConnections: %-2d\tEvent dev ID: %-2d",
 			adapter->adapter_id,
 			adapter->nb_connections,
 			adapter->eventdev_id);
@@ -1471,16 +1461,16 @@ eh_conf_init(void)
 
 	/* Set two cores as eth cores for Rx & Tx */
 
-	/* Use first core other than main core as Rx core */
+	/* Use first core other than master core as Rx core */
 	eth_core_id = rte_get_next_lcore(0,	/* curr core */
-					 1,	/* skip main core */
+					 1,	/* skip master core */
 					 0	/* wrap */);
 
 	rte_bitmap_set(em_conf->eth_core_mask, eth_core_id);
 
 	/* Use next core as Tx core */
 	eth_core_id = rte_get_next_lcore(eth_core_id,	/* curr core */
-					 1,		/* skip main core */
+					 1,		/* skip master core */
 					 0		/* wrap */);
 
 	rte_bitmap_set(em_conf->eth_core_mask, eth_core_id);
@@ -1593,12 +1583,7 @@ eh_devs_init(struct eh_conf *conf)
 		if ((conf->eth_portmask & (1 << port_id)) == 0)
 			continue;
 
-		ret = rte_eth_dev_stop(port_id);
-		if (ret != 0) {
-			EH_LOG_ERR("Failed to stop port %u, err: %d",
-					port_id, ret);
-			return ret;
-		}
+		rte_eth_dev_stop(port_id);
 	}
 
 	/* Setup eventdev */
@@ -1619,13 +1604,6 @@ eh_devs_init(struct eh_conf *conf)
 	ret = eh_initialize_tx_adapter(em_conf);
 	if (ret < 0) {
 		EH_LOG_ERR("Failed to initialize tx adapter %d", ret);
-		return ret;
-	}
-
-	/* Start eventdev */
-	ret = eh_start_eventdev(em_conf);
-	if (ret < 0) {
-		EH_LOG_ERR("Failed to start event dev %d", ret);
 		return ret;
 	}
 

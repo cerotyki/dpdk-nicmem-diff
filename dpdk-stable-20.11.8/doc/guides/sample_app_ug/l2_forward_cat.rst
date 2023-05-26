@@ -50,12 +50,13 @@ Compiling the Application
     * https://github.com/01org/intel-cmt-cat
 
 
-To compile the application, export the path to PQoS lib:
+#. To compile the application export the path to PQoS lib
+   and the DPDK source tree and go to the example directory:
 
-.. code-block:: console
+   .. code-block:: console
 
-   export CFLAGS=-I/path/to/intel-cmt-cat/include
-   export LDFLAGS=-L/path/to/intel-cmt-cat/lib
+       export PQOS_INSTALL_PATH=/path/to/libpqos
+
 
 To compile the sample application see :doc:`compiling`.
 
@@ -69,13 +70,13 @@ To run the example in a ``linux`` environment and enable CAT on cpus 0-2:
 
 .. code-block:: console
 
-    ./<build_dir>/examples/dpdk-l2fwd-cat -l 1 -n 4 -- --l3ca="0x3@(0-2)"
+    ./build/l2fwd-cat -l 1 -n 4 -- --l3ca="0x3@(0-2)"
 
 or to enable CAT and CDP on cpus 1,3:
 
 .. code-block:: console
 
-    ./<build_dir>/examples/dpdk-l2fwd-cat -l 1 -n 4 -- --l3ca="(0x00C00,0x00300)@(1,3)"
+    ./build/l2fwd-cat -l 1 -n 4 -- --l3ca="(0x00C00,0x00300)@(1,3)"
 
 If CDP is not supported it will fail with following error message:
 

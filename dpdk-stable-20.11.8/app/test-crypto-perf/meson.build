@@ -12,6 +12,3 @@ sources = files('cperf_ops.c',
 		'cperf_test_verify.c',
 		'main.c')
 deps += ['cryptodev', 'net', 'security']
-if dpdk_conf.has('RTE_CRYPTO_SCHEDULER')
-	deps += 'crypto_scheduler'
-endif

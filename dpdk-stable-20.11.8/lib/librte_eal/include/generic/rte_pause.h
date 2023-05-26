@@ -28,6 +28,9 @@
 static inline void rte_pause(void);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
  * Wait for *addr to be updated with a 16-bit expected value, with a relaxed
  * memory ordering model meaning the loads around this API can be reordered.
  *
@@ -41,11 +44,15 @@ static inline void rte_pause(void);
  *  C++11 memory orders with the same names, see the C++11 standard or
  *  the GCC wiki on atomic synchronization for detailed definition.
  */
+__rte_experimental
 static __rte_always_inline void
 rte_wait_until_equal_16(volatile uint16_t *addr, uint16_t expected,
 		int memorder);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
  * Wait for *addr to be updated with a 32-bit expected value, with a relaxed
  * memory ordering model meaning the loads around this API can be reordered.
  *
@@ -59,11 +66,15 @@ rte_wait_until_equal_16(volatile uint16_t *addr, uint16_t expected,
  *  C++11 memory orders with the same names, see the C++11 standard or
  *  the GCC wiki on atomic synchronization for detailed definition.
  */
+__rte_experimental
 static __rte_always_inline void
 rte_wait_until_equal_32(volatile uint32_t *addr, uint32_t expected,
 		int memorder);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
  * Wait for *addr to be updated with a 64-bit expected value, with a relaxed
  * memory ordering model meaning the loads around this API can be reordered.
  *
@@ -77,6 +88,7 @@ rte_wait_until_equal_32(volatile uint32_t *addr, uint32_t expected,
  *  C++11 memory orders with the same names, see the C++11 standard or
  *  the GCC wiki on atomic synchronization for detailed definition.
  */
+__rte_experimental
 static __rte_always_inline void
 rte_wait_until_equal_64(volatile uint64_t *addr, uint64_t expected,
 		int memorder);

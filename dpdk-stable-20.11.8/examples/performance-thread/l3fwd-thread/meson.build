@@ -7,10 +7,6 @@
 # DPDK instance, use 'make'
 
 build = dpdk_conf.has('RTE_ARCH_X86_64')
-if not build
-	subdir_done()
-endif
-
 deps += ['timer', 'lpm']
 allow_experimental_apis = true
 

@@ -446,11 +446,11 @@ parse_op_type(struct comp_test_data *test_data, const char *arg)
 	struct name_id_map optype_namemap[] = {
 		{
 			"comp",
-			COMPRESS
+			COMPRESS_ONLY
 		},
 		{
 			"decomp",
-			DECOMPRESS
+			DECOMPRESS_ONLY
 		},
 		{
 			"comp_and_decomp",
@@ -491,7 +491,7 @@ parse_huffman_enc(struct comp_test_data *test_data, const char *arg)
 	int id = get_str_key_id_mapping(huffman_namemap,
 			RTE_DIM(huffman_namemap), arg);
 	if (id < 0) {
-		RTE_LOG(ERR, USER1, "Invalid Huffman encoding specified\n");
+		RTE_LOG(ERR, USER1, "Invalid Huffmane encoding specified\n");
 		return -1;
 	}
 
@@ -507,7 +507,7 @@ parse_level(struct comp_test_data *test_data, const char *arg)
 
 	/*
 	 * Try parsing the argument as a range, if it fails,
-	 * parse it as a list
+	 * arse it as a list
 	 */
 	if (parse_range(arg, &test_data->level_lst.min,
 			&test_data->level_lst.max,
@@ -620,7 +620,7 @@ comp_perf_options_parse(struct comp_test_data *test_data, int argc, char **argv)
 		switch (opt) {
 		case 'h':
 			usage(argv[0]);
-			exit(EXIT_SUCCESS);
+			rte_exit(EXIT_SUCCESS, "Displayed help\n");
 			break;
 		/* long options */
 		case 0:

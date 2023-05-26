@@ -5,10 +5,6 @@
 #ifndef _RTE_TIME_H_
 #define _RTE_TIME_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdint.h>
 #include <time.h>
 
@@ -101,9 +97,5 @@ rte_ns_to_timespec(uint64_t nsec)
 
 	return ts;
 }
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* _RTE_TIME_H_ */

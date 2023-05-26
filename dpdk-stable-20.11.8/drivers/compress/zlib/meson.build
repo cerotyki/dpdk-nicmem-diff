@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Cavium Networks
 
-dep = dependency('zlib', required: false, method: 'pkg-config')
+dep = dependency('zlib', required: false)
 if not dep.found()
 	build = false
 	reason = 'missing dependency, "zlib"'

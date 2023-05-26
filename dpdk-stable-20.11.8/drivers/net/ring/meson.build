@@ -2,4 +2,4 @@
 # Copyright(c) 2017 Intel Corporation
 
 sources = files('rte_eth_ring.c')
-headers = files('rte_eth_ring.h')
+install_headers('rte_eth_ring.h')

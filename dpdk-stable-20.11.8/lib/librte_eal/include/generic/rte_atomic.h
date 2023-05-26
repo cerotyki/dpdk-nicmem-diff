@@ -107,6 +107,45 @@ static inline void rte_io_wmb(void);
 static inline void rte_io_rmb(void);
 ///@}
 
+/** @name Coherent I/O Memory Barrier
+ *
+ * Coherent I/O memory barrier is a lightweight version of I/O memory
+ * barriers which are system-wide data synchronization barriers. This
+ * is for only coherent memory domain between lcore and I/O device but
+ * it is same as the I/O memory barriers in most of architectures.
+ * However, some architecture provides even lighter barriers which are
+ * somewhere in between I/O memory barriers and SMP memory barriers.
+ * For example, in case of ARMv8, DMB(data memory barrier) instruction
+ * can have different shareability domains - inner-shareable and
+ * outer-shareable. And inner-shareable DMB fits for SMP memory
+ * barriers and outer-shareable DMB for coherent I/O memory barriers,
+ * which acts on coherent memory.
+ *
+ * In most cases, I/O memory barriers are safer but if operations are
+ * on coherent memory instead of incoherent MMIO region of a device,
+ * then coherent I/O memory barriers can be used and this could bring
+ * performance gain depending on architectures.
+ */
+///@{
+/**
+ * Write memory barrier for coherent memory between lcore and I/O device
+ *
+ * Guarantees that the STORE operations on coherent memory that
+ * precede the rte_cio_wmb() call are visible to I/O device before the
+ * STORE operations that follow it.
+ */
+static inline void rte_cio_wmb(void);
+
+/**
+ * Read memory barrier for coherent memory between lcore and I/O device
+ *
+ * Guarantees that the LOAD operations on coherent memory updated by
+ * I/O device that precede the rte_cio_rmb() call are visible to CPU
+ * before the LOAD operations that follow it.
+ */
+static inline void rte_cio_rmb(void);
+///@}
+
 #endif /* __DOXYGEN__ */
 
 /**
@@ -122,7 +161,7 @@ static inline void rte_io_rmb(void);
 /**
  * Synchronization fence between threads based on the specified memory order.
  */
-static inline void rte_atomic_thread_fence(int memorder);
+static inline void rte_atomic_thread_fence(int memory_order);
 
 /*------------------------- 16 bit atomic operations -------------------------*/
 
@@ -175,7 +214,11 @@ rte_atomic16_exchange(volatile uint16_t *dst, uint16_t val);
 static inline uint16_t
 rte_atomic16_exchange(volatile uint16_t *dst, uint16_t val)
 {
+#if defined(__clang__)
 	return __atomic_exchange_n(dst, val, __ATOMIC_SEQ_CST);
+#else
+	return __atomic_exchange_2(dst, val, __ATOMIC_SEQ_CST);
+#endif
 }
 #endif
 
@@ -454,7 +497,11 @@ rte_atomic32_exchange(volatile uint32_t *dst, uint32_t val);
 static inline uint32_t
 rte_atomic32_exchange(volatile uint32_t *dst, uint32_t val)
 {
+#if defined(__clang__)
 	return __atomic_exchange_n(dst, val, __ATOMIC_SEQ_CST);
+#else
+	return __atomic_exchange_4(dst, val, __ATOMIC_SEQ_CST);
+#endif
 }
 #endif
 
@@ -732,7 +779,11 @@ rte_atomic64_exchange(volatile uint64_t *dst, uint64_t val);
 static inline uint64_t
 rte_atomic64_exchange(volatile uint64_t *dst, uint64_t val)
 {
+#if defined(__clang__)
 	return __atomic_exchange_n(dst, val, __ATOMIC_SEQ_CST);
+#else
+	return __atomic_exchange_8(dst, val, __ATOMIC_SEQ_CST);
+#endif
 }
 #endif
 

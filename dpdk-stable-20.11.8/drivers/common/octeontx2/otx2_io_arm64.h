@@ -21,12 +21,6 @@
 #define otx2_prefetch_store_keep(ptr) ({\
 	asm volatile("prfm pstl1keep, [%x0]\n" : : "r" (ptr)); })
 
-#if defined(__ARM_FEATURE_SVE)
-#define __LSE_PREAMBLE " .cpu  generic+lse+sve\n"
-#else
-#define __LSE_PREAMBLE " .cpu  generic+lse\n"
-#endif
-
 static __rte_always_inline uint64_t
 otx2_atomic64_add_nosync(int64_t incr, int64_t *ptr)
 {
@@ -34,7 +28,7 @@ otx2_atomic64_add_nosync(int64_t incr, int64_t *ptr)
 
 	/* Atomic add with no ordering */
 	asm volatile (
-		__LSE_PREAMBLE
+		".cpu  generic+lse\n"
 		"ldadd %x[i], %x[r], [%[b]]"
 		: [r] "=r" (result), "+m" (*ptr)
 		: [i] "r" (incr), [b] "r" (ptr)
@@ -49,7 +43,7 @@ otx2_atomic64_add_sync(int64_t incr, int64_t *ptr)
 
 	/* Atomic add with ordering */
 	asm volatile (
-		__LSE_PREAMBLE
+		".cpu  generic+lse\n"
 		"ldadda %x[i], %x[r], [%[b]]"
 		: [r] "=r" (result), "+m" (*ptr)
 		: [i] "r" (incr), [b] "r" (ptr)
@@ -63,21 +57,9 @@ otx2_lmt_submit(rte_iova_t io_address)
 	uint64_t result;
 
 	asm volatile (
-		__LSE_PREAMBLE
+		".cpu  generic+lse\n"
 		"ldeor xzr,%x[rf],[%[rs]]" :
 		 [rf] "=r"(result): [rs] "r"(io_address));
-	return result;
-}
-
-static __rte_always_inline uint64_t
-otx2_lmt_submit_release(rte_iova_t io_address)
-{
-	uint64_t result;
-
-	asm volatile (
-		__LSE_PREAMBLE
-		"ldeorl xzr,%x[rf],[%[rs]]" :
-		 [rf] "=r"(result) : [rs] "r"(io_address));
 	return result;
 }
 
@@ -110,5 +92,4 @@ otx2_lmt_mov_seg(void *out, const void *in, const uint16_t segdw)
 		dst128[i] = src128[i];
 }
 
-#undef __LSE_PREAMBLE
 #endif /* _OTX2_IO_ARM64_H_ */

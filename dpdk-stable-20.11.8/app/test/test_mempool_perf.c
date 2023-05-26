@@ -89,7 +89,7 @@ static rte_atomic32_t synchro;
 static unsigned n_get_bulk;
 static unsigned n_put_bulk;
 
-/* number of objects retrieved from mempool before putting them back */
+/* number of objects retrived from mempool before putting them back */
 static unsigned n_keep;
 
 /* number of enqueues / dequeues */
@@ -143,8 +143,8 @@ per_lcore_mempool_test(void *arg)
 
 	stats[lcore_id].enq_count = 0;
 
-	/* wait synchro for workers */
-	if (lcore_id != rte_get_main_lcore())
+	/* wait synchro for slaves */
+	if (lcore_id != rte_get_master_lcore())
 		while (rte_atomic32_read(&synchro) == 0);
 
 	start_cycles = rte_get_timer_cycles();
@@ -214,7 +214,7 @@ launch_cores(struct rte_mempool *mp, unsigned int cores)
 		return -1;
 	}
 
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (cores == 1)
 			break;
 		cores--;
@@ -222,13 +222,13 @@ launch_cores(struct rte_mempool *mp, unsigned int cores)
 				      mp, lcore_id);
 	}
 
-	/* start synchro and launch test on main */
+	/* start synchro and launch test on master */
 	rte_atomic32_set(&synchro, 1);
 
 	ret = per_lcore_mempool_test(mp);
 
 	cores = cores_save;
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (cores == 1)
 			break;
 		cores--;

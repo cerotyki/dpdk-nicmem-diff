@@ -43,7 +43,11 @@ extern "C" {
 #define RTE_MEMSEG_FLAG_DO_NOT_FREE (1 << 0)
 /**< Prevent this segment from being freed back to the OS. */
 struct rte_memseg {
-	rte_iova_t iova;            /**< Start IO address. */
+	RTE_STD_C11
+	union {
+		phys_addr_t phys_addr;  /**< deprecated - Start physical address. */
+		rte_iova_t iova;        /**< Start IO address. */
+	};
 	RTE_STD_C11
 	union {
 		void *addr;         /**< Start virtual address. */

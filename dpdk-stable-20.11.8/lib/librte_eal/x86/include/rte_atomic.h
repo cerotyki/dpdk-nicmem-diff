@@ -60,7 +60,7 @@ extern "C" {
  * Basic idea is to use lock prefixed add with some dummy memory location
  * as the destination. From their experiments 128B(2 cache lines) below
  * current stack pointer looks like a good candidate.
- * So below we use that technique for rte_smp_mb() implementation.
+ * So below we use that techinque for rte_smp_mb() implementation.
  */
 
 static __rte_always_inline void
@@ -79,6 +79,10 @@ rte_smp_mb(void)
 
 #define rte_io_rmb() rte_compiler_barrier()
 
+#define rte_cio_wmb() rte_compiler_barrier()
+
+#define rte_cio_rmb() rte_compiler_barrier()
+
 /**
  * Synchronization fence between threads based on the specified memory order.
  *
@@ -87,12 +91,12 @@ rte_smp_mb(void)
  * used instead.
  */
 static __rte_always_inline void
-rte_atomic_thread_fence(int memorder)
+rte_atomic_thread_fence(int memory_order)
 {
-	if (memorder == __ATOMIC_SEQ_CST)
+	if (memory_order == __ATOMIC_SEQ_CST)
 		rte_smp_mb();
 	else
-		__atomic_thread_fence(memorder);
+		__atomic_thread_fence(memory_order);
 }
 
 /*------------------------- 16 bit atomic operations -------------------------*/

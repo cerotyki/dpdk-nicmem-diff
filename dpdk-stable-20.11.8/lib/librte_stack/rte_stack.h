@@ -7,6 +7,10 @@
  *
  * RTE Stack.
  *
+ * @warning
+ * @b EXPERIMENTAL:
+ * All functions in this file may be changed or removed without prior notice.
+ *
  * librte_stack provides an API for configuration and use of a bounded stack of
  * pointers. Push and pop operations are MT-safe, allowing concurrent access,
  * and the interface supports pushing and popping multiple pointers at a time.
@@ -89,7 +93,7 @@ struct rte_stack {
 
 /**
  * The stack uses lock-free push and pop functions. This flag is only
- * supported on x86_64 or arm64 platforms, currently.
+ * supported on x86_64 platforms, currently.
  */
 #define RTE_STACK_F_LF 0x0001
 
@@ -97,6 +101,9 @@ struct rte_stack {
 #include "rte_stack_lf.h"
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Push several objects on the stack (MT-safe).
  *
  * @param s
@@ -108,6 +115,7 @@ struct rte_stack {
  * @return
  *   Actual number of objects pushed (either 0 or *n*).
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 rte_stack_push(struct rte_stack *s, void * const *obj_table, unsigned int n)
 {
@@ -121,6 +129,9 @@ rte_stack_push(struct rte_stack *s, void * const *obj_table, unsigned int n)
 }
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Pop several objects from the stack (MT-safe).
  *
  * @param s
@@ -132,6 +143,7 @@ rte_stack_push(struct rte_stack *s, void * const *obj_table, unsigned int n)
  * @return
  *   Actual number of objects popped (either 0 or *n*).
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 rte_stack_pop(struct rte_stack *s, void **obj_table, unsigned int n)
 {
@@ -145,6 +157,9 @@ rte_stack_pop(struct rte_stack *s, void **obj_table, unsigned int n)
 }
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Return the number of used entries in a stack.
  *
  * @param s
@@ -152,6 +167,7 @@ rte_stack_pop(struct rte_stack *s, void **obj_table, unsigned int n)
  * @return
  *   The number of used entries in the stack.
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 rte_stack_count(struct rte_stack *s)
 {
@@ -164,6 +180,9 @@ rte_stack_count(struct rte_stack *s)
 }
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Return the number of free entries in a stack.
  *
  * @param s
@@ -171,6 +190,7 @@ rte_stack_count(struct rte_stack *s)
  * @return
  *   The number of free entries in the stack.
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 rte_stack_free_count(struct rte_stack *s)
 {
@@ -180,6 +200,9 @@ rte_stack_free_count(struct rte_stack *s)
 }
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Create a new stack named *name* in memory.
  *
  * This function uses ``memzone_reserve()`` to allocate memory for a stack of
@@ -205,22 +228,29 @@ rte_stack_free_count(struct rte_stack *s)
  *    - EEXIST - a stack with the same name already exists
  *    - ENOMEM - insufficient memory to create the stack
  *    - ENAMETOOLONG - name size exceeds RTE_STACK_NAMESIZE
- *    - ENOTSUP - platform does not support given flags combination.
  */
+__rte_experimental
 struct rte_stack *
 rte_stack_create(const char *name, unsigned int count, int socket_id,
 		 uint32_t flags);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Free all memory used by the stack.
  *
  * @param s
  *   Stack to free
  */
+__rte_experimental
 void
 rte_stack_free(struct rte_stack *s);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Lookup a stack by its name.
  *
  * @param name
@@ -231,6 +261,7 @@ rte_stack_free(struct rte_stack *s);
  *    - ENOENT - Stack with name *name* not found.
  *    - EINVAL - *name* pointer is NULL.
  */
+__rte_experimental
 struct rte_stack *
 rte_stack_lookup(const char *name);
 

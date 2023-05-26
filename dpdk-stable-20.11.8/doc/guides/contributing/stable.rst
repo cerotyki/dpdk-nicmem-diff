@@ -27,9 +27,8 @@ Stable Releases
 
 Any release of DPDK can be designated as a Stable Release if a
 maintainer volunteers to maintain it and there is a commitment from major
-contributors to validate it before releases.
-If a version is to be a "Stable Release", it should be designated as such
-within one month of that version being initially released.
+contributors to validate it before releases. If a release is to be designated
+as a Stable Release, it should be done by 1 month after the master release.
 
 A Stable Release is used to backport fixes from an ``N`` release back to an
 ``N-1`` release, for example, from 16.11 to 16.07.
@@ -73,7 +72,7 @@ point the LTS branch will no longer be maintained with no further releases.
 What changes should be backported
 ---------------------------------
 
-Backporting should be limited to bug fixes. All patches accepted on the main
+Backporting should be limited to bug fixes. All patches accepted on the master
 branch with a Fixes: tag should be backported to the relevant stable/LTS
 branches, unless the submitter indicates otherwise. If there are exceptions,
 they will be discussed on the mailing lists.
@@ -108,7 +107,7 @@ The Stable Mailing List
 The Stable and LTS release are coordinated on the stable@dpdk.org mailing
 list.
 
-All fix patches to the main branch that are candidates for backporting
+All fix patches to the master branch that are candidates for backporting
 should also be CCed to the `stable@dpdk.org <https://mails.dpdk.org/listinfo/stable>`_
 mailing list.
 

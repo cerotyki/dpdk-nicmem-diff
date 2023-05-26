@@ -21,7 +21,7 @@ To run the example in a linux environment:
 
 .. code-block:: console
 
-    $ ./<build_dir>/examples/dpdk-helloworld -l 0-3 -n 4
+    $ ./build/helloworld -l 0-3 -n 4
 
 Refer to *DPDK Getting Started Guide* for general information on running applications
 and the Environment Abstraction Layer (EAL) options.
@@ -75,13 +75,13 @@ The code that launches the function on each lcore is as follows:
 
 .. code-block:: c
 
-    /* call lcore_hello() on every worker lcore */
+    /* call lcore_hello() on every slave lcore */
 
-    RTE_LCORE_FOREACH_WORKER(lcore_id) {
+    RTE_LCORE_FOREACH_SLAVE(lcore_id) {
        rte_eal_remote_launch(lcore_hello, NULL, lcore_id);
     }
 
-    /* call it on main lcore too */
+    /* call it on master lcore too */
 
     lcore_hello(NULL);
 
@@ -89,6 +89,6 @@ The following code is equivalent and simpler:
 
 .. code-block:: c
 
-    rte_eal_mp_remote_launch(lcore_hello, NULL, CALL_MAIN);
+    rte_eal_mp_remote_launch(lcore_hello, NULL, CALL_MASTER);
 
 Refer to the *DPDK API Reference* for detailed information on the rte_eal_mp_remote_launch() function.

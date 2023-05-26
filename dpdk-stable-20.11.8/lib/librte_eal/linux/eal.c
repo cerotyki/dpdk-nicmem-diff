@@ -47,6 +47,7 @@
 #include <rte_dev.h>
 #include <rte_devargs.h>
 #include <rte_version.h>
+#include <rte_atomic.h>
 #include <malloc_heap.h>
 #include <rte_vfio.h>
 #include <rte_telemetry.h>
@@ -561,6 +562,7 @@ eal_parse_socket_arg(char *strval, volatile uint64_t *socket_arg)
 	char * arg[RTE_MAX_NUMA_NODES];
 	char *end;
 	int arg_num, i, len;
+	uint64_t total_mem = 0;
 
 	len = strnlen(strval, SOCKET_MEM_STRLEN);
 	if (len == SOCKET_MEM_STRLEN) {
@@ -592,6 +594,7 @@ eal_parse_socket_arg(char *strval, volatile uint64_t *socket_arg)
 				(arg[i][0] == '\0') || (end == NULL) || (*end != '\0'))
 			return -1;
 		val <<= 20;
+		total_mem += val;
 		socket_arg[i] = val;
 	}
 
@@ -701,10 +704,6 @@ eal_parse_args(int argc, char **argv)
 			ret = -1;
 			goto out;
 		}
-
-		/* eal_log_level_parse() already handled this option */
-		if (opt == OPT_LOG_LEVEL_NUM)
-			continue;
 
 		ret = eal_parse_common_option(opt, optarg, internal_conf);
 		/* common parser is not happy */
@@ -885,10 +884,10 @@ eal_check_mem_on_local_socket(void)
 	int socket_id;
 	const struct rte_config *config = rte_eal_get_configuration();
 
-	socket_id = rte_lcore_to_socket_id(config->main_lcore);
+	socket_id = rte_lcore_to_socket_id(config->master_lcore);
 
 	if (rte_memseg_list_walk(check_socket, &socket_id) == 0)
-		RTE_LOG(WARNING, EAL, "WARNING: Main core has no memory on local socket!\n");
+		RTE_LOG(WARNING, EAL, "WARNING: Master core has no memory on local socket!\n");
 }
 
 static int
@@ -961,8 +960,7 @@ rte_eal_init(int argc, char **argv)
 {
 	int i, fctret, ret;
 	pthread_t thread_id;
-	static uint32_t run_once;
-	uint32_t has_run = 0;
+	static rte_atomic32_t run_once = RTE_ATOMIC32_INIT(0);
 	const char *p;
 	static char logid[PATH_MAX];
 	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
@@ -979,8 +977,7 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	if (!__atomic_compare_exchange_n(&run_once, &has_run, 1, 0,
-					__ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+	if (!rte_atomic32_test_and_set(&run_once)) {
 		rte_eal_init_alert("already called initialization.");
 		rte_errno = EALREADY;
 		return -1;
@@ -1008,14 +1005,14 @@ rte_eal_init(int argc, char **argv)
 	if (fctret < 0) {
 		rte_eal_init_alert("Invalid 'command line' arguments.");
 		rte_errno = EINVAL;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
 	if (eal_plugins_init() < 0) {
 		rte_eal_init_alert("Cannot init plugins");
 		rte_errno = EINVAL;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
@@ -1027,7 +1024,7 @@ rte_eal_init(int argc, char **argv)
 
 	if (eal_option_device_parse()) {
 		rte_errno = ENODEV;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
@@ -1067,7 +1064,7 @@ rte_eal_init(int argc, char **argv)
 	if (rte_bus_scan()) {
 		rte_eal_init_alert("Cannot scan the buses for devices");
 		rte_errno = ENODEV;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
@@ -1087,7 +1084,7 @@ rte_eal_init(int argc, char **argv)
 				 */
 				iova_mode = RTE_IOVA_VA;
 				RTE_LOG(DEBUG, EAL, "Physical addresses are unavailable, selecting IOVA as VA mode.\n");
-#if defined(RTE_LIB_KNI) && LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
+#if defined(RTE_LIBRTE_KNI) && LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
 			} else if (rte_eal_check_module("rte_kni") == 1) {
 				iova_mode = RTE_IOVA_PA;
 				RTE_LOG(DEBUG, EAL, "KNI is loaded, selecting IOVA as PA mode for better KNI performance.\n");
@@ -1104,7 +1101,7 @@ rte_eal_init(int argc, char **argv)
 				RTE_LOG(DEBUG, EAL, "IOMMU is not available, selecting IOVA as PA mode.\n");
 			}
 		}
-#if defined(RTE_LIB_KNI) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
+#if defined(RTE_LIBRTE_KNI) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 		/* Workaround for KNI which requires physical address to work
 		 * in kernels < 4.10
 		 */
@@ -1141,7 +1138,7 @@ rte_eal_init(int argc, char **argv)
 		if (ret < 0) {
 			rte_eal_init_alert("Cannot get hugepage information.");
 			rte_errno = EACCES;
-			__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+			rte_atomic32_clear(&run_once);
 			return -1;
 		}
 	}
@@ -1165,7 +1162,7 @@ rte_eal_init(int argc, char **argv)
 	if (rte_eal_log_init(logid, internal_conf->syslog_facility) < 0) {
 		rte_eal_init_alert("Cannot init logging.");
 		rte_errno = ENOMEM;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
@@ -1173,7 +1170,7 @@ rte_eal_init(int argc, char **argv)
 	if (rte_eal_vfio_setup() < 0) {
 		rte_eal_init_alert("Cannot init VFIO");
 		rte_errno = EAGAIN;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 #endif
@@ -1217,28 +1214,28 @@ rte_eal_init(int argc, char **argv)
 	eal_check_mem_on_local_socket();
 
 	if (pthread_setaffinity_np(pthread_self(), sizeof(rte_cpuset_t),
-			&lcore_config[config->main_lcore].cpuset) != 0) {
+			&lcore_config[config->master_lcore].cpuset) != 0) {
 		rte_eal_init_alert("Cannot set affinity");
 		rte_errno = EINVAL;
 		return -1;
 	}
-	__rte_thread_init(config->main_lcore,
-		&lcore_config[config->main_lcore].cpuset);
+	__rte_thread_init(config->master_lcore,
+		&lcore_config[config->master_lcore].cpuset);
 
 	ret = eal_thread_dump_current_affinity(cpuset, sizeof(cpuset));
-	RTE_LOG(DEBUG, EAL, "Main lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
-		config->main_lcore, (uintptr_t)thread_id, cpuset,
+	RTE_LOG(DEBUG, EAL, "Master lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
+		config->master_lcore, (uintptr_t)thread_id, cpuset,
 		ret == 0 ? "" : "...");
 
-	RTE_LCORE_FOREACH_WORKER(i) {
+	RTE_LCORE_FOREACH_SLAVE(i) {
 
 		/*
-		 * create communication pipes between main thread
+		 * create communication pipes between master thread
 		 * and children
 		 */
-		if (pipe(lcore_config[i].pipe_main2worker) < 0)
+		if (pipe(lcore_config[i].pipe_master2slave) < 0)
 			rte_panic("Cannot create pipe\n");
-		if (pipe(lcore_config[i].pipe_worker2main) < 0)
+		if (pipe(lcore_config[i].pipe_slave2master) < 0)
 			rte_panic("Cannot create pipe\n");
 
 		lcore_config[i].state = WAIT;
@@ -1251,7 +1248,7 @@ rte_eal_init(int argc, char **argv)
 
 		/* Set thread_name for aid in debugging. */
 		snprintf(thread_name, sizeof(thread_name),
-			"lcore-worker-%d", i);
+			"lcore-slave-%d", i);
 		ret = rte_thread_setname(lcore_config[i].thread_id,
 						thread_name);
 		if (ret != 0)
@@ -1265,17 +1262,17 @@ rte_eal_init(int argc, char **argv)
 	}
 
 	/*
-	 * Launch a dummy function on all worker lcores, so that main lcore
+	 * Launch a dummy function on all slave lcores, so that master lcore
 	 * knows they are all ready when this function returns.
 	 */
-	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MAIN);
+	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MASTER);
 	rte_eal_mp_wait_lcore();
 
 	/* initialize services so vdevs register service during bus_probe. */
 	ret = rte_service_init();
 	if (ret) {
 		rte_eal_init_alert("rte_service_init() failed");
-		rte_errno = -ret;
+		rte_errno = ENOEXEC;
 		return -1;
 	}
 
@@ -1297,7 +1294,7 @@ rte_eal_init(int argc, char **argv)
 	 */
 	ret = rte_service_start_with_defaults();
 	if (ret < 0 && ret != -ENOTSUP) {
-		rte_errno = -ret;
+		rte_errno = ENOEXEC;
 		return -1;
 	}
 
@@ -1360,11 +1357,7 @@ rte_eal_cleanup(void)
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
 		rte_memseg_walk(mark_freeable, NULL);
-
 	rte_service_finalize();
-#ifdef VFIO_PRESENT
-	vfio_mp_sync_cleanup();
-#endif
 	rte_mp_channel_cleanup();
 	rte_trace_save();
 	eal_trace_fini();

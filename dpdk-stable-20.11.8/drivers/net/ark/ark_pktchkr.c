@@ -85,7 +85,7 @@ ark_pktchkr_init(void *addr, int ord, int l2_mode)
 		rte_malloc("ark_pkt_chkr_inst",
 			   sizeof(struct ark_pkt_chkr_inst), 0);
 	if (inst == NULL) {
-		ARK_PMD_LOG(ERR, "Failed to malloc ark_pkt_chkr_inst.\n");
+		PMD_DRV_LOG(ERR, "Failed to malloc ark_pkt_chkr_inst.\n");
 		return inst;
 	}
 	inst->sregs = (struct ark_pkt_chkr_stat_regs *)addr;
@@ -130,10 +130,10 @@ ark_pktchkr_stop(ark_pkt_chkr_t handle)
 	while (!ark_pktchkr_stopped(handle) && (wait_cycle > 0)) {
 		usleep(1000);
 		wait_cycle--;
-		ARK_PMD_LOG(DEBUG, "Waiting for pktchk %d to stop...\n",
+		PMD_DEBUG_LOG(DEBUG, "Waiting for pktchk %d to stop...\n",
 			      inst->ordinal);
 	}
-	ARK_PMD_LOG(DEBUG, "Pktchk %d stopped.\n", inst->ordinal);
+	PMD_DEBUG_LOG(DEBUG, "Pktchk %d stopped.\n", inst->ordinal);
 }
 
 int
@@ -189,7 +189,7 @@ ark_pktchkr_wait_done(ark_pkt_chkr_t handle)
 	struct ark_pkt_chkr_inst *inst = (struct ark_pkt_chkr_inst *)handle;
 
 	if (ark_pktchkr_is_gen_forever(handle)) {
-		ARK_PMD_LOG(NOTICE, "Pktchk wait_done will not terminate"
+		PMD_DEBUG_LOG(ERR, "Pktchk wait_done will not terminate"
 			      " because gen_forever=1\n");
 		return -1;
 	}
@@ -198,10 +198,10 @@ ark_pktchkr_wait_done(ark_pkt_chkr_t handle)
 	while (!ark_pktchkr_stopped(handle) && (wait_cycle > 0)) {
 		usleep(1000);
 		wait_cycle--;
-		ARK_PMD_LOG(DEBUG, "Waiting for packet checker %d's"
+		PMD_DEBUG_LOG(DEBUG, "Waiting for packet checker %d's"
 			      " internal pktgen to finish sending...\n",
 			      inst->ordinal);
-		ARK_PMD_LOG(DEBUG, "Pktchk %d's pktgen done.\n",
+		PMD_DEBUG_LOG(DEBUG, "Pktchk %d's pktgen done.\n",
 			      inst->ordinal);
 	}
 	return 0;
@@ -296,25 +296,25 @@ ark_pktchkr_dump_stats(ark_pkt_chkr_t handle)
 {
 	struct ark_pkt_chkr_inst *inst = (struct ark_pkt_chkr_inst *)handle;
 
-	ARK_PMD_LOG(INFO, "pkts_rcvd      = (%'u)\n",
+	PMD_STATS_LOG(INFO, "pkts_rcvd      = (%'u)\n",
 		      inst->sregs->pkts_rcvd);
-	ARK_PMD_LOG(INFO, "bytes_rcvd     = (%'" PRIU64 ")\n",
+	PMD_STATS_LOG(INFO, "bytes_rcvd     = (%'" PRIU64 ")\n",
 		      inst->sregs->bytes_rcvd);
-	ARK_PMD_LOG(INFO, "pkts_ok        = (%'u)\n",
+	PMD_STATS_LOG(INFO, "pkts_ok        = (%'u)\n",
 		      inst->sregs->pkts_ok);
-	ARK_PMD_LOG(INFO, "pkts_mismatch  = (%'u)\n",
+	PMD_STATS_LOG(INFO, "pkts_mismatch  = (%'u)\n",
 		      inst->sregs->pkts_mismatch);
-	ARK_PMD_LOG(INFO, "pkts_err       = (%'u)\n",
+	PMD_STATS_LOG(INFO, "pkts_err       = (%'u)\n",
 		      inst->sregs->pkts_err);
-	ARK_PMD_LOG(INFO, "first_mismatch = (%'u)\n",
+	PMD_STATS_LOG(INFO, "first_mismatch = (%'u)\n",
 		      inst->sregs->first_mismatch);
-	ARK_PMD_LOG(INFO, "resync_events  = (%'u)\n",
+	PMD_STATS_LOG(INFO, "resync_events  = (%'u)\n",
 		      inst->sregs->resync_events);
-	ARK_PMD_LOG(INFO, "pkts_missing   = (%'u)\n",
+	PMD_STATS_LOG(INFO, "pkts_missing   = (%'u)\n",
 		      inst->sregs->pkts_missing);
-	ARK_PMD_LOG(INFO, "min_latency    = (%'u)\n",
+	PMD_STATS_LOG(INFO, "min_latency    = (%'u)\n",
 		      inst->sregs->min_latency);
-	ARK_PMD_LOG(INFO, "max_latency    = (%'u)\n",
+	PMD_STATS_LOG(INFO, "max_latency    = (%'u)\n",
 		      inst->sregs->max_latency);
 }
 
@@ -327,7 +327,7 @@ options(const char *id)
 		if (strcmp(id, toptions[i].opt) == 0)
 			return &toptions[i];
 	}
-	ARK_PMD_LOG(ERR,
+	PMD_DRV_LOG(ERR,
 		    "pktchkr: Could not find requested option!, option = %s\n",
 		    id);
 	return NULL;
@@ -443,7 +443,7 @@ ark_pktchkr_setup(ark_pkt_chkr_t handle)
 		ark_pktchkr_stop(handle);
 
 	if (options("run")->v.BOOL) {
-		ARK_PMD_LOG(DEBUG, "Starting packet checker on port %d\n",
+		PMD_DEBUG_LOG(DEBUG, "Starting packet checker on port %d\n",
 			      options("port")->v.INT);
 		ark_pktchkr_run(handle);
 	}

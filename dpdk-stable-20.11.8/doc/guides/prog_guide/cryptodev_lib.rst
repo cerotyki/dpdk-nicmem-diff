@@ -32,7 +32,7 @@ Physical Crypto devices are discovered during the PCI probe/enumeration of the
 EAL function which is executed at DPDK initialization, based on
 their PCI device identifier, each unique PCI BDF (bus/bridge, device,
 function). Specific physical Crypto devices, like other physical devices in DPDK
-can be listed using the EAL command line options.
+can be white-listed or black-listed using the EAL command line options.
 
 Virtual devices can be created by two mechanisms, either using the EAL command
 line options or from within the application using an EAL API directly.
@@ -98,10 +98,14 @@ The rte_cryptodev_configure API is used to configure a Crypto device.
 The ``rte_cryptodev_config`` structure is used to pass the configuration
 parameters for socket selection and number of queue pairs.
 
-.. literalinclude:: ../../../lib/librte_cryptodev/rte_cryptodev.h
-   :language: c
-   :start-after: Structure rte_cryptodev_config 8<
-   :end-before: >8 End of structure rte_cryptodev_config.
+.. code-block:: c
+
+    struct rte_cryptodev_config {
+        int socket_id;
+        /**< Socket to allocate resources on */
+        uint16_t nb_queue_pairs;
+        /**< Number of queue pairs to configure on device */
+    };
 
 
 Configuration of Queue Pairs
@@ -117,11 +121,13 @@ Each queue pairs resources may be allocated on a specified socket.
                 const struct rte_cryptodev_qp_conf *qp_conf,
                 int socket_id)
 
-
-.. literalinclude:: ../../../lib/librte_cryptodev/rte_cryptodev.h
-   :language: c
-   :start-after: Structure rte_cryptodev_qp_conf 8<
-   :end-before: >8 End of structure rte_cryptodev_qp_conf.
+   struct rte_cryptodev_qp_conf {
+        uint32_t nb_descriptors; /**< Number of descriptors per queue pair */
+        struct rte_mempool *mp_session;
+        /**< The mempool for creating session in sessionless mode */
+        struct rte_mempool *mp_session_private;
+        /**< The mempool for creating sess private data in sessionless mode */
+    };
 
 
 The fields ``mp_session`` and ``mp_session_private`` are used for creating
@@ -267,10 +273,23 @@ This allows the user to query a specific Crypto PMD and get all the device
 features and capabilities. The ``rte_cryptodev_info`` structure contains all the
 relevant information for the device.
 
-.. literalinclude:: ../../../lib/librte_cryptodev/rte_cryptodev.h
-   :language: c
-   :start-after: Structure rte_cryptodev_info 8<
-   :end-before: >8 End of structure rte_cryptodev_info.
+.. code-block:: c
+
+    struct rte_cryptodev_info {
+        const char *driver_name;
+        uint8_t driver_id;
+        struct rte_device *device;
+
+        uint64_t feature_flags;
+
+        const struct rte_cryptodev_capabilities *capabilities;
+
+        unsigned max_nb_queue_pairs;
+
+        struct {
+            unsigned max_nb_sessions;
+        } sym;
+    };
 
 
 Operation Processing
@@ -487,10 +506,22 @@ Currently there are three transforms types cipher, authentication and AEAD.
 Also it is important to note that the order in which the
 transforms are passed indicates the order of the chaining.
 
-.. literalinclude:: ../../../lib/librte_cryptodev/rte_crypto_sym.h
-   :language: c
-   :start-after: Structure rte_crypto_sym_xform 8<
-   :end-before: >8 End of structure rte_crypto_sym_xform.
+.. code-block:: c
+
+    struct rte_crypto_sym_xform {
+        struct rte_crypto_sym_xform *next;
+        /**< next xform in chain */
+        enum rte_crypto_sym_xform_type type;
+        /**< xform type */
+        union {
+            struct rte_crypto_auth_xform auth;
+            /**< Authentication / hash xform */
+            struct rte_crypto_cipher_xform cipher;
+            /**< Cipher xform */
+            struct rte_crypto_aead_xform aead;
+            /**< AEAD xform */
+        };
+    };
 
 The API does not place a limit on the number of transforms that can be chained
 together but this will be limited by the underlying Crypto device poll mode
@@ -513,11 +544,61 @@ authentication/ cipher/ AEAD parameters required depending on the type of operat
 specified in the session or the transform
 chain.
 
-.. literalinclude:: ../../../lib/librte_cryptodev/rte_crypto_sym.h
-   :language: c
-   :start-after: Structure rte_crypto_sym_op 8<
-   :end-before: >8 End of structure rte_crypto_sym_op.
+.. code-block:: c
 
+    struct rte_crypto_sym_op {
+        struct rte_mbuf *m_src;
+        struct rte_mbuf *m_dst;
+
+        union {
+            struct rte_cryptodev_sym_session *session;
+            /**< Handle for the initialised session context */
+            struct rte_crypto_sym_xform *xform;
+            /**< Session-less API Crypto operation parameters */
+        };
+
+        union {
+            struct {
+                struct {
+                    uint32_t offset;
+                    uint32_t length;
+                } data; /**< Data offsets and length for AEAD */
+
+                struct {
+                    uint8_t *data;
+                    rte_iova_t phys_addr;
+                } digest; /**< Digest parameters */
+
+                struct {
+                    uint8_t *data;
+                    rte_iova_t phys_addr;
+                } aad;
+                /**< Additional authentication parameters */
+            } aead;
+
+            struct {
+                struct {
+                    struct {
+                        uint32_t offset;
+                        uint32_t length;
+                    } data; /**< Data offsets and length for ciphering */
+                } cipher;
+
+                struct {
+                    struct {
+                        uint32_t offset;
+                        uint32_t length;
+                    } data;
+                    /**< Data offsets and length for authentication */
+
+                    struct {
+                        uint8_t *data;
+                        rte_iova_t phys_addr;
+                    } digest; /**< Digest parameters */
+                } auth;
+            };
+        };
+    };
 
 Synchronous mode
 ----------------
@@ -539,8 +620,7 @@ operation descriptor (``struct rte_crypto_sym_vec``) containing:
   descriptors of performed operations (``struct rte_crypto_sgl``). Each instance
   of ``struct rte_crypto_sgl`` consists of a number of segments and a pointer to
   an array of segment descriptors ``struct rte_crypto_vec``;
-- pointers to arrays of size ``num`` containing IV, AAD and digest information
-  in the ``cpu_crypto`` sub-structure,
+- pointers to arrays of size ``num`` containing IV, AAD and digest information,
 - pointer to an array of size ``num`` where status information will be stored
   for each operation.
 
@@ -550,114 +630,6 @@ a call argument. Status different than zero must be treated as error.
 
 For more details, e.g. how to convert an mbuf to an SGL, please refer to an
 example usage in the IPsec library implementation.
-
-Cryptodev Raw Data-path APIs
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The Crypto Raw data-path APIs are a set of APIs designed to enable external
-libraries/applications to leverage the cryptographic processing provided by
-DPDK crypto PMDs through the cryptodev API but in a manner that is not
-dependent on native DPDK data structures (eg. rte_mbuf, rte_crypto_op, ... etc)
-in their data-path implementation.
-
-The raw data-path APIs have the following advantages:
-
-- External data structure friendly design. The new APIs uses the operation
-  descriptor ``struct rte_crypto_sym_vec`` that supports raw data pointer and
-  IOVA addresses as input. Moreover, the APIs does not require the user to
-  allocate the descriptor from mempool, nor requiring mbufs to describe input
-  data's virtual and IOVA addresses. All these features made the translation
-  from user's own data structure into the descriptor easier and more efficient.
-
-- Flexible enqueue and dequeue operation. The raw data-path APIs gives the
-  user more control to the enqueue and dequeue operations, including the
-  capability of precious enqueue/dequeue count, abandoning enqueue or dequeue
-  at any time, and operation status translation and set on the fly.
-
-Cryptodev PMDs which support the raw data-path APIs will have
-``RTE_CRYPTODEV_FF_SYM_RAW_DP`` feature flag presented. To use this feature,
-the user shall create a local ``struct rte_crypto_raw_dp_ctx`` buffer and
-extend to at least the length returned by ``rte_cryptodev_get_raw_dp_ctx_size``
-function call. The created buffer is then initialized using
-``rte_cryptodev_configure_raw_dp_ctx`` function with the ``is_update``
-parameter as 0. The library and the crypto device driver will then set the
-buffer and attach either the cryptodev sym session, the rte_security session,
-or the cryptodev xform for session-less operation into the ctx buffer, and
-set the corresponding enqueue and dequeue function handlers based on the
-algorithm information stored in the session or xform. When the ``is_update``
-parameter passed into ``rte_cryptodev_configure_raw_dp_ctx`` is 1, the driver
-will not initialize the buffer but only update the session or xform and
-the function handlers accordingly.
-
-After the ``struct rte_crypto_raw_dp_ctx`` buffer is initialized, it is now
-ready for enqueue and dequeue operation. There are two different enqueue
-functions: ``rte_cryptodev_raw_enqueue`` to enqueue single raw data
-operation, and ``rte_cryptodev_raw_enqueue_burst`` to enqueue a descriptor
-with multiple operations. In case of the application uses similar approach to
-``struct rte_crypto_sym_vec`` to manage its data burst but with different
-data structure, using the ``rte_cryptodev_raw_enqueue_burst`` function may be
-less efficient as this is a situation where the application has to loop over
-all crypto operations to assemble the ``struct rte_crypto_sym_vec`` descriptor
-from its own data structure, and then the driver will loop over them again to
-translate every operation in the descriptor to the driver's specific queue data.
-The ``rte_cryptodev_raw_enqueue`` should be used to save one loop for each data
-burst instead.
-
-The ``rte_cryptodev_raw_enqueue`` and ``rte_cryptodev_raw_enqueue_burst``
-functions will return or set the enqueue status. ``rte_cryptodev_raw_enqueue``
-will return the status directly, ``rte_cryptodev_raw_enqueue_burst`` will
-return the number of operations enqueued or stored (explained as follows) and
-set the ``enqueue_status`` buffer provided by the user. The possible
-enqueue status values are:
-
-- ``1``: the operation(s) is/are enqueued successfully.
-- ``0``: the operation(s) is/are cached successfully in the crypto device queue
-  but is not actually enqueued. The user shall call
-  ``rte_cryptodev_raw_enqueue_done`` function after the expected operations
-  are stored. The crypto device will then start enqueuing all of them at
-  once.
-- The negative integer: error occurred during enqueue.
-
-Calling ``rte_cryptodev_configure_raw_dp_ctx`` with the parameter ``is_update``
-set as 0 twice without the enqueue function returning or setting enqueue status
-to 1 or ``rte_cryptodev_raw_enqueue_done`` function being called in between will
-invalidate any operation stored in the device queue but not enqueued. This
-feature is useful when the user wants to abandon partially enqueued operations
-for a failed enqueue burst operation and try enqueuing in a whole later.
-
-Similar as enqueue, there are two dequeue functions:
-``rte_cryptodev_raw_dequeue`` for dequeuing single operation, and
-``rte_cryptodev_raw_dequeue_burst`` for dequeuing a burst of operations (e.g.
-all operations in a ``struct rte_crypto_sym_vec`` descriptor). The
-``rte_cryptodev_raw_dequeue_burst`` function allows the user to provide callback
-functions to retrieve dequeue count from the enqueued user data and write the
-expected status value to the user data on the fly. The dequeue functions also
-set the dequeue status:
-
-- ``1``: the operation(s) is/are dequeued successfully.
-- ``0``: the operation(s) is/are completed but is not actually dequeued (hence
-  still kept in the device queue). The user shall call the
-  ``rte_cryptodev_raw_dequeue_done`` function after the expected number of
-  operations (e.g. all operations in a descriptor) are dequeued. The crypto
-  device driver will then free them from the queue at once.
-- The negative integer: error occurred during dequeue.
-
-Calling ``rte_cryptodev_configure_raw_dp_ctx`` with the parameter ``is_update``
-set as 0 twice without the dequeue functions execution changed dequeue_status
-to 1 or ``rte_cryptodev_raw_dequeue_done`` function being called in between will
-revert the crypto device queue's dequeue effort to the moment when the
-``struct rte_crypto_raw_dp_ctx`` buffer is initialized. This feature is useful
-when the user wants to abandon partially dequeued data and try dequeuing again
-later in a whole.
-
-There are a few limitations to the raw data path APIs:
-
-* Only support in-place operations.
-* APIs are NOT thread-safe.
-* CANNOT mix the raw data-path API's enqueue with rte_cryptodev_enqueue_burst,
-  or vice versa.
-
-See *DPDK API Reference* for details on each API definitions.
 
 Sample code
 -----------

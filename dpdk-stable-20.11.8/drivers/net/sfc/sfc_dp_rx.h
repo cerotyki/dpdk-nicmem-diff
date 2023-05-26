@@ -88,8 +88,6 @@ struct sfc_dp_rx_qcreate_info {
 	 * doorbell
 	 */
 	volatile void		*mem_bar;
-	/** Function control window offset */
-	efsys_dma_addr_t	fcw_offset;
 	/** VI window size shift */
 	unsigned int		vi_window_shift;
 };
@@ -151,7 +149,7 @@ typedef int (sfc_dp_rx_qcreate_t)(uint16_t port_id, uint16_t queue_id,
 				  struct sfc_dp_rxq **dp_rxqp);
 
 /**
- * Free resources allocated for datapath receive queue.
+ * Free resources allocated for datapath recevie queue.
  */
 typedef void (sfc_dp_rx_qdestroy_t)(struct sfc_dp_rxq *dp_rxq);
 
@@ -161,8 +159,7 @@ typedef void (sfc_dp_rx_qdestroy_t)(struct sfc_dp_rxq *dp_rxq);
  * It handovers EvQ to the datapath.
  */
 typedef int (sfc_dp_rx_qstart_t)(struct sfc_dp_rxq *dp_rxq,
-				 unsigned int evq_read_ptr,
-				 const efx_rx_prefix_layout_t *pinfo);
+				 unsigned int evq_read_ptr);
 
 /**
  * Receive queue stop function called before flush.
@@ -184,7 +181,7 @@ typedef bool (sfc_dp_rx_qrx_ps_ev_t)(struct sfc_dp_rxq *dp_rxq,
 /**
  * Receive queue purge function called after queue flush.
  *
- * Should be used to free unused receive buffers.
+ * Should be used to free unused recevie buffers.
  */
 typedef void (sfc_dp_rx_qpurge_t)(struct sfc_dp_rxq *dp_rxq);
 
@@ -269,7 +266,6 @@ const struct sfc_dp_rx *sfc_dp_rx_by_dp_rxq(const struct sfc_dp_rxq *dp_rxq);
 extern struct sfc_dp_rx sfc_efx_rx;
 extern struct sfc_dp_rx sfc_ef10_rx;
 extern struct sfc_dp_rx sfc_ef10_essb_rx;
-extern struct sfc_dp_rx sfc_ef100_rx;
 
 #ifdef __cplusplus
 }

@@ -92,15 +92,6 @@ error_exit:
 	return -ENOMEM;
 }
 
-static void
-fips_test_parse_version(void)
-{
-	int len = strlen(info.vec[0]);
-	char *ptr = info.vec[0];
-
-	info.version = strtof(ptr + len - 4, NULL);
-}
-
 static int
 fips_test_parse_header(void)
 {
@@ -114,9 +105,6 @@ fips_test_parse_header(void)
 	ret = fips_test_fetch_one_block();
 	if (ret < 0)
 		return ret;
-
-	if (info.nb_vec_lines)
-		fips_test_parse_version();
 
 	for (i = 0; i < info.nb_vec_lines; i++) {
 		if (!algo_parsed) {
@@ -293,11 +281,7 @@ fips_test_init(const char *req_file_path, const char *rsp_file_path,
 
 	fips_test_clear();
 
-	if (rte_strscpy(info.file_name, req_file_path,
-				sizeof(info.file_name)) < 0) {
-		RTE_LOG(ERR, USER1, "Path %s too long\n", req_file_path);
-		return -EINVAL;
-	}
+	strcpy(info.file_name, req_file_path);
 	info.algo = FIPS_TEST_ALGO_MAX;
 	if (parse_file_type(req_file_path) < 0) {
 		RTE_LOG(ERR, USER1, "File %s type not supported\n",
@@ -323,11 +307,7 @@ fips_test_init(const char *req_file_path, const char *rsp_file_path,
 		return -ENOMEM;
 	}
 
-	if (rte_strscpy(info.device_name, device_name,
-				sizeof(info.device_name)) < 0) {
-		RTE_LOG(ERR, USER1, "Device name %s too long\n", device_name);
-		return -EINVAL;
-	}
+	strlcpy(info.device_name, device_name, sizeof(info.device_name));
 
 	if (fips_test_parse_header() < 0) {
 		RTE_LOG(ERR, USER1, "Failed parsing header\n");
@@ -364,8 +344,6 @@ fips_test_parse_one_case(void)
 	uint32_t interim_cnt = 0;
 	int ret;
 
-	info.vec_start_off = 0;
-
 	if (info.interim_callbacks) {
 		for (i = 0; i < info.nb_vec_lines; i++) {
 			is_interim = 0;
@@ -387,23 +365,16 @@ fips_test_parse_one_case(void)
 		}
 	}
 
-	if (interim_cnt) {
-		if (info.version == 21.4f) {
-			for (i = 0; i < interim_cnt; i++)
-				fprintf(info.fp_wr, "%s\n", info.vec[i]);
-			fprintf(info.fp_wr, "\n");
-
-			if (info.nb_vec_lines == interim_cnt)
-				return 1;
-		} else {
-			for (i = 0; i < info.nb_vec_lines; i++)
-				fprintf(info.fp_wr, "%s\n", info.vec[i]);
-			fprintf(info.fp_wr, "\n");
-			return 1;
-		}
-	}
-
 	info.vec_start_off = interim_cnt;
+
+	if (interim_cnt) {
+		for (i = 0; i < interim_cnt; i++)
+			fprintf(info.fp_wr, "%s\n", info.vec[i]);
+		fprintf(info.fp_wr, "\n");
+
+		if (info.nb_vec_lines == interim_cnt)
+			return 1;
+	}
 
 	for (i = info.vec_start_off; i < info.nb_vec_lines; i++) {
 		for (j = 0; info.callbacks[j].key != NULL; j++)
@@ -522,7 +493,7 @@ parse_uint8_hex_str(const char *key, char *src, struct fips_val *val)
 		val->val = NULL;
 	}
 
-	val->val = rte_zmalloc(NULL, len + 1, 0);
+	val->val = rte_zmalloc(NULL, len, 0);
 	if (!val->val)
 		return -ENOMEM;
 
@@ -669,7 +640,7 @@ update_info_vec(uint32_t count)
 
 	cb = &info.writeback_callbacks[0];
 
-	if ((info.version == 21.4f) && (!(strstr(info.vec[0], cb->key)))) {
+	if (!(strstr(info.vec[0], cb->key))) {
 		fprintf(info.fp_wr, "%s%u\n", cb->key, count);
 		i = 0;
 	} else {
@@ -677,8 +648,9 @@ update_info_vec(uint32_t count)
 				count);
 		i = 1;
 	}
+	snprintf(info.vec[0], strlen(info.vec[0]) + 4, "%s%u", cb->key, count);
 
-	for (; i < info.nb_vec_lines; i++) {
+	for (i = 1; i < info.nb_vec_lines; i++) {
 		for (j = 1; info.writeback_callbacks[j].key != NULL; j++) {
 			cb = &info.writeback_callbacks[j];
 			if (strstr(info.vec[i], cb->key)) {

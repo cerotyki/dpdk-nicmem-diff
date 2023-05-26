@@ -12,7 +12,6 @@
 #include <rte_graph.h>
 #include <rte_graph_worker.h>
 #include <rte_mbuf.h>
-#include <rte_mbuf_dyn.h>
 #include <rte_random.h>
 
 #include "test.h"
@@ -39,16 +38,6 @@ static uint16_t test_node3_worker(struct rte_graph *graph,
 
 #define MBUFF_SIZE 512
 #define MAX_NODES  4
-
-typedef uint64_t graph_dynfield_t;
-static int graph_dynfield_offset = -1;
-
-static inline graph_dynfield_t *
-graph_field(struct rte_mbuf *mbuf)
-{
-	return RTE_MBUF_DYNFIELD(mbuf, \
-			graph_dynfield_offset, graph_dynfield_t *);
-}
 
 static struct rte_mbuf mbuf[MAX_NODES + 1][MBUFF_SIZE];
 static void *mbuf_p[MAX_NODES + 1][MBUFF_SIZE];
@@ -173,9 +162,9 @@ test_node_worker_source(struct rte_graph *graph, struct rte_node *node,
 	next_stream = rte_node_next_stream_get(graph, node, next, obj_node0);
 	for (i = 0; i < obj_node0; i++) {
 		data = &mbuf[0][i];
-		*graph_field(data) = ((uint64_t)tm->test_node[0].idx << 32) | i;
+		data->udata64 = ((uint64_t)tm->test_node[0].idx << 32) | i;
 		if ((i + 1) == obj_node0)
-			*graph_field(data) |= (1 << 16);
+			data->udata64 |= (1 << 16);
 		next_stream[i] = &mbuf[0][i];
 	}
 	rte_node_next_stream_put(graph, node, next, obj_node0);
@@ -186,9 +175,9 @@ test_node_worker_source(struct rte_graph *graph, struct rte_node *node,
 	next_stream = rte_node_next_stream_get(graph, node, next, obj_node1);
 	for (i = 0; i < obj_node1; i++) {
 		data = &mbuf[0][obj_node0 + i];
-		*graph_field(data) = ((uint64_t)tm->test_node[1].idx << 32) | i;
+		data->udata64 = ((uint64_t)tm->test_node[1].idx << 32) | i;
 		if ((i + 1) == obj_node1)
-			*graph_field(data) |= (1 << 16);
+			data->udata64 |= (1 << 16);
 		next_stream[i] = &mbuf[0][obj_node0 + i];
 	}
 
@@ -216,23 +205,23 @@ test_node0_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 
 		for (i = 0; i < nb_objs; i++) {
 			data = (struct rte_mbuf *)objs[i];
-			if ((*graph_field(data) >> 32) != tm->test_node[0].idx) {
+			if ((data->udata64 >> 32) != tm->test_node[0].idx) {
 				printf("Data idx miss match at node 0, expected"
 				       " = %u got = %u\n",
 				       tm->test_node[0].idx,
-				       (uint32_t)(*graph_field(data) >> 32));
+				       (uint32_t)(data->udata64 >> 32));
 				goto end;
 			}
 
-			if ((*graph_field(data) & 0xffff) != (i - count)) {
+			if ((data->udata64 & 0xffff) != (i - count)) {
 				printf("Expected buff count miss match at "
 				       "node 0\n");
 				goto end;
 			}
 
-			if (*graph_field(data) & (0x1 << 16))
+			if (data->udata64 & (0x1 << 16))
 				count = i + 1;
-			if (*graph_field(data) & (0x1 << 17))
+			if (data->udata64 & (0x1 << 17))
 				second_pass = 1;
 		}
 
@@ -244,12 +233,12 @@ test_node0_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 		obj_node0 = nb_objs * obj_node0 * 0.01;
 		for (i = 0; i < obj_node0; i++) {
 			data = &mbuf[1][i];
-			*graph_field(data) =
+			data->udata64 =
 				((uint64_t)tm->test_node[1].idx << 32) | i;
 			if ((i + 1) == obj_node0)
-				*graph_field(data) |= (1 << 16);
+				data->udata64 |= (1 << 16);
 			if (second_pass)
-				*graph_field(data) |= (1 << 17);
+				data->udata64 |= (1 << 17);
 		}
 		rte_node_enqueue(graph, node, 0, (void **)&mbuf_p[1][0],
 				 obj_node0);
@@ -257,12 +246,12 @@ test_node0_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 		obj_node1 = nb_objs - obj_node0;
 		for (i = 0; i < obj_node1; i++) {
 			data = &mbuf[1][obj_node0 + i];
-			*graph_field(data) =
+			data->udata64 =
 				((uint64_t)tm->test_node[2].idx << 32) | i;
 			if ((i + 1) == obj_node1)
-				*graph_field(data) |= (1 << 16);
+				data->udata64 |= (1 << 16);
 			if (second_pass)
-				*graph_field(data) |= (1 << 17);
+				data->udata64 |= (1 << 17);
 		}
 		rte_node_enqueue(graph, node, 1, (void **)&mbuf_p[1][obj_node0],
 				 obj_node1);
@@ -296,22 +285,22 @@ test_node1_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 	fn_calls[2] += 1;
 	for (i = 0; i < nb_objs; i++) {
 		data = (struct rte_mbuf *)objs[i];
-		if ((*graph_field(data) >> 32) != tm->test_node[1].idx) {
+		if ((data->udata64 >> 32) != tm->test_node[1].idx) {
 			printf("Data idx miss match at node 1, expected = %u"
 			       " got = %u\n",
 			       tm->test_node[1].idx,
-			       (uint32_t)(*graph_field(data) >> 32));
+			       (uint32_t)(data->udata64 >> 32));
 			goto end;
 		}
 
-		if ((*graph_field(data) & 0xffff) != (i - count)) {
+		if ((data->udata64 & 0xffff) != (i - count)) {
 			printf("Expected buff count miss match at node 1\n");
 			goto end;
 		}
 
-		if (*graph_field(data) & (0x1 << 16))
+		if (data->udata64 & (0x1 << 16))
 			count = i + 1;
-		if (*graph_field(data) & (0x1 << 17))
+		if (data->udata64 & (0x1 << 17))
 			second_pass = 1;
 	}
 
@@ -323,11 +312,11 @@ test_node1_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 	obj_node0 = nb_objs;
 	for (i = 0; i < obj_node0; i++) {
 		data = &mbuf[2][i];
-		*graph_field(data) = ((uint64_t)tm->test_node[2].idx << 32) | i;
+		data->udata64 = ((uint64_t)tm->test_node[2].idx << 32) | i;
 		if ((i + 1) == obj_node0)
-			*graph_field(data) |= (1 << 16);
+			data->udata64 |= (1 << 16);
 		if (second_pass)
-			*graph_field(data) |= (1 << 17);
+			data->udata64 |= (1 << 17);
 	}
 	rte_node_enqueue(graph, node, 0, (void **)&mbuf_p[2][0], obj_node0);
 
@@ -350,22 +339,22 @@ test_node2_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 	fn_calls[3] += 1;
 	for (i = 0; i < nb_objs; i++) {
 		data = (struct rte_mbuf *)objs[i];
-		if ((*graph_field(data) >> 32) != tm->test_node[2].idx) {
+		if ((data->udata64 >> 32) != tm->test_node[2].idx) {
 			printf("Data idx miss match at node 2, expected = %u"
 			       " got = %u\n",
 			       tm->test_node[2].idx,
-			       (uint32_t)(*graph_field(data) >> 32));
+			       (uint32_t)(data->udata64 >> 32));
 			goto end;
 		}
 
-		if ((*graph_field(data) & 0xffff) != (i - count)) {
+		if ((data->udata64 & 0xffff) != (i - count)) {
 			printf("Expected buff count miss match at node 2\n");
 			goto end;
 		}
 
-		if (*graph_field(data) & (0x1 << 16))
+		if (data->udata64 & (0x1 << 16))
 			count = i + 1;
-		if (*graph_field(data) & (0x1 << 17))
+		if (data->udata64 & (0x1 << 17))
 			second_pass = 1;
 	}
 
@@ -378,10 +367,10 @@ test_node2_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 		obj_node0 = nb_objs;
 		for (i = 0; i < obj_node0; i++) {
 			data = &mbuf[3][i];
-			*graph_field(data) =
+			data->udata64 =
 				((uint64_t)tm->test_node[3].idx << 32) | i;
 			if ((i + 1) == obj_node0)
-				*graph_field(data) |= (1 << 16);
+				data->udata64 |= (1 << 16);
 		}
 		rte_node_enqueue(graph, node, 0, (void **)&mbuf_p[3][0],
 				 obj_node0);
@@ -406,22 +395,22 @@ test_node3_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 	fn_calls[4] += 1;
 	for (i = 0; i < nb_objs; i++) {
 		data = (struct rte_mbuf *)objs[i];
-		if ((*graph_field(data) >> 32) != tm->test_node[3].idx) {
+		if ((data->udata64 >> 32) != tm->test_node[3].idx) {
 			printf("Data idx miss match at node 3, expected = %u"
 			       " got = %u\n",
 			       tm->test_node[3].idx,
-			       (uint32_t)(*graph_field(data) >> 32));
+			       (uint32_t)(data->udata64 >> 32));
 			goto end;
 		}
 
-		if ((*graph_field(data) & 0xffff) != (i - count)) {
+		if ((data->udata64 & 0xffff) != (i - count)) {
 			printf("Expected buff count miss match at node 3\n");
 			goto end;
 		}
 
-		if (*graph_field(data) & (0x1 << 16))
+		if (data->udata64 & (0x1 << 16))
 			count = i + 1;
-		if (*graph_field(data) & (0x1 << 17))
+		if (data->udata64 & (0x1 << 17))
 			second_pass = 1;
 	}
 
@@ -437,11 +426,11 @@ test_node3_worker(struct rte_graph *graph, struct rte_node *node, void **objs,
 		obj_node0 = nb_objs * 2;
 		for (i = 0; i < obj_node0; i++) {
 			data = &mbuf[4][i];
-			*graph_field(data) =
+			data->udata64 =
 				((uint64_t)tm->test_node[0].idx << 32) | i;
-			*graph_field(data) |= (1 << 17);
+			data->udata64 |= (1 << 17);
 			if ((i + 1) == obj_node0)
-				*graph_field(data) |= (1 << 16);
+				data->udata64 |= (1 << 16);
 		}
 		rte_node_enqueue(graph, node, 0, (void **)&mbuf_p[4][0],
 				 obj_node0);
@@ -775,18 +764,6 @@ static int
 graph_setup(void)
 {
 	int i, j;
-
-	static const struct rte_mbuf_dynfield graph_dynfield_desc = {
-		.name = "test_graph_dynfield",
-		.size = sizeof(graph_dynfield_t),
-		.align = __alignof__(graph_dynfield_t),
-	};
-	graph_dynfield_offset =
-		rte_mbuf_dynfield_register(&graph_dynfield_desc);
-	if (graph_dynfield_offset < 0) {
-		printf("Cannot register mbuf field\n");
-		return TEST_FAILED;
-	}
 
 	for (i = 0; i <= MAX_NODES; i++) {
 		for (j = 0; j < MBUFF_SIZE; j++)

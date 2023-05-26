@@ -9,6 +9,7 @@
 #define __NETCFG_H
 
 #include <fman.h>
+#include <argp.h>
 
 /* Configuration information related to a specific ethernet port */
 struct fm_eth_port_cfg {

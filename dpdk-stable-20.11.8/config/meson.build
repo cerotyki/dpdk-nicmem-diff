@@ -29,7 +29,10 @@ abi_version = run_command(find_program('cat', 'more'),
 # and have the soname be all but the final part of the abi_version.
 # e.g. v20.1 => librte_foo.so.20.1
 #    sonames => librte_foo.so.20
-so_version = abi_version.split('.')[0]
+# e.g. v20.0.1 => librte_foo.so.20.0.1
+#      sonames => librte_foo.so.20.0
+abi_va = abi_version.split('.')
+so_version = abi_va.length() == 2 ? abi_va[0] : abi_va[0] + '.' + abi_va[1]
 
 # extract all version information into the build configuration
 dpdk_conf.set('RTE_VER_YEAR', pver.get(0).to_int())
@@ -57,15 +60,9 @@ eal_pmd_path = join_paths(get_option('prefix'), driver_install_path)
 # driver .so files often depend upon the bus drivers for their connect bus,
 # e.g. ixgbe depends on librte_bus_pci. This means that the bus drivers need
 # to be in the library path, so symlink the drivers from the main lib directory.
-if not is_windows
-	meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
-			get_option('libdir'),
-			pmd_subdir_opt)
-elif meson.version().version_compare('>=0.55.0')
-	# 0.55.0 is required to use external program with add_install_script
-	meson.add_install_script(py3, '../buildtools/symlink-drivers-solibs.py',
-			get_option('libdir'), pmd_subdir_opt, get_option('bindir'))
-endif
+meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
+		get_option('libdir'),
+		pmd_subdir_opt)
 
 # set the machine type and cflags for it
 if meson.is_cross_build()
@@ -107,10 +104,9 @@ endif
 
 toolchain = cc.get_id()
 dpdk_conf.set_quoted('RTE_TOOLCHAIN', toolchain)
-dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper().underscorify(), 1)
+dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper(), 1)
 
 dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
-dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
 
 if not is_windows
 	add_project_link_arguments('-Wl,--no-as-needed', language: 'c')
@@ -129,8 +125,11 @@ if cc.find_library('m', required : false).found()
 	dpdk_extra_ldflags += '-lm'
 endif
 
+# for linux link against dl, for bsd execinfo
 if is_linux
 	link_lib = 'dl'
+elif is_freebsd
+	link_lib = 'execinfo'
 else
 	link_lib = ''
 endif
@@ -151,31 +150,18 @@ if numa_dep.found() and cc.has_header('numaif.h')
 	dpdk_extra_ldflags += '-lnuma'
 endif
 
-has_libfdt = 0
-fdt_dep = cc.find_library('fdt', required: false)
-if fdt_dep.found() and cc.has_header('fdt.h')
-	dpdk_conf.set10('RTE_HAS_LIBFDT', true)
-	has_libfdt = 1
-	add_project_link_arguments('-lfdt', language: 'c')
-	dpdk_extra_ldflags += '-lfdt'
-endif
-
-libexecinfo = cc.find_library('execinfo', required: false)
-if libexecinfo.found() and cc.has_header('execinfo.h')
-	add_project_link_arguments('-lexecinfo', language: 'c')
-	dpdk_extra_ldflags += '-lexecinfo'
-endif
-
 # check for libbsd
-libbsd = dependency('libbsd', required: false, method: 'pkg-config')
+libbsd = dependency('libbsd', required: false)
 if libbsd.found()
 	dpdk_conf.set('RTE_USE_LIBBSD', 1)
 endif
 
 # check for pcap
-pcap_dep = dependency('libpcap', required: false, method: 'pkg-config')
-if not pcap_dep.found()
-	# pcap got a pkg-config file only in 1.9.0
+pcap_dep = dependency('pcap', required: false)
+if pcap_dep.found()
+	# pcap got a pkg-config file only in 1.9.0 and before that meson uses
+	# an internal pcap-config finder, which is not compatible with
+	# cross-compilation, so try to fallback to find_library
 	pcap_dep = cc.find_library('pcap', required: false)
 endif
 if pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
@@ -194,13 +180,13 @@ endif
 add_project_arguments('-include', 'rte_config.h', language: 'c')
 
 # enable extra warnings and disable any unwanted warnings
-# -Wall is added by default at warning level 1, and -Wextra
-# at warning level 2 (DPDK default)
 warning_flags = [
+	# -Wall is added by meson by default, so add -Wextra only
+	'-Wextra',
+
 	# additional warnings in alphabetical order
 	'-Wcast-qual',
 	'-Wdeprecated',
-	'-Wformat',
 	'-Wformat-nonliteral',
 	'-Wformat-security',
 	'-Wmissing-declarations',
@@ -227,7 +213,7 @@ if not dpdk_conf.get('RTE_ARCH_64')
 	warning_flags += '-Wno-pointer-to-int-cast'
 endif
 if cc.get_id() == 'intel'
-	warning_ids = [181, 188, 2203, 2279, 2557, 3179, 3656]
+	warning_ids = [188, 2203, 2279, 2557, 3179, 3656]
 	foreach i:warning_ids
 		warning_flags += '-diag-disable=@0@'.format(i)
 	endforeach
@@ -262,8 +248,7 @@ dpdk_conf.set('RTE_COMPILE_TIME_CPUFLAGS', ','.join(compile_time_cpuflags))
 # set the install path for the drivers
 dpdk_conf.set_quoted('RTE_EAL_PMD_PATH', eal_pmd_path)
 
-install_headers(['rte_config.h', 'rte_compatibility_defines.h'],
-		subdir: get_option('include_subdir_arch'))
+install_headers('rte_config.h', subdir: get_option('include_subdir_arch'))
 
 # enable VFIO only if it is linux OS
 dpdk_conf.set('RTE_EAL_VFIO', is_linux)
@@ -277,8 +262,7 @@ if is_freebsd
 endif
 
 if is_windows
-	# VirtualAlloc2() is available since Windows 10 / Server 2019.
-	# It's essential for EAL, so we don't support older versions.
+	# VirtualAlloc2() is available since Windows 10 / Server 2016.
 	add_project_arguments('-D_WIN32_WINNT=0x0A00', language: 'c')
 
 	# Use MinGW-w64 stdio, because DPDK assumes ANSI-compliant formatting.
@@ -286,11 +270,14 @@ if is_windows
 		add_project_arguments('-D__USE_MINGW_ANSI_STDIO', language: 'c')
 	endif
 
-	# Disable secure CRT deprecated warnings for clang
-	if cc.get_id() == 'clang'
-		add_project_arguments('-D_CRT_SECURE_NO_WARNINGS', language: 'c')
+	# Contrary to docs, VirtualAlloc2() is exported by mincore.lib
+	# in Windows SDK, while MinGW exports it by advapi32.a.
+	if is_ms_linker
+		add_project_link_arguments('-lmincore', language: 'c')
 	endif
 
+	add_project_link_arguments('-ladvapi32', '-lsetupapi', language: 'c')
+	add_project_link_arguments('-ldbghelp', language: 'c')
 endif
 
 if get_option('b_lto')
@@ -304,13 +291,4 @@ if get_option('b_lto')
 		add_project_arguments('-Wno-lto-type-mismatch', language: 'c')
 		add_project_link_arguments('-Wno-lto-type-mismatch', language: 'c')
 	endif
-endif
-
-if get_option('default_library') == 'both'
-	error( '''
-    Unsupported value "both" for "default_library" option.
-
-    NOTE: DPDK always builds both shared and static libraries.  Please set
-    "default_library" to either "static" or "shared" to select default linkage
-    for apps and any examples.''')
 endif

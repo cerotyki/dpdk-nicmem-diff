@@ -3,7 +3,7 @@
 
 if not is_linux
 	build = false
-	reason = 'only supported on Linux'
+	reason = 'only supported on linux'
 endif
 sources = files('avp_ethdev.c')
-headers = files('rte_avp_common.h', 'rte_avp_fifo.h')
+install_headers('rte_avp_common.h', 'rte_avp_fifo.h')

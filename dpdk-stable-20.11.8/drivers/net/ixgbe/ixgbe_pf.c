@@ -66,7 +66,7 @@ ixgbe_mb_intr_setup(struct rte_eth_dev *dev)
 	return 0;
 }
 
-int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
+void ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 {
 	struct ixgbe_vf_info **vfinfo =
 		IXGBE_DEV_PRIVATE_TO_P_VFDATA(eth_dev->data->dev_private);
@@ -78,30 +78,19 @@ int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	uint16_t vf_num;
 	uint8_t nb_queue;
-	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
 
 	RTE_ETH_DEV_SRIOV(eth_dev).active = 0;
 	vf_num = dev_num_vf(eth_dev);
 	if (vf_num == 0)
-		return ret;
+		return;
 
 	*vfinfo = rte_zmalloc("vf_info", sizeof(struct ixgbe_vf_info) * vf_num, 0);
-	if (*vfinfo == NULL) {
-		PMD_INIT_LOG(ERR,
-			"Cannot allocate memory for private VF data");
-		return -ENOMEM;
-	}
+	if (*vfinfo == NULL)
+		rte_panic("Cannot allocate memory for private VF data\n");
 
-	ret = rte_eth_switch_domain_alloc(&(*vfinfo)->switch_domain_id);
-	if (ret) {
-		PMD_INIT_LOG(ERR,
-			"failed to allocate switch domain for device %d", ret);
-		rte_free(*vfinfo);
-		*vfinfo = NULL;
-		return ret;
-	}
+	rte_eth_switch_domain_alloc(&(*vfinfo)->switch_domain_id);
 
 	memset(mirror_info, 0, sizeof(struct ixgbe_mirror_info));
 	memset(uta_info, 0, sizeof(struct ixgbe_uta_info));
@@ -129,8 +118,6 @@ int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 
 	/* set mb interrupt mask */
 	ixgbe_mb_intr_setup(eth_dev);
-
-	return ret;
 }
 
 void ixgbe_pf_host_uninit(struct rte_eth_dev *eth_dev)
@@ -245,7 +232,7 @@ int ixgbe_pf_host_configure(struct rte_eth_dev *eth_dev)
 	/* PFDMA Tx General Switch Control Enables VMDQ loopback */
 	IXGBE_WRITE_REG(hw, IXGBE_PFDTXGSWC, IXGBE_PFDTXGSWC_VT_LBEN);
 
-	/* clear VMDq map to permanent rar 0 */
+	/* clear VMDq map to perment rar 0 */
 	hw->mac.ops.clear_vmdq(hw, 0, IXGBE_CLEAR_VMDQ_ALL);
 
 	/* clear VMDq map to scan rar 127 */
@@ -552,47 +539,20 @@ ixgbe_vf_set_vlan(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 }
 
 static int
-ixgbe_set_vf_lpe(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
+ixgbe_set_vf_lpe(struct rte_eth_dev *dev, __rte_unused uint32_t vf, uint32_t *msgbuf)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint32_t max_frame = msgbuf[1];
+	uint32_t new_mtu = msgbuf[1];
 	uint32_t max_frs;
 	uint32_t hlreg0;
+	int max_frame = new_mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
 
 	/* X540 and X550 support jumbo frames in IOV mode */
 	if (hw->mac.type != ixgbe_mac_X540 &&
 		hw->mac.type != ixgbe_mac_X550 &&
 		hw->mac.type != ixgbe_mac_X550EM_x &&
-		hw->mac.type != ixgbe_mac_X550EM_a) {
-		struct ixgbe_vf_info *vfinfo =
-			*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
-
-		switch (vfinfo[vf].api_version) {
-		case ixgbe_mbox_api_11:
-		case ixgbe_mbox_api_12:
-		case ixgbe_mbox_api_13:
-			 /**
-			  * Version 1.1&1.2&1.3 supports jumbo frames on VFs
-			  * if PF has jumbo frames enabled which means legacy
-			  * VFs are disabled.
-			  */
-			if (dev->data->dev_conf.rxmode.max_rx_pkt_len >
-			    IXGBE_ETH_MAX_LEN)
-				break;
-			/* fall through */
-		default:
-			/**
-			 * If the PF or VF are running w/ jumbo frames enabled,
-			 * we return -1 as we cannot support jumbo frames on
-			 * legacy VFs.
-			 */
-			if (max_frame > IXGBE_ETH_MAX_LEN ||
-			    dev->data->dev_conf.rxmode.max_rx_pkt_len >
-			    IXGBE_ETH_MAX_LEN)
-				return -1;
-			break;
-		}
-	}
+		hw->mac.type != ixgbe_mac_X550EM_a)
+		return -1;
 
 	if (max_frame < RTE_ETHER_MIN_LEN ||
 			max_frame > RTE_ETHER_MAX_JUMBO_FRAME_LEN)
@@ -600,9 +560,9 @@ ixgbe_set_vf_lpe(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 
 	max_frs = (IXGBE_READ_REG(hw, IXGBE_MAXFRS) &
 		   IXGBE_MHADD_MFS_MASK) >> IXGBE_MHADD_MFS_SHIFT;
-	if (max_frs < max_frame) {
+	if (max_frs < new_mtu) {
 		hlreg0 = IXGBE_READ_REG(hw, IXGBE_HLREG0);
-		if (max_frame > IXGBE_ETH_MAX_LEN) {
+		if (new_mtu > RTE_ETHER_MAX_LEN) {
 			dev->data->dev_conf.rxmode.offloads |=
 				DEV_RX_OFFLOAD_JUMBO_FRAME;
 			hlreg0 |= IXGBE_HLREG0_JUMBOEN;
@@ -613,7 +573,7 @@ ixgbe_set_vf_lpe(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 		}
 		IXGBE_WRITE_REG(hw, IXGBE_HLREG0, hlreg0);
 
-		max_frs = max_frame << IXGBE_MHADD_MFS_SHIFT;
+		max_frs = new_mtu << IXGBE_MHADD_MFS_SHIFT;
 		IXGBE_WRITE_REG(hw, IXGBE_MAXFRS, max_frs);
 	}
 
@@ -757,9 +717,9 @@ ixgbe_set_vf_mc_promisc(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 
 	switch (xcast_mode) {
 	case IXGBEVF_XCAST_MODE_NONE:
-		disable = IXGBE_VMOLR_ROMPE |
+		disable = IXGBE_VMOLR_BAM | IXGBE_VMOLR_ROMPE |
 			  IXGBE_VMOLR_MPE | IXGBE_VMOLR_UPE | IXGBE_VMOLR_VPE;
-		enable = IXGBE_VMOLR_BAM;
+		enable = 0;
 		break;
 	case IXGBEVF_XCAST_MODE_MULTI:
 		disable = IXGBE_VMOLR_MPE | IXGBE_VMOLR_UPE | IXGBE_VMOLR_VPE;
@@ -781,9 +741,9 @@ ixgbe_set_vf_mc_promisc(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 			return -1;
 		}
 
-		disable = IXGBE_VMOLR_VPE;
+		disable = 0;
 		enable = IXGBE_VMOLR_BAM | IXGBE_VMOLR_ROMPE |
-			 IXGBE_VMOLR_MPE | IXGBE_VMOLR_UPE;
+			 IXGBE_VMOLR_MPE | IXGBE_VMOLR_UPE | IXGBE_VMOLR_VPE;
 		break;
 	default:
 		return -1;
@@ -872,7 +832,7 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 		vfinfo[vf].clear_to_send = true;
 
 		/* notify application about VF reset */
-		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
 					      &ret_param);
 		return ret;
 	}
@@ -884,7 +844,8 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 	 * if 0, do nothing and send ACK to VF
 	 * if ret_param.retval > 1, do nothing and send NAK to VF
 	 */
-	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX, &ret_param);
+	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
+				      &ret_param);
 
 	retval = ret_param.retval;
 

@@ -15,12 +15,14 @@
 #include "hw_atl/hw_atl_b0_internal.h"
 
 static int eth_atl_dev_init(struct rte_eth_dev *eth_dev);
+static int eth_atl_dev_uninit(struct rte_eth_dev *eth_dev);
+
 static int  atl_dev_configure(struct rte_eth_dev *dev);
 static int  atl_dev_start(struct rte_eth_dev *dev);
-static int atl_dev_stop(struct rte_eth_dev *dev);
+static void atl_dev_stop(struct rte_eth_dev *dev);
 static int  atl_dev_set_link_up(struct rte_eth_dev *dev);
 static int  atl_dev_set_link_down(struct rte_eth_dev *dev);
-static int  atl_dev_close(struct rte_eth_dev *dev);
+static void atl_dev_close(struct rte_eth_dev *dev);
 static int  atl_dev_reset(struct rte_eth_dev *dev);
 static int  atl_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static int  atl_dev_promiscuous_disable(struct rte_eth_dev *dev);
@@ -311,6 +313,10 @@ static const struct eth_dev_ops atl_eth_dev_ops = {
 	.rx_queue_intr_enable = atl_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable = atl_dev_rx_queue_intr_disable,
 
+	.rx_queue_count       = atl_rx_queue_count,
+	.rx_descriptor_status = atl_dev_rx_descriptor_status,
+	.tx_descriptor_status = atl_dev_tx_descriptor_status,
+
 	/* EEPROM */
 	.get_eeprom_length    = atl_dev_get_eeprom_length,
 	.get_eeprom           = atl_dev_get_eeprom,
@@ -367,11 +373,6 @@ eth_atl_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	eth_dev->dev_ops = &atl_eth_dev_ops;
-
-	eth_dev->rx_queue_count       = atl_rx_queue_count;
-	eth_dev->rx_descriptor_status = atl_dev_rx_descriptor_status;
-	eth_dev->tx_descriptor_status = atl_dev_tx_descriptor_status;
-
 	eth_dev->rx_pkt_burst = &atl_recv_pkts;
 	eth_dev->tx_pkt_burst = &atl_xmit_pkts;
 	eth_dev->tx_pkt_prepare = &atl_prep_pkts;
@@ -379,8 +380,6 @@ eth_atl_dev_init(struct rte_eth_dev *eth_dev)
 	/* For secondary processes, the primary process has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
-
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Vendor and Device ID need to be set before init of shared code */
 	hw->device_id = pci_dev->id.device_id;
@@ -443,6 +442,40 @@ eth_atl_dev_init(struct rte_eth_dev *eth_dev)
 }
 
 static int
+eth_atl_dev_uninit(struct rte_eth_dev *eth_dev)
+{
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct aq_hw_s *hw;
+
+	PMD_INIT_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -EPERM;
+
+	hw = ATL_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
+
+	if (hw->adapter_stopped == 0)
+		atl_dev_close(eth_dev);
+
+	eth_dev->dev_ops = NULL;
+	eth_dev->rx_pkt_burst = NULL;
+	eth_dev->tx_pkt_burst = NULL;
+
+	/* disable uio intr before callback unregister */
+	rte_intr_disable(intr_handle);
+	rte_intr_callback_unregister(intr_handle,
+				     atl_dev_interrupt_handler, eth_dev);
+
+	rte_free(eth_dev->data->mac_addrs);
+	eth_dev->data->mac_addrs = NULL;
+
+	pthread_mutex_destroy(&hw->mbox_mutex);
+
+	return 0;
+}
+
+static int
 eth_atl_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	struct rte_pci_device *pci_dev)
 {
@@ -453,7 +486,7 @@ eth_atl_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 static int
 eth_atl_pci_remove(struct rte_pci_device *pci_dev)
 {
-	return rte_eth_dev_pci_generic_remove(pci_dev, atl_dev_close);
+	return rte_eth_dev_pci_generic_remove(pci_dev, eth_atl_dev_uninit);
 }
 
 static int
@@ -601,7 +634,7 @@ error:
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-static int
+static void
 atl_dev_stop(struct rte_eth_dev *dev)
 {
 	struct rte_eth_link link;
@@ -611,7 +644,6 @@ atl_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
-	dev->data->dev_started = 0;
 
 	/* disable interrupts */
 	atl_disable_intr(hw);
@@ -642,8 +674,6 @@ atl_dev_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
-
-	return 0;
 }
 
 /*
@@ -688,33 +718,14 @@ atl_dev_set_link_down(struct rte_eth_dev *dev)
 /*
  * Reset and stop device.
  */
-static int
+static void
 atl_dev_close(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
-	struct aq_hw_s *hw;
-	int ret;
-
 	PMD_INIT_FUNC_TRACE();
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
-	hw = ATL_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-
-	ret = atl_dev_stop(dev);
+	atl_dev_stop(dev);
 
 	atl_free_queues(dev);
-
-	/* disable uio intr before callback unregister */
-	rte_intr_disable(intr_handle);
-	rte_intr_callback_unregister(intr_handle,
-				     atl_dev_interrupt_handler, dev);
-
-	pthread_mutex_destroy(&hw->mbox_mutex);
-
-	return ret;
 }
 
 static int
@@ -722,7 +733,7 @@ atl_dev_reset(struct rte_eth_dev *dev)
 {
 	int ret;
 
-	ret = atl_dev_close(dev);
+	ret = eth_atl_dev_uninit(dev);
 	if (ret)
 		return ret;
 
@@ -1073,7 +1084,7 @@ atl_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 {
 	struct aq_hw_s *hw = ATL_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t fw_ver = 0;
-	int ret = 0;
+	unsigned int ret = 0;
 
 	ret = hw_atl_utils_get_fw_version(hw, &fw_ver);
 	if (ret)
@@ -1081,11 +1092,10 @@ atl_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 
 	ret = snprintf(fw_version, fw_size, "%u.%u.%u", fw_ver >> 24,
 		       (fw_ver >> 16) & 0xFFU, fw_ver & 0xFFFFU);
-	if (ret < 0)
-		return -EINVAL;
 
 	ret += 1; /* add string null-terminator */
-	if (fw_size < (size_t)ret)
+
+	if (fw_size < ret)
 		return ret;
 
 	return 0;
@@ -1384,7 +1394,8 @@ atl_dev_interrupt_action(struct rte_eth_dev *dev,
 	/* Notify userapp if link status changed */
 	if (!atl_dev_link_update(dev, 0)) {
 		atl_dev_link_status_print(dev);
-		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+		_rte_eth_dev_callback_process(dev,
+			RTE_ETH_EVENT_INTR_LSC, NULL);
 	} else {
 		if (hw->aq_fw_ops->send_macsec_req == NULL)
 			goto done;
@@ -1410,7 +1421,7 @@ atl_dev_interrupt_action(struct rte_eth_dev *dev,
 		    resp.stats.egress_expired ||
 		    resp.stats.ingress_expired) {
 			PMD_DRV_LOG(INFO, "RTE_ETH_EVENT_MACSEC");
-			rte_eth_dev_callback_process(dev,
+			_rte_eth_dev_callback_process(dev,
 				RTE_ETH_EVENT_MACSEC, NULL);
 		}
 	}
@@ -1428,7 +1439,7 @@ done:
  * @param handle
  *  Pointer to interrupt handle.
  * @param param
- *  The address of parameter (struct rte_eth_dev *) registered before.
+ *  The address of parameter (struct rte_eth_dev *) regsitered before.
  *
  * @return
  *  void

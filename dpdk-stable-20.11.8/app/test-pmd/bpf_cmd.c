@@ -20,7 +20,7 @@ static const struct rte_bpf_xsym bpf_xsym[] = {
 		.name = RTE_STR(stdout),
 		.type = RTE_BPF_XTYPE_VAR,
 		.var = {
-			.val = (void *)(uintptr_t)&stdout,
+			.val = &stdout,
 			.desc = {
 				.type = RTE_BPF_ARG_PTR,
 				.size = sizeof(stdout),
@@ -55,7 +55,7 @@ static const struct rte_bpf_xsym bpf_xsym[] = {
 struct cmd_bpf_ld_result {
 	cmdline_fixed_string_t bpf;
 	cmdline_fixed_string_t dir;
-	uint16_t port;
+	uint8_t port;
 	uint16_t queue;
 	cmdline_fixed_string_t op;
 	cmdline_fixed_string_t flags;
@@ -124,9 +124,9 @@ cmdline_parse_token_string_t cmd_load_bpf_dir =
 	TOKEN_STRING_INITIALIZER(struct cmd_bpf_ld_result,
 			dir, "rx#tx");
 cmdline_parse_token_num_t cmd_load_bpf_port =
-	TOKEN_NUM_INITIALIZER(struct cmd_bpf_ld_result, port, RTE_UINT8);
+	TOKEN_NUM_INITIALIZER(struct cmd_bpf_ld_result, port, UINT8);
 cmdline_parse_token_num_t cmd_load_bpf_queue =
-	TOKEN_NUM_INITIALIZER(struct cmd_bpf_ld_result, queue, RTE_UINT16);
+	TOKEN_NUM_INITIALIZER(struct cmd_bpf_ld_result, queue, UINT16);
 cmdline_parse_token_string_t cmd_load_bpf_flags =
 	TOKEN_STRING_INITIALIZER(struct cmd_bpf_ld_result,
 			flags, NULL);
@@ -153,7 +153,7 @@ cmdline_parse_inst_t cmd_operate_bpf_ld_parse = {
 struct cmd_bpf_unld_result {
 	cmdline_fixed_string_t bpf;
 	cmdline_fixed_string_t dir;
-	uint16_t port;
+	uint8_t port;
 	uint16_t queue;
 };
 
@@ -180,9 +180,9 @@ cmdline_parse_token_string_t cmd_unload_bpf_dir =
 	TOKEN_STRING_INITIALIZER(struct cmd_bpf_unld_result,
 			dir, "rx#tx");
 cmdline_parse_token_num_t cmd_unload_bpf_port =
-	TOKEN_NUM_INITIALIZER(struct cmd_bpf_unld_result, port, RTE_UINT8);
+	TOKEN_NUM_INITIALIZER(struct cmd_bpf_unld_result, port, UINT8);
 cmdline_parse_token_num_t cmd_unload_bpf_queue =
-	TOKEN_NUM_INITIALIZER(struct cmd_bpf_unld_result, queue, RTE_UINT16);
+	TOKEN_NUM_INITIALIZER(struct cmd_bpf_unld_result, queue, UINT16);
 
 cmdline_parse_inst_t cmd_operate_bpf_unld_parse = {
 	.f = cmd_operate_bpf_unld_parsed,

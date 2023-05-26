@@ -195,7 +195,7 @@ vhost_crypto_usage(const char *prgname)
 {
 	printf("%s [EAL options] --\n"
 		"  --%s <lcore>,SOCKET-FILE-PATH\n"
-		"  --%s (lcore,cdev_id,queue_id)[,(lcore,cdev_id,queue_id)]\n"
+		"  --%s (lcore,cdev_id,queue_id)[,(lcore,cdev_id,queue_id)]"
 		"  --%s: zero copy\n"
 		"  --%s: guest polling\n",
 		prgname, SOCKET_FILE_KEYWORD, CONFIG_KEYWORD,
@@ -219,7 +219,7 @@ vhost_crypto_parse_args(int argc, char **argv)
 
 	argvopt = argv;
 
-	while ((opt = getopt_long(argc, argvopt, "",
+	while ((opt = getopt_long(argc, argvopt, "s:",
 				  lgopts, &option_index)) != EOF) {
 
 		switch (opt) {
@@ -455,9 +455,6 @@ free_resource(void)
 	}
 
 	memset(&options, 0, sizeof(options));
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 }
 
 int
@@ -547,7 +544,7 @@ main(int argc, char *argv[])
 		snprintf(name, 127, "COPPOOL_%u", lo->lcore_id);
 		info->cop_pool = rte_crypto_op_pool_create(name,
 				RTE_CRYPTO_OP_TYPE_SYMMETRIC, NB_MEMPOOL_OBJS,
-				NB_CACHE_OBJS, VHOST_CRYPTO_MAX_IV_LEN,
+				NB_CACHE_OBJS, 0,
 				rte_lcore_to_socket_id(lo->lcore_id));
 
 		if (!info->cop_pool) {
@@ -591,7 +588,7 @@ main(int argc, char *argv[])
 
 		for (j = 0; j < lo->nb_sockets; j++) {
 			ret = rte_vhost_driver_register(lo->socket_files[j],
-				RTE_VHOST_USER_ASYNC_COPY);
+				RTE_VHOST_USER_DEQUEUE_ZERO_COPY);
 			if (ret < 0) {
 				RTE_LOG(ERR, USER1, "socket %s already exists\n",
 					lo->socket_files[j]);
@@ -601,8 +598,7 @@ main(int argc, char *argv[])
 			rte_vhost_driver_callback_register(lo->socket_files[j],
 				&virtio_crypto_device_ops);
 
-			ret = rte_vhost_crypto_driver_start(
-					lo->socket_files[j]);
+			ret = rte_vhost_driver_start(lo->socket_files[j]);
 			if (ret < 0)  {
 				RTE_LOG(ERR, USER1, "failed to start vhost.\n");
 				goto error_exit;

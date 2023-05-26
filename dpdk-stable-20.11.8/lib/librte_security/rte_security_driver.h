@@ -41,7 +41,7 @@ typedef int (*security_session_create_t)(void *device,
 /**
  * Free driver private session data.
  *
- * @param	device		Crypto/eth device pointer
+ * @param	dev		Crypto/eth device pointer
  * @param	sess		Security session structure
  */
 typedef int (*security_session_destroy_t)(void *device,
@@ -89,23 +89,19 @@ typedef int (*security_session_stats_get_t)(void *device,
 		struct rte_security_session *sess,
 		struct rte_security_stats *stats);
 
-__rte_experimental
-int rte_security_dynfield_register(void);
-
 /**
  * Update the mbuf with provided metadata.
  *
- * @param	device		Crypto/eth device pointer
  * @param	sess		Security session structure
  * @param	mb		Packet buffer
- * @param	params		Metadata
+ * @param	mt		Metadata
  *
  * @return
  *  - Returns 0 if metadata updated successfully.
  *  - Returns -ve value for errors.
  */
 typedef int (*security_set_pkt_metadata_t)(void *device,
-		struct rte_security_session *sess, struct rte_mbuf *mb,
+		struct rte_security_session *sess, struct rte_mbuf *m,
 		void *params);
 
 /**

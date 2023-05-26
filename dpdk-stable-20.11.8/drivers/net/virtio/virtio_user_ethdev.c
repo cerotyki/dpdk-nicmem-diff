@@ -6,9 +6,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <linux/major.h>
-#include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <sys/socket.h>
 
 #include <rte_malloc.h>
@@ -63,37 +60,12 @@ virtio_user_reset_queues_packed(struct rte_eth_dev *dev)
 	rte_spinlock_unlock(&hw->state_lock);
 }
 
-static void
-virtio_user_delayed_intr_reconfig_handler(void *param)
-{
-	struct virtio_hw *hw = (struct virtio_hw *)param;
-	struct rte_eth_dev *eth_dev = &rte_eth_devices[hw->port_id];
-	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
-
-	PMD_DRV_LOG(DEBUG, "Unregistering intr fd: %d",
-		    eth_dev->intr_handle->fd);
-
-	if (rte_intr_callback_unregister(eth_dev->intr_handle,
-					 virtio_interrupt_handler,
-					 eth_dev) != 1)
-		PMD_DRV_LOG(ERR, "interrupt unregister failed");
-
-	eth_dev->intr_handle->fd = dev->vhostfd;
-
-	PMD_DRV_LOG(DEBUG, "Registering intr fd: %d", eth_dev->intr_handle->fd);
-
-	if (rte_intr_callback_register(eth_dev->intr_handle,
-				       virtio_interrupt_handler, eth_dev))
-		PMD_DRV_LOG(ERR, "interrupt register failed");
-
-	if (rte_intr_enable(eth_dev->intr_handle) < 0)
-		PMD_DRV_LOG(ERR, "interrupt enable failed");
-}
 
 static int
 virtio_user_server_reconnect(struct virtio_user_dev *dev)
 {
-	int ret, connectfd, old_status;
+	int ret;
+	int connectfd;
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[dev->port_id];
 	struct virtio_hw *hw = eth_dev->data->dev_private;
 	uint64_t protocol_features;
@@ -103,14 +75,6 @@ virtio_user_server_reconnect(struct virtio_user_dev *dev)
 		return -1;
 
 	dev->vhostfd = connectfd;
-	old_status = dev->status;
-
-	vtpci_reset(hw);
-
-	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_ACK);
-
-	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_DRIVER);
-
 	if (dev->ops->send_request(dev, VHOST_USER_GET_FEATURES,
 				   &dev->device_features) < 0) {
 		PMD_INIT_LOG(ERR, "get_features failed: %s",
@@ -125,9 +89,6 @@ virtio_user_server_reconnect(struct virtio_user_dev *dev)
 					&protocol_features))
 			return -1;
 
-		/* Offer VHOST_USER_PROTOCOL_F_STATUS */
-		dev->protocol_features |=
-			(1ULL << VHOST_USER_PROTOCOL_F_STATUS);
 		dev->protocol_features &= protocol_features;
 
 		if (dev->ops->send_request(dev,
@@ -149,17 +110,14 @@ virtio_user_server_reconnect(struct virtio_user_dev *dev)
 
 	/* For packed ring, resetting queues is required in reconnection. */
 	if (vtpci_packed_queue(hw) &&
-	   (old_status & VIRTIO_CONFIG_STATUS_DRIVER_OK)) {
+	   (vtpci_get_status(hw) & VIRTIO_CONFIG_STATUS_DRIVER_OK)) {
 		PMD_INIT_LOG(NOTICE, "Packets on the fly will be dropped"
 				" when packed ring reconnecting.");
 		virtio_user_reset_queues_packed(eth_dev);
 	}
 
-	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_FEATURES_OK);
-
-	/* Start the device */
-	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_DRIVER_OK);
-	if (!dev->started)
+	ret = virtio_user_start_device(dev);
+	if (ret < 0)
 		return -1;
 
 	if (dev->queue_pairs > 1) {
@@ -174,21 +132,24 @@ virtio_user_server_reconnect(struct virtio_user_dev *dev)
 			PMD_DRV_LOG(ERR, "interrupt disable failed");
 			return -1;
 		}
-		/*
-		 * This function can be called from the interrupt handler, so
-		 * we can't unregister interrupt handler here.  Setting
-		 * alarm to do that later.
-		 */
-		rte_eal_alarm_set(1,
-			virtio_user_delayed_intr_reconfig_handler,
-			(void *)hw);
+		rte_intr_callback_unregister(eth_dev->intr_handle,
+					     virtio_interrupt_handler,
+					     eth_dev);
+		eth_dev->intr_handle->fd = connectfd;
+		rte_intr_callback_register(eth_dev->intr_handle,
+					   virtio_interrupt_handler, eth_dev);
+
+		if (rte_intr_enable(eth_dev->intr_handle) < 0) {
+			PMD_DRV_LOG(ERR, "interrupt enable failed");
+			return -1;
+		}
 	}
 	PMD_INIT_LOG(NOTICE, "server mode virtio-user reconnection succeeds!");
 	return 0;
 }
 
 static void
-virtio_user_delayed_disconnect_handler(void *param)
+virtio_user_delayed_handler(void *param)
 {
 	struct virtio_hw *hw = (struct virtio_hw *)param;
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[hw->port_id];
@@ -198,34 +159,16 @@ virtio_user_delayed_disconnect_handler(void *param)
 		PMD_DRV_LOG(ERR, "interrupt disable failed");
 		return;
 	}
-
-	PMD_DRV_LOG(DEBUG, "Unregistering intr fd: %d",
-		    eth_dev->intr_handle->fd);
-	if (rte_intr_callback_unregister(eth_dev->intr_handle,
-					 virtio_interrupt_handler,
-					 eth_dev) != 1)
-		PMD_DRV_LOG(ERR, "interrupt unregister failed");
-
+	rte_intr_callback_unregister(eth_dev->intr_handle,
+				     virtio_interrupt_handler, eth_dev);
 	if (dev->is_server) {
 		if (dev->vhostfd >= 0) {
 			close(dev->vhostfd);
 			dev->vhostfd = -1;
-			/* Until the featuers are negotiated again, don't assume
-			 * the backend supports VHOST_USER_PROTOCOL_F_STATUS
-			 */
-			dev->protocol_features &=
-				~(1ULL << VHOST_USER_PROTOCOL_F_STATUS);
 		}
 		eth_dev->intr_handle->fd = dev->listenfd;
-
-		PMD_DRV_LOG(DEBUG, "Registering intr fd: %d",
-			    eth_dev->intr_handle->fd);
-
-		if (rte_intr_callback_register(eth_dev->intr_handle,
-					       virtio_interrupt_handler,
-					       eth_dev))
-			PMD_DRV_LOG(ERR, "interrupt register failed");
-
+		rte_intr_callback_register(eth_dev->intr_handle,
+					   virtio_interrupt_handler, eth_dev);
 		if (rte_intr_enable(eth_dev->intr_handle) < 0) {
 			PMD_DRV_LOG(ERR, "interrupt enable failed");
 			return;
@@ -252,9 +195,15 @@ virtio_user_read_dev_config(struct virtio_hw *hw, size_t offset,
 
 		if (dev->vhostfd >= 0) {
 			int r;
+			int flags;
 
-			r = recv(dev->vhostfd, buf, 128,
-				       MSG_PEEK | MSG_DONTWAIT);
+			flags = fcntl(dev->vhostfd, F_GETFL);
+			if (fcntl(dev->vhostfd, F_SETFL,
+					flags | O_NONBLOCK) == -1) {
+				PMD_DRV_LOG(ERR, "error setting O_NONBLOCK flag");
+				return;
+			}
+			r = recv(dev->vhostfd, buf, 128, MSG_PEEK);
 			if (r == 0 || (r < 0 && errno != EAGAIN)) {
 				dev->net_status &= (~VIRTIO_NET_S_LINK_UP);
 				PMD_DRV_LOG(ERR, "virtio-user port %u is down",
@@ -265,10 +214,15 @@ virtio_user_read_dev_config(struct virtio_hw *hw, size_t offset,
 				 * unregistered here, set an alarm to do it.
 				 */
 				rte_eal_alarm_set(1,
-					virtio_user_delayed_disconnect_handler,
-					(void *)hw);
+						  virtio_user_delayed_handler,
+						  (void *)hw);
 			} else {
 				dev->net_status |= VIRTIO_NET_S_LINK_UP;
+			}
+			if (fcntl(dev->vhostfd, F_SETFL,
+					flags & ~O_NONBLOCK) == -1) {
+				PMD_DRV_LOG(ERR, "error clearing O_NONBLOCK flag");
+				return;
 			}
 		} else if (dev->is_server) {
 			dev->net_status &= (~VIRTIO_NET_S_LINK_UP);
@@ -312,30 +266,18 @@ static void
 virtio_user_set_status(struct virtio_hw *hw, uint8_t status)
 {
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
-	uint8_t old_status = dev->status;
 
-	if (status & VIRTIO_CONFIG_STATUS_FEATURES_OK &&
-			~old_status & VIRTIO_CONFIG_STATUS_FEATURES_OK)
-		virtio_user_dev_set_features(dev);
-
-	if (status & VIRTIO_CONFIG_STATUS_DRIVER_OK) {
-		if (virtio_user_start_device(dev)) {
-			virtio_user_dev_update_status(dev);
-			return;
-		}
-	} else if (status == VIRTIO_CONFIG_STATUS_RESET) {
+	if (status & VIRTIO_CONFIG_STATUS_DRIVER_OK)
+		virtio_user_start_device(dev);
+	else if (status == VIRTIO_CONFIG_STATUS_RESET)
 		virtio_user_reset(hw);
-	}
-
-	virtio_user_dev_set_status(dev, status);
+	dev->status = status;
 }
 
 static uint8_t
 virtio_user_get_status(struct virtio_hw *hw)
 {
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
-
-	virtio_user_dev_update_status(dev);
 
 	return dev->status;
 }
@@ -573,61 +515,6 @@ get_integer_arg(const char *key __rte_unused,
 	return -errno;
 }
 
-static uint32_t
-vdpa_dynamic_major_num(void)
-{
-	FILE *fp;
-	char *line = NULL;
-	size_t size = 0;
-	char name[11];
-	bool found = false;
-	uint32_t num;
-
-	fp = fopen("/proc/devices", "r");
-	if (fp == NULL) {
-		PMD_INIT_LOG(ERR, "Cannot open /proc/devices: %s",
-			     strerror(errno));
-		return UNNAMED_MAJOR;
-	}
-
-	while (getline(&line, &size, fp) > 0) {
-		char *stripped = line + strspn(line, " ");
-		if ((sscanf(stripped, "%u %10s", &num, name) == 2) &&
-		    (strncmp(name, "vhost-vdpa", 10) == 0)) {
-			found = true;
-			break;
-		}
-	}
-	free(line);
-	fclose(fp);
-	return found ? num : UNNAMED_MAJOR;
-}
-
-static enum virtio_user_backend_type
-virtio_user_backend_type(const char *path)
-{
-	struct stat sb;
-
-	if (stat(path, &sb) == -1) {
-		if (errno == ENOENT)
-			return VIRTIO_USER_BACKEND_VHOST_USER;
-
-		PMD_INIT_LOG(ERR, "Stat fails: %s (%s)\n", path,
-			     strerror(errno));
-		return VIRTIO_USER_BACKEND_UNKNOWN;
-	}
-
-	if (S_ISSOCK(sb.st_mode)) {
-		return VIRTIO_USER_BACKEND_VHOST_USER;
-	} else if (S_ISCHR(sb.st_mode)) {
-		if (major(sb.st_rdev) == MISC_MAJOR)
-			return VIRTIO_USER_BACKEND_VHOST_KERNEL;
-		if (major(sb.st_rdev) == vdpa_dynamic_major_num())
-			return VIRTIO_USER_BACKEND_VHOST_VDPA;
-	}
-	return VIRTIO_USER_BACKEND_UNKNOWN;
-}
-
 static struct rte_eth_dev *
 virtio_user_eth_dev_alloc(struct rte_vdev_device *vdev)
 {
@@ -689,7 +576,6 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 	struct rte_kvargs *kvlist = NULL;
 	struct rte_eth_dev *eth_dev;
 	struct virtio_hw *hw;
-	enum virtio_user_backend_type backend_type = VIRTIO_USER_BACKEND_UNKNOWN;
 	uint64_t queues = VIRTIO_USER_DEF_Q_NUM;
 	uint64_t cq = VIRTIO_USER_DEF_CQ_EN;
 	uint64_t queue_size = VIRTIO_USER_DEF_Q_SZ;
@@ -742,18 +628,8 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 		goto end;
 	}
 
-	backend_type = virtio_user_backend_type(path);
-	if (backend_type == VIRTIO_USER_BACKEND_UNKNOWN) {
-		PMD_INIT_LOG(ERR,
-			     "unable to determine backend type for path %s",
-			path);
-		goto end;
-	}
-	PMD_INIT_LOG(INFO, "Backend type detected: %s",
-		     virtio_user_backend_strings[backend_type]);
-
 	if (rte_kvargs_count(kvlist, VIRTIO_USER_ARG_INTERFACE_NAME) == 1) {
-		if (backend_type != VIRTIO_USER_BACKEND_VHOST_KERNEL) {
+		if (is_vhost_user_by_type(path)) {
 			PMD_INIT_LOG(ERR,
 				"arg %s applies only to vhost-kernel backend",
 				VIRTIO_USER_ARG_INTERFACE_NAME);
@@ -872,7 +748,7 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 	hw = eth_dev->data->dev_private;
 	if (virtio_user_dev_init(hw->virtio_user_dev, path, queues, cq,
 			 queue_size, mac_addr, &ifname, server_mode,
-			 mrg_rxbuf, in_order, packed_vq, backend_type) < 0) {
+			 mrg_rxbuf, in_order, packed_vq) < 0) {
 		PMD_INIT_LOG(ERR, "virtio_user_dev_init fails");
 		virtio_user_eth_dev_free(eth_dev);
 		goto end;
@@ -881,7 +757,6 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 	/* previously called by pci probing for physical dev */
 	if (eth_virtio_dev_init(eth_dev) < 0) {
 		PMD_INIT_LOG(ERR, "eth_virtio_dev_init fails");
-		virtio_user_dev_uninit(hw->virtio_user_dev);
 		virtio_user_eth_dev_free(eth_dev);
 		goto end;
 	}
@@ -935,57 +810,7 @@ virtio_user_pmd_remove(struct rte_vdev_device *vdev)
 		return rte_eth_dev_release_port(eth_dev);
 
 	/* make sure the device is stopped, queues freed */
-	return rte_eth_dev_close(eth_dev->data->port_id);
-}
-
-static int virtio_user_pmd_dma_map(struct rte_vdev_device *vdev, void *addr,
-		uint64_t iova, size_t len)
-{
-	const char *name;
-	struct rte_eth_dev *eth_dev;
-	struct virtio_user_dev *dev;
-	struct virtio_hw *hw;
-
-	if (!vdev)
-		return -EINVAL;
-
-	name = rte_vdev_device_name(vdev);
-	eth_dev = rte_eth_dev_allocated(name);
-	/* Port has already been released by close. */
-	if (!eth_dev)
-		return 0;
-
-	hw = (struct virtio_hw *)eth_dev->data->dev_private;
-	dev = hw->virtio_user_dev;
-
-	if (dev->ops->dma_map)
-		return dev->ops->dma_map(dev, addr, iova, len);
-
-	return 0;
-}
-
-static int virtio_user_pmd_dma_unmap(struct rte_vdev_device *vdev, void *addr,
-		uint64_t iova, size_t len)
-{
-	const char *name;
-	struct rte_eth_dev *eth_dev;
-	struct virtio_user_dev *dev;
-	struct virtio_hw *hw;
-
-	if (!vdev)
-		return -EINVAL;
-
-	name = rte_vdev_device_name(vdev);
-	eth_dev = rte_eth_dev_allocated(name);
-	/* Port has already been released by close. */
-	if (!eth_dev)
-		return 0;
-
-	hw = (struct virtio_hw *)eth_dev->data->dev_private;
-	dev = hw->virtio_user_dev;
-
-	if (dev->ops->dma_unmap)
-		return dev->ops->dma_unmap(dev, addr, iova, len);
+	rte_eth_dev_close(eth_dev->data->port_id);
 
 	return 0;
 }
@@ -993,8 +818,6 @@ static int virtio_user_pmd_dma_unmap(struct rte_vdev_device *vdev, void *addr,
 static struct rte_vdev_driver virtio_user_driver = {
 	.probe = virtio_user_pmd_probe,
 	.remove = virtio_user_pmd_remove,
-	.dma_map = virtio_user_pmd_dma_map,
-	.dma_unmap = virtio_user_pmd_dma_unmap,
 };
 
 RTE_PMD_REGISTER_VDEV(net_virtio_user, virtio_user_driver);

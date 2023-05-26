@@ -22,7 +22,6 @@ extern "C" {
 
 /** VXLAN default port. */
 #define RTE_VXLAN_DEFAULT_PORT 4789
-#define RTE_VXLAN_GPE_DEFAULT_PORT 4790
 
 /**
  * VXLAN protocol header.

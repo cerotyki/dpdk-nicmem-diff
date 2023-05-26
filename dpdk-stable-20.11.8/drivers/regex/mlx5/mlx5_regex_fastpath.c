@@ -3,8 +3,6 @@
  */
 
 #include <unistd.h>
-#include <strings.h>
-#include <stdint.h>
 #include <sys/mman.h>
 
 #include <rte_malloc.h>
@@ -19,14 +17,16 @@
 #include <mlx5_glue.h>
 #include <mlx5_common.h>
 #include <mlx5_prm.h>
+#include <strings.h>
 
 #include "mlx5_regex_utils.h"
 #include "mlx5_rxp.h"
 #include "mlx5_regex.h"
 
 #define MLX5_REGEX_MAX_WQE_INDEX 0xffff
-#define MLX5_REGEX_METADATA_SIZE ((size_t)64)
-#define MLX5_REGEX_MAX_OUTPUT (((size_t)1) << 11)
+#define MLX5_REGEX_METADATA_SIZE 64
+#define MLX5_REGEX_MAX_INPUT (1 << 14)
+#define MLX5_REGEX_MAX_OUTPUT (1 << 11)
 #define MLX5_REGEX_WQE_CTRL_OFFSET 12
 #define MLX5_REGEX_WQE_METADATA_OFFSET 16
 #define MLX5_REGEX_WQE_GATHER_OFFSET 32
@@ -47,6 +47,7 @@ cq_size_get(struct mlx5_regex_cq *cq)
 
 struct mlx5_regex_job {
 	uint64_t user_id;
+	uint8_t *input;
 	volatile uint8_t *output;
 	volatile uint8_t *metadata;
 } __rte_cached_aligned;
@@ -99,47 +100,27 @@ set_wqe_ctrl_seg(struct mlx5_wqe_ctrl_seg *seg, uint16_t pi, uint8_t opcode,
 }
 
 static inline void
-prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
-	 struct mlx5_regex_sq *sq, struct rte_regex_ops *op,
+prep_one(struct mlx5_regex_sq *sq, struct rte_regex_ops *op,
 	 struct mlx5_regex_job *job)
 {
 	size_t wqe_offset = (sq->pi & (sq_size_get(sq) - 1)) * MLX5_SEND_WQE_BB;
-	uint32_t lkey;
-	uint16_t group0 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID0_VALID_F ?
-				op->group_id0 : 0;
-	uint16_t group1 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID1_VALID_F ?
-				op->group_id1 : 0;
-	uint16_t group2 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID2_VALID_F ?
-				op->group_id2 : 0;
-	uint16_t group3 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID3_VALID_F ?
-				op->group_id3 : 0;
-
-	/* For backward compatibility. */
-	if (!(op->req_flags & (RTE_REGEX_OPS_REQ_GROUP_ID0_VALID_F |
-			       RTE_REGEX_OPS_REQ_GROUP_ID1_VALID_F |
-			       RTE_REGEX_OPS_REQ_GROUP_ID2_VALID_F |
-			       RTE_REGEX_OPS_REQ_GROUP_ID3_VALID_F)))
-		group0 = op->group_id0;
-	lkey = mlx5_mr_addr2mr_bh(priv->pd, 0,
-				  &priv->mr_scache, &qp->mr_ctrl,
-				  rte_pktmbuf_mtod(op->mbuf, uintptr_t),
-				  !!(op->mbuf->ol_flags & EXT_ATTACHED_MBUF));
 	uint8_t *wqe = (uint8_t *)sq->wqe + wqe_offset;
 	int ds = 4; /*  ctrl + meta + input + output */
 
+	memcpy(job->input,
+		rte_pktmbuf_mtod(op->mbuf, void *),
+		rte_pktmbuf_data_len(op->mbuf));
 	set_wqe_ctrl_seg((struct mlx5_wqe_ctrl_seg *)wqe, sq->pi,
 			 MLX5_OPCODE_MMO, MLX5_OPC_MOD_MMO_REGEX, sq->obj->id,
 			 0, ds, 0, 0);
-	set_regex_ctrl_seg(wqe + 12, 0, group0, group1, group2, group3,
-			   0);
+	set_regex_ctrl_seg(wqe + 12, 0, op->group_id0, op->group_id1,
+			   op->group_id2,
+			   op->group_id3, 0);
 	struct mlx5_wqe_data_seg *input_seg =
 		(struct mlx5_wqe_data_seg *)(wqe +
 					     MLX5_REGEX_WQE_GATHER_OFFSET);
 	input_seg->byte_count =
 		rte_cpu_to_be_32(rte_pktmbuf_data_len(op->mbuf));
-	input_seg->addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(op->mbuf,
-							    uintptr_t));
-	input_seg->lkey = lkey;
 	job->user_id = op->user_id;
 	sq->db_pi = sq->pi;
 	sq->pi = (sq->pi + 1) & MLX5_REGEX_MAX_WQE_INDEX;
@@ -154,7 +135,7 @@ send_doorbell(struct mlx5dv_devx_uar *uar, struct mlx5_regex_sq *sq)
 	((struct mlx5_wqe_ctrl_seg *)wqe)->fm_ce_se = MLX5_WQE_CTRL_CQ_UPDATE;
 	uint64_t *doorbell_addr =
 		(uint64_t *)((uint8_t *)uar->base_addr + 0x800);
-	rte_io_wmb();
+	rte_cio_wmb();
 	sq->dbr[MLX5_SND_DBR] = rte_cpu_to_be_32((sq->db_pi + 1) &
 						 MLX5_REGEX_MAX_WQE_INDEX);
 	rte_wmb();
@@ -186,7 +167,7 @@ mlx5_regexdev_enqueue(struct rte_regexdev *dev, uint16_t qp_id,
 		sq = &queue->sqs[sqid];
 		while (can_send(sq)) {
 			job_id = job_id_get(sqid, sq_size_get(sq), sq->pi);
-			prep_one(priv, queue, sq, ops[i], &queue->jobs[job_id]);
+			prep_one(sq, ops[i], &queue->jobs[job_id]);
 			i++;
 			if (unlikely(i == nb_ops)) {
 				send_doorbell(priv->uar, sq);
@@ -238,7 +219,7 @@ poll_one(struct mlx5_regex_cq *cq)
 
 	next_cqe_offset =  (cq->ci & (cq_size_get(cq) - 1));
 	cqe = (volatile struct mlx5_cqe *)(cq->cqe + next_cqe_offset);
-	rte_io_wmb();
+	rte_cio_wmb();
 
 	int ret = check_cqe(cqe, cq_size_get(cq), cq->ci);
 
@@ -324,6 +305,10 @@ setup_sqs(struct mlx5_regex_qp *queue)
 					 0, queue->metadata->lkey,
 					 (uintptr_t)job->metadata);
 			set_data_seg((struct mlx5_wqe_data_seg *)
+				     (wqe + MLX5_REGEX_WQE_GATHER_OFFSET),
+				     0, queue->inputs->lkey,
+				     (uintptr_t)job->input);
+			set_data_seg((struct mlx5_wqe_data_seg *)
 				     (wqe + MLX5_REGEX_WQE_SCATTER_OFFSET),
 				     MLX5_REGEX_MAX_OUTPUT,
 				     queue->outputs->lkey,
@@ -350,9 +335,24 @@ setup_buffers(struct mlx5_regex_qp *qp, struct ibv_pd *pd)
 					 MLX5_REGEX_METADATA_SIZE*qp->nb_desc,
 					 IBV_ACCESS_LOCAL_WRITE);
 	if (!qp->metadata) {
-		DRV_LOG(ERR, "Failed to register metadata");
 		rte_free(ptr);
 		return -EINVAL;
+	}
+	ptr = rte_calloc(__func__, qp->nb_desc,
+			 MLX5_REGEX_MAX_INPUT,
+			 MLX5_REGEX_MAX_INPUT);
+
+	if (!ptr) {
+		err = -ENOMEM;
+		goto err_input;
+	}
+	qp->inputs = mlx5_glue->reg_mr(pd, ptr,
+				       MLX5_REGEX_MAX_INPUT*qp->nb_desc,
+				       IBV_ACCESS_LOCAL_WRITE);
+	if (!qp->inputs) {
+		rte_free(ptr);
+		err = -EINVAL;
+		goto err_input;
 	}
 
 	ptr = rte_calloc(__func__, qp->nb_desc,
@@ -367,13 +367,15 @@ setup_buffers(struct mlx5_regex_qp *qp, struct ibv_pd *pd)
 					IBV_ACCESS_LOCAL_WRITE);
 	if (!qp->outputs) {
 		rte_free(ptr);
-		DRV_LOG(ERR, "Failed to register output");
 		err = -EINVAL;
 		goto err_output;
 	}
 
 	/* distribute buffers to jobs */
 	for (i = 0; i < qp->nb_desc; i++) {
+		qp->jobs[i].input =
+			(uint8_t *)qp->inputs->addr +
+			(i % qp->nb_desc) * MLX5_REGEX_MAX_INPUT;
 		qp->jobs[i].output =
 			(uint8_t *)qp->outputs->addr +
 			(i % qp->nb_desc) * MLX5_REGEX_MAX_OUTPUT;
@@ -384,6 +386,10 @@ setup_buffers(struct mlx5_regex_qp *qp, struct ibv_pd *pd)
 	return 0;
 
 err_output:
+	ptr = qp->inputs->addr;
+	rte_free(ptr);
+	mlx5_glue->dereg_mr(qp->inputs);
+err_input:
 	ptr = qp->metadata->addr;
 	rte_free(ptr);
 	mlx5_glue->dereg_mr(qp->metadata);
@@ -396,39 +402,13 @@ mlx5_regexdev_setup_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id)
 	struct mlx5_regex_qp *qp = &priv->qps[qp_id];
 	int err;
 
-	qp->jobs = rte_calloc(__func__, qp->nb_desc, sizeof(*qp->jobs), 64);
+	qp->jobs = rte_calloc(__func__, qp->nb_desc, sizeof(*qp->jobs),
+			      sizeof(*qp->jobs));
 	if (!qp->jobs)
 		return -ENOMEM;
 	err = setup_buffers(qp, priv->pd);
-	if (err) {
-		rte_free(qp->jobs);
+	if (err)
 		return err;
-	}
 	setup_sqs(qp);
 	return 0;
-}
-
-static void
-free_buffers(struct mlx5_regex_qp *qp)
-{
-	if (qp->metadata) {
-		mlx5_glue->dereg_mr(qp->metadata);
-		rte_free(qp->metadata->addr);
-	}
-	if (qp->outputs) {
-		mlx5_glue->dereg_mr(qp->outputs);
-		rte_free(qp->outputs->addr);
-	}
-}
-
-void
-mlx5_regexdev_teardown_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id)
-{
-	struct mlx5_regex_qp *qp = &priv->qps[qp_id];
-
-	if (qp) {
-		free_buffers(qp);
-		if (qp->jobs)
-			rte_free(qp->jobs);
-	}
 }

@@ -4,12 +4,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#include <sys/eventfd.h>
 
 #include <rte_malloc.h>
 #include <rte_errno.h>
 #include <rte_io.h>
-#include <rte_eal_paging.h>
 
 #include <mlx5_common.h>
 
@@ -18,15 +16,14 @@
 
 
 static void
-mlx5_vdpa_virtq_kick_handler(void *cb_arg)
+mlx5_vdpa_virtq_handler(void *cb_arg)
 {
 	struct mlx5_vdpa_virtq *virtq = cb_arg;
 	struct mlx5_vdpa_priv *priv = virtq->priv;
 	uint64_t buf;
 	int nbytes;
-	int retry;
 
-	for (retry = 0; retry < 3; ++retry) {
+	do {
 		nbytes = read(virtq->intr_handle.fd, &buf, 8);
 		if (nbytes < 0) {
 			if (errno == EINTR ||
@@ -37,9 +34,7 @@ mlx5_vdpa_virtq_kick_handler(void *cb_arg)
 				virtq->index, strerror(errno));
 		}
 		break;
-	}
-	if (nbytes < 0)
-		return;
+	} while (1);
 	rte_write32(virtq->index, priv->virtq_db_addr);
 	if (virtq->notifier_state == MLX5_VDPA_NOTIFIER_STATE_DISABLED) {
 		if (rte_vhost_host_notifier_ctrl(priv->vid, virtq->index, true))
@@ -59,16 +54,19 @@ static int
 mlx5_vdpa_virtq_unset(struct mlx5_vdpa_virtq *virtq)
 {
 	unsigned int i;
+	int retries = MLX5_VDPA_INTR_RETRIES;
 	int ret = -EAGAIN;
 
-	if (virtq->intr_handle.fd >= 0) {
-		while (ret == -EAGAIN) {
+	if (virtq->intr_handle.fd != -1) {
+		while (retries-- && ret == -EAGAIN) {
 			ret = rte_intr_callback_unregister(&virtq->intr_handle,
-					mlx5_vdpa_virtq_kick_handler, virtq);
+							mlx5_vdpa_virtq_handler,
+							virtq);
 			if (ret == -EAGAIN) {
-				DRV_LOG(DEBUG, "Try again to unregister fd %d of virtq %hu interrupt",
+				DRV_LOG(DEBUG, "Try again to unregister fd %d "
+					"of virtq %d interrupt, retries = %d.",
 					virtq->intr_handle.fd,
-					virtq->index);
+					(int)virtq->index, retries);
 				usleep(MLX5_VDPA_INTR_RETRIES_USEC);
 			}
 		}
@@ -90,6 +88,11 @@ mlx5_vdpa_virtq_unset(struct mlx5_vdpa_virtq *virtq)
 			rte_free(virtq->umems[i].buf);
 	}
 	memset(&virtq->umems, 0, sizeof(virtq->umems));
+	if (virtq->counters) {
+		claim_zero(mlx5_devx_cmd_destroy(virtq->counters));
+		virtq->counters = NULL;
+	}
+	memset(&virtq->reset, 0, sizeof(virtq->reset));
 	if (virtq->eqp.fw_qp)
 		mlx5_vdpa_event_qp_destroy(&virtq->eqp);
 	virtq->notifier_state = MLX5_VDPA_NOTIFIER_STATE_DISABLED;
@@ -100,32 +103,22 @@ void
 mlx5_vdpa_virtqs_release(struct mlx5_vdpa_priv *priv)
 {
 	int i;
-	struct mlx5_vdpa_virtq *virtq;
 
-	for (i = 0; i < priv->nr_virtqs; i++) {
-		virtq = &priv->virtqs[i];
-		mlx5_vdpa_virtq_unset(virtq);
-		if (virtq->counters)
-			claim_zero(mlx5_devx_cmd_destroy(virtq->counters));
-	}
-	for (i = 0; i < priv->num_lag_ports; i++) {
-		if (priv->tiss[i]) {
-			claim_zero(mlx5_devx_cmd_destroy(priv->tiss[i]));
-			priv->tiss[i] = NULL;
-		}
+	for (i = 0; i < priv->nr_virtqs; i++)
+		mlx5_vdpa_virtq_unset(&priv->virtqs[i]);
+	if (priv->tis) {
+		claim_zero(mlx5_devx_cmd_destroy(priv->tis));
+		priv->tis = NULL;
 	}
 	if (priv->td) {
 		claim_zero(mlx5_devx_cmd_destroy(priv->td));
 		priv->td = NULL;
 	}
 	if (priv->virtq_db_addr) {
-		/* Mask out the within page offset for munmap. */
-		claim_zero(munmap((void *)((uintptr_t)priv->virtq_db_addr &
-			~(rte_mem_page_size() - 1)), priv->var->length));
+		claim_zero(munmap(priv->virtq_db_addr, priv->var->length));
 		priv->virtq_db_addr = NULL;
 	}
 	priv->features = 0;
-	memset(priv->virtqs, 0, sizeof(*virtq) * priv->nr_virtqs);
 	priv->nr_virtqs = 0;
 }
 
@@ -145,6 +138,7 @@ mlx5_vdpa_virtq_modify(struct mlx5_vdpa_virtq *virtq, int state)
 int
 mlx5_vdpa_virtq_stop(struct mlx5_vdpa_priv *priv, int index)
 {
+	struct mlx5_devx_virtq_attr attr = {0};
 	struct mlx5_vdpa_virtq *virtq = &priv->virtqs[index];
 	int ret;
 
@@ -154,17 +148,6 @@ mlx5_vdpa_virtq_stop(struct mlx5_vdpa_priv *priv, int index)
 	if (ret)
 		return -1;
 	virtq->stopped = true;
-	DRV_LOG(DEBUG, "vid %u virtq %u was stopped.", priv->vid, index);
-	return mlx5_vdpa_virtq_query(priv, index);
-}
-
-int
-mlx5_vdpa_virtq_query(struct mlx5_vdpa_priv *priv, int index)
-{
-	struct mlx5_devx_virtq_attr attr = {0};
-	struct mlx5_vdpa_virtq *virtq = &priv->virtqs[index];
-	int ret;
-
 	if (mlx5_devx_cmd_query_virtq(virtq->virtq, &attr)) {
 		DRV_LOG(ERR, "Failed to query virtq %d.", index);
 		return -1;
@@ -179,9 +162,7 @@ mlx5_vdpa_virtq_query(struct mlx5_vdpa_priv *priv, int index)
 		DRV_LOG(ERR, "Failed to set virtq %d base.", index);
 		return -1;
 	}
-	if (attr.state == MLX5_VIRTQ_STATE_ERROR)
-		DRV_LOG(WARNING, "vid %d vring %d hw error=%hhu",
-			priv->vid, index, attr.error_type);
+	DRV_LOG(DEBUG, "vid %u virtq %u was stopped.", priv->vid, index);
 	return 0;
 }
 
@@ -214,8 +195,6 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 	unsigned int i;
 	uint16_t last_avail_idx;
 	uint16_t last_used_idx;
-	uint16_t event_num = MLX5_EVENT_TYPE_OBJECT_CHANGE;
-	uint64_t cookie;
 
 	ret = rte_vhost_get_vhost_vring(priv->vid, index, &vq);
 	if (ret)
@@ -252,9 +231,8 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 			" need event QPs and event mechanism.", index);
 	}
 	if (priv->caps.queue_counters_valid) {
-		if (!virtq->counters)
-			virtq->counters = mlx5_devx_cmd_create_virtio_q_counters
-								(priv->ctx);
+		virtq->counters = mlx5_devx_cmd_create_virtio_q_counters
+								    (priv->ctx);
 		if (!virtq->counters) {
 			DRV_LOG(ERR, "Failed to create virtq couners for virtq"
 				" %d.", index);
@@ -324,7 +302,7 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 	attr.hw_used_index = last_used_idx;
 	attr.q_size = vq.size;
 	attr.mkey = priv->gpa_mkey_index;
-	attr.tis_id = priv->tiss[(index / 2) % priv->num_lag_ports]->id;
+	attr.tis_id = priv->tis->id;
 	attr.queue_index = index;
 	attr.pd = priv->pdn;
 	virtq->virtq = mlx5_devx_cmd_create_virtq(priv->ctx, &attr);
@@ -343,7 +321,7 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 	} else {
 		virtq->intr_handle.type = RTE_INTR_HANDLE_EXT;
 		if (rte_intr_callback_register(&virtq->intr_handle,
-					       mlx5_vdpa_virtq_kick_handler,
+					       mlx5_vdpa_virtq_handler,
 					       virtq)) {
 			virtq->intr_handle.fd = -1;
 			DRV_LOG(ERR, "Failed to register virtq %d interrupt.",
@@ -354,23 +332,7 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 				virtq->intr_handle.fd, index);
 		}
 	}
-	/* Subscribe virtq error event. */
-	virtq->version++;
-	cookie = ((uint64_t)virtq->version << 32) + index;
-	ret = mlx5_glue->devx_subscribe_devx_event(priv->err_chnl,
-						   virtq->virtq->obj,
-						   sizeof(event_num),
-						   &event_num, cookie);
-	if (ret) {
-		DRV_LOG(ERR, "Failed to subscribe device %d virtq %d error event.",
-			priv->vid, index);
-		rte_errno = errno;
-		goto error;
-	}
 	virtq->stopped = false;
-	/* Initial notification to ask Qemu handling completed buffers. */
-	if (virtq->eqp.cq.callfd != -1)
-		eventfd_write(virtq->eqp.cq.callfd, (eventfd_t)1);
 	DRV_LOG(DEBUG, "vid %u virtq %u was created successfully.", priv->vid,
 		index);
 	return 0;
@@ -385,7 +347,7 @@ mlx5_vdpa_features_validate(struct mlx5_vdpa_priv *priv)
 	if (priv->features & (1ULL << VIRTIO_F_RING_PACKED)) {
 		if (!(priv->caps.virtio_queue_type & (1 <<
 						     MLX5_VIRTQ_TYPE_PACKED))) {
-			DRV_LOG(ERR, "Failed to configure PACKED mode for vdev "
+			DRV_LOG(ERR, "Failed to configur PACKED mode for vdev "
 				"%d - it was not reported by HW/driver"
 				" capability.", priv->vid);
 			return -ENOTSUP;
@@ -446,16 +408,9 @@ mlx5_vdpa_virtqs_prepare(struct mlx5_vdpa_priv *priv)
 		DRV_LOG(ERR, "Failed to configure negotiated features.");
 		return -1;
 	}
-	if ((priv->features & (1ULL << VIRTIO_NET_F_CSUM)) == 0 &&
-	    ((priv->features & (1ULL << VIRTIO_NET_F_HOST_TSO4)) > 0 ||
-	     (priv->features & (1ULL << VIRTIO_NET_F_HOST_TSO6)) > 0)) {
-		/* Packet may be corrupted if TSO is enabled without CSUM. */
-		DRV_LOG(INFO, "TSO is enabled without CSUM, force CSUM.");
-		priv->features |= (1ULL << VIRTIO_NET_F_CSUM);
-	}
-	if (nr_vring > priv->caps.max_num_virtio_queues) {
+	if (nr_vring > priv->caps.max_num_virtio_queues * 2) {
 		DRV_LOG(ERR, "Do not support more than %d virtqs(%d).",
-			(int)priv->caps.max_num_virtio_queues,
+			(int)priv->caps.max_num_virtio_queues * 2,
 			(int)nr_vring);
 		return -1;
 	}
@@ -468,10 +423,6 @@ mlx5_vdpa_virtqs_prepare(struct mlx5_vdpa_priv *priv)
 		priv->virtq_db_addr = NULL;
 		goto error;
 	} else {
-		/* Add within page offset for 64K page system. */
-		priv->virtq_db_addr = (char *)priv->virtq_db_addr +
-			((rte_mem_page_size() - 1) &
-			priv->caps.doorbell_bar_offset);
 		DRV_LOG(DEBUG, "VAR address of doorbell mapping is %p.",
 			priv->virtq_db_addr);
 	}
@@ -481,14 +432,10 @@ mlx5_vdpa_virtqs_prepare(struct mlx5_vdpa_priv *priv)
 		return -rte_errno;
 	}
 	tis_attr.transport_domain = priv->td->id;
-	for (i = 0; i < priv->num_lag_ports; i++) {
-		/* 0 is auto affinity, non-zero value to propose port. */
-		tis_attr.lag_tx_port_affinity = i + 1;
-		priv->tiss[i] = mlx5_devx_cmd_create_tis(priv->ctx, &tis_attr);
-		if (!priv->tiss[i]) {
-			DRV_LOG(ERR, "Failed to create TIS %u.", i);
-			goto error;
-		}
+	priv->tis = mlx5_devx_cmd_create_tis(priv->ctx, &tis_attr);
+	if (!priv->tis) {
+		DRV_LOG(ERR, "Failed to create TIS.");
+		goto error;
 	}
 	priv->nr_virtqs = nr_vring;
 	for (i = 0; i < nr_vring; i++)
@@ -579,11 +526,12 @@ mlx5_vdpa_virtq_stats_get(struct mlx5_vdpa_priv *priv, int qid,
 	struct mlx5_devx_virtio_q_couners_attr attr = {0};
 	int ret;
 
-	if (!virtq->counters) {
+	if (!virtq->virtq || !virtq->enable) {
 		DRV_LOG(ERR, "Failed to read virtq %d statistics - virtq "
 			"is invalid.", qid);
 		return -EINVAL;
 	}
+	MLX5_ASSERT(virtq->counters);
 	ret = mlx5_devx_cmd_query_virtio_q_counters(virtq->counters, &attr);
 	if (ret) {
 		DRV_LOG(ERR, "Failed to read virtq %d stats from HW.", qid);
@@ -635,11 +583,12 @@ mlx5_vdpa_virtq_stats_reset(struct mlx5_vdpa_priv *priv, int qid)
 	struct mlx5_vdpa_virtq *virtq = &priv->virtqs[qid];
 	int ret;
 
-	if (!virtq->counters) {
+	if (!virtq->virtq || !virtq->enable) {
 		DRV_LOG(ERR, "Failed to read virtq %d statistics - virtq "
 			"is invalid.", qid);
 		return -EINVAL;
 	}
+	MLX5_ASSERT(virtq->counters);
 	ret = mlx5_devx_cmd_query_virtio_q_counters(virtq->counters,
 						    &virtq->reset);
 	if (ret)

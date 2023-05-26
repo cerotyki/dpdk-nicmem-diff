@@ -480,9 +480,7 @@ rte_dev_event_callback_register(const char *device_name,
 		RTE_LOG(ERR, EAL,
 			"The callback is already exist, no need "
 			"to register again.\n");
-		event_cb = NULL;
 		ret = -EEXIST;
-		goto error;
 	}
 
 	rte_spinlock_unlock(&dev_event_lock);
@@ -528,19 +526,12 @@ rte_dev_event_callback_unregister(const char *device_name,
 		 */
 		if (event_cb->active == 0) {
 			TAILQ_REMOVE(&dev_event_cbs, event_cb, next);
-			free(event_cb->dev_name);
 			free(event_cb);
 			ret++;
 		} else {
-			ret = -EAGAIN;
-			break;
+			continue;
 		}
 	}
-
-	/* this callback is not be registered */
-	if (ret == 0)
-		ret = -ENOENT;
-
 	rte_spinlock_unlock(&dev_event_lock);
 	return ret;
 }
@@ -575,7 +566,7 @@ int
 rte_dev_iterator_init(struct rte_dev_iterator *it,
 		      const char *dev_str)
 {
-	struct rte_devargs devargs = { .bus = NULL };
+	struct rte_devargs devargs;
 	struct rte_class *cls = NULL;
 	struct rte_bus *bus = NULL;
 
@@ -765,6 +756,31 @@ out:
 	free(bus_str);
 	free(cls_str);
 	return it->device;
+}
+
+int
+rte_dev_alloc_dm(struct rte_device *dev, void **addr,
+		 size_t *len)
+{
+	printf("name %s\n", dev->bus->name);
+	if (dev->bus->alloc_dm == NULL) {
+		rte_errno = ENOTSUP;
+		return -1;
+	}
+
+	return dev->bus->alloc_dm(dev, addr, len);
+}
+
+int
+rte_dev_get_dma_map(struct rte_device *dev, void *addr, uint64_t iova,
+		size_t len)
+{
+	if (dev->bus->get_dma_map == NULL) {
+		rte_errno = ENOTSUP;
+		return -1;
+	}
+
+	return dev->bus->get_dma_map(dev, addr, iova, len);
 }
 
 int

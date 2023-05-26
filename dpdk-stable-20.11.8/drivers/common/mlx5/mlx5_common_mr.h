@@ -37,6 +37,9 @@ typedef int (*mlx5_reg_mr_t)(void *pd, void *addr, size_t length,
 			     struct mlx5_pmd_mr *pmd_mr);
 typedef void (*mlx5_dereg_mr_t)(struct mlx5_pmd_mr *pmd_mr);
 
+typedef int (*mlx5_reg_dm_mr_t)(void *pd, void *dm, void *addr, size_t length,
+				struct mlx5_pmd_mr *pmd_mr);
+
 /* Memory Region object. */
 struct mlx5_mr {
 	LIST_ENTRY(mlx5_mr) mr; /**< Pointer to the prev/next entry. */
@@ -84,6 +87,7 @@ struct mlx5_mr_share_cache {
 	struct mlx5_mr_list mr_free_list; /* Freed MR list. */
 	mlx5_reg_mr_t reg_mr_cb; /* Callback to reg_mr func */
 	mlx5_dereg_mr_t dereg_mr_cb; /* Callback to dereg_mr func */
+	mlx5_reg_dm_mr_t reg_dm_mr_cb; /* Callback to reg_dm_mr func */
 } __rte_packed;
 
 /**
@@ -143,9 +147,6 @@ void mlx5_mr_rebuild_cache(struct mlx5_mr_share_cache *share_cache);
 __rte_internal
 void mlx5_mr_flush_local_cache(struct mlx5_mr_ctrl *mr_ctrl);
 __rte_internal
-void mlx5_free_mr_by_addr(struct mlx5_mr_share_cache *share_cache,
-			  const char *ibdev_name, const void *addr, size_t len);
-__rte_internal
 int
 mlx5_mr_insert_cache(struct mlx5_mr_share_cache *share_cache,
 		     struct mlx5_mr *mr);
@@ -162,6 +163,10 @@ struct mlx5_mr *
 mlx5_create_mr_ext(void *pd, uintptr_t addr, size_t len, int socket_id,
 		   mlx5_reg_mr_t reg_mr_cb);
 __rte_internal
+struct mlx5_mr *
+mlx5_create_dm_mr_ext(void *pd, void *dm, uintptr_t addr, size_t len, int socket_id,
+		   mlx5_reg_dm_mr_t reg_mr_cb);
+__rte_internal
 uint32_t
 mlx5_mr_create_primary(void *pd,
 		       struct mlx5_mr_share_cache *share_cache,
@@ -176,6 +181,7 @@ void
 mlx5_common_verbs_dereg_mr(struct mlx5_pmd_mr *pmd_mr);
 
 __rte_internal
-void
-mlx5_mr_free(struct mlx5_mr *mr, mlx5_dereg_mr_t dereg_mr_cb);
+int
+mlx5_common_verbs_reg_dm_mr(void *pd, void *dm, void *addr, size_t length,
+			 struct mlx5_pmd_mr *pmd_mr);
 #endif /* RTE_PMD_MLX5_COMMON_MR_H_ */

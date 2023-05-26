@@ -298,14 +298,14 @@ rte_regexdev_get_dev_id(const char *name);
  * backtracking positions remembered by any tokens inside the group.
  * Example RegEx is `a(?>bc|b)c` if the given patterns are `abc` and `abcc` then
  * `a(bc|b)c` matches both where as `a(?>bc|b)c` matches only abcc because
- * atomic groups don't allow backtracking back to `b`.
+ * atomic groups don't allow backtracing back to `b`.
  *
  * @see struct rte_regexdev_info::regexdev_capa
  */
 
 #define RTE_REGEXDEV_SUPP_PCRE_BACKTRACKING_CTRL_F (1ULL << 3)
 /**< RegEx device support PCRE backtracking control verbs.
- * Some examples of backtracking verbs are (*COMMIT), (*ACCEPT), (*FAIL),
+ * Some examples of backtracing verbs are (*COMMIT), (*ACCEPT), (*FAIL),
  * (*SKIP), (*PRUNE).
  *
  * @see struct rte_regexdev_info::regexdev_capa
@@ -472,15 +472,6 @@ rte_regexdev_get_dev_id(const char *name);
  * returned matches will be: Ab, AAb and AAAb.
  *
  * @see RTE_REGEXDEV_CFG_MATCH_ALL_F
- */
-
-#define RTE_REGEXDEV_CAPA_QUEUE_PAIR_OOS_F (1ULL << 22)
-/**< RegEx device supports out of order scan.
- * Out of order scan means the response of a specific job can be returned as
- * soon as it is ready even if previous jobs on the same queue didn't complete.
- *
- * @see RTE_REGEX_QUEUE_PAIR_CFG_OOS_F
- * @see struct rte_regexdev_info::regexdev_capa
  */
 
 /* Enumerates PCRE rule flags */
@@ -1015,7 +1006,7 @@ rte_regexdev_rule_db_update(uint8_t dev_id,
  * @b EXPERIMENTAL: this API may change without prior notice.
  *
  * Compile local rule set and burn the complied result to the
- * RegEx device.
+ * RegEx deive.
  *
  * @param dev_id
  *   RegEx device identifier.

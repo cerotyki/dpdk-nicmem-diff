@@ -45,53 +45,7 @@ extern "C" {
 static __rte_always_inline void *
 rte_memcpy(void *dst, const void *src, size_t n);
 
-/**
- * Copy bytes from one location to another,
- * locations should not overlap.
- * Use with n <= 15.
- */
-static __rte_always_inline void *
-rte_mov15_or_less(void *dst, const void *src, size_t n)
-{
-	/**
-	 * Use the following structs to avoid violating C standard
-	 * alignment requirements and to avoid strict aliasing bugs
-	 */
-	struct rte_uint64_alias {
-		uint64_t val;
-	} __rte_packed __rte_may_alias;
-	struct rte_uint32_alias {
-		uint32_t val;
-	} __rte_packed __rte_may_alias;
-	struct rte_uint16_alias {
-		uint16_t val;
-	} __rte_packed __rte_may_alias;
-
-	void *ret = dst;
-	if (n & 8) {
-		((struct rte_uint64_alias *)dst)->val =
-			((const struct rte_uint64_alias *)src)->val;
-		src = (const uint64_t *)src + 1;
-		dst = (uint64_t *)dst + 1;
-	}
-	if (n & 4) {
-		((struct rte_uint32_alias *)dst)->val =
-			((const struct rte_uint32_alias *)src)->val;
-		src = (const uint32_t *)src + 1;
-		dst = (uint32_t *)dst + 1;
-	}
-	if (n & 2) {
-		((struct rte_uint16_alias *)dst)->val =
-			((const struct rte_uint16_alias *)src)->val;
-		src = (const uint16_t *)src + 1;
-		dst = (uint16_t *)dst + 1;
-	}
-	if (n & 1)
-		*(uint8_t *)dst = *(const uint8_t *)src;
-	return ret;
-}
-
-#if defined __AVX512F__ && defined RTE_MEMCPY_AVX512
+#ifdef RTE_MACHINE_CPUFLAG_AVX512F
 
 #define ALIGNMENT_MASK 0x3F
 
@@ -217,6 +171,8 @@ rte_mov512blocks(uint8_t *dst, const uint8_t *src, size_t n)
 static __rte_always_inline void *
 rte_memcpy_generic(void *dst, const void *src, size_t n)
 {
+	uintptr_t dstu = (uintptr_t)dst;
+	uintptr_t srcu = (uintptr_t)src;
 	void *ret = dst;
 	size_t dstofss;
 	size_t bits;
@@ -225,7 +181,24 @@ rte_memcpy_generic(void *dst, const void *src, size_t n)
 	 * Copy less than 16 bytes
 	 */
 	if (n < 16) {
-		return rte_mov15_or_less(dst, src, n);
+		if (n & 0x01) {
+			*(uint8_t *)dstu = *(const uint8_t *)srcu;
+			srcu = (uintptr_t)((const uint8_t *)srcu + 1);
+			dstu = (uintptr_t)((uint8_t *)dstu + 1);
+		}
+		if (n & 0x02) {
+			*(uint16_t *)dstu = *(const uint16_t *)srcu;
+			srcu = (uintptr_t)((const uint16_t *)srcu + 1);
+			dstu = (uintptr_t)((uint16_t *)dstu + 1);
+		}
+		if (n & 0x04) {
+			*(uint32_t *)dstu = *(const uint32_t *)srcu;
+			srcu = (uintptr_t)((const uint32_t *)srcu + 1);
+			dstu = (uintptr_t)((uint32_t *)dstu + 1);
+		}
+		if (n & 0x08)
+			*(uint64_t *)dstu = *(const uint64_t *)srcu;
+		return ret;
 	}
 
 	/**
@@ -313,7 +286,7 @@ COPY_BLOCK_128_BACK63:
 	goto COPY_BLOCK_128_BACK63;
 }
 
-#elif defined __AVX2__
+#elif defined RTE_MACHINE_CPUFLAG_AVX2
 
 #define ALIGNMENT_MASK 0x1F
 
@@ -330,8 +303,8 @@ rte_mov16(uint8_t *dst, const uint8_t *src)
 {
 	__m128i xmm0;
 
-	xmm0 = _mm_loadu_si128((const __m128i *)(const void *)src);
-	_mm_storeu_si128((__m128i *)(void *)dst, xmm0);
+	xmm0 = _mm_loadu_si128((const __m128i *)src);
+	_mm_storeu_si128((__m128i *)dst, xmm0);
 }
 
 /**
@@ -343,8 +316,8 @@ rte_mov32(uint8_t *dst, const uint8_t *src)
 {
 	__m256i ymm0;
 
-	ymm0 = _mm256_loadu_si256((const __m256i *)(const void *)src);
-	_mm256_storeu_si256((__m256i *)(void *)dst, ymm0);
+	ymm0 = _mm256_loadu_si256((const __m256i *)src);
+	_mm256_storeu_si256((__m256i *)dst, ymm0);
 }
 
 /**
@@ -372,23 +345,6 @@ rte_mov128(uint8_t *dst, const uint8_t *src)
 }
 
 /**
- * Copy 256 bytes from one location to another,
- * locations should not overlap.
- */
-static __rte_always_inline void
-rte_mov256(uint8_t *dst, const uint8_t *src)
-{
-	rte_mov32((uint8_t *)dst + 0 * 32, (const uint8_t *)src + 0 * 32);
-	rte_mov32((uint8_t *)dst + 1 * 32, (const uint8_t *)src + 1 * 32);
-	rte_mov32((uint8_t *)dst + 2 * 32, (const uint8_t *)src + 2 * 32);
-	rte_mov32((uint8_t *)dst + 3 * 32, (const uint8_t *)src + 3 * 32);
-	rte_mov32((uint8_t *)dst + 4 * 32, (const uint8_t *)src + 4 * 32);
-	rte_mov32((uint8_t *)dst + 5 * 32, (const uint8_t *)src + 5 * 32);
-	rte_mov32((uint8_t *)dst + 6 * 32, (const uint8_t *)src + 6 * 32);
-	rte_mov32((uint8_t *)dst + 7 * 32, (const uint8_t *)src + 7 * 32);
-}
-
-/**
  * Copy 128-byte blocks from one location to another,
  * locations should not overlap.
  */
@@ -398,24 +354,16 @@ rte_mov128blocks(uint8_t *dst, const uint8_t *src, size_t n)
 	__m256i ymm0, ymm1, ymm2, ymm3;
 
 	while (n >= 128) {
-		ymm0 = _mm256_loadu_si256((const __m256i *)(const void *)
-					  ((const uint8_t *)src + 0 * 32));
+		ymm0 = _mm256_loadu_si256((const __m256i *)((const uint8_t *)src + 0 * 32));
 		n -= 128;
-		ymm1 = _mm256_loadu_si256((const __m256i *)(const void *)
-					  ((const uint8_t *)src + 1 * 32));
-		ymm2 = _mm256_loadu_si256((const __m256i *)(const void *)
-					  ((const uint8_t *)src + 2 * 32));
-		ymm3 = _mm256_loadu_si256((const __m256i *)(const void *)
-					  ((const uint8_t *)src + 3 * 32));
+		ymm1 = _mm256_loadu_si256((const __m256i *)((const uint8_t *)src + 1 * 32));
+		ymm2 = _mm256_loadu_si256((const __m256i *)((const uint8_t *)src + 2 * 32));
+		ymm3 = _mm256_loadu_si256((const __m256i *)((const uint8_t *)src + 3 * 32));
 		src = (const uint8_t *)src + 128;
-		_mm256_storeu_si256((__m256i *)(void *)
-				    ((uint8_t *)dst + 0 * 32), ymm0);
-		_mm256_storeu_si256((__m256i *)(void *)
-				    ((uint8_t *)dst + 1 * 32), ymm1);
-		_mm256_storeu_si256((__m256i *)(void *)
-				    ((uint8_t *)dst + 2 * 32), ymm2);
-		_mm256_storeu_si256((__m256i *)(void *)
-				    ((uint8_t *)dst + 3 * 32), ymm3);
+		_mm256_storeu_si256((__m256i *)((uint8_t *)dst + 0 * 32), ymm0);
+		_mm256_storeu_si256((__m256i *)((uint8_t *)dst + 1 * 32), ymm1);
+		_mm256_storeu_si256((__m256i *)((uint8_t *)dst + 2 * 32), ymm2);
+		_mm256_storeu_si256((__m256i *)((uint8_t *)dst + 3 * 32), ymm3);
 		dst = (uint8_t *)dst + 128;
 	}
 }
@@ -423,6 +371,8 @@ rte_mov128blocks(uint8_t *dst, const uint8_t *src, size_t n)
 static __rte_always_inline void *
 rte_memcpy_generic(void *dst, const void *src, size_t n)
 {
+	uintptr_t dstu = (uintptr_t)dst;
+	uintptr_t srcu = (uintptr_t)src;
 	void *ret = dst;
 	size_t dstofss;
 	size_t bits;
@@ -431,7 +381,25 @@ rte_memcpy_generic(void *dst, const void *src, size_t n)
 	 * Copy less than 16 bytes
 	 */
 	if (n < 16) {
-		return rte_mov15_or_less(dst, src, n);
+		if (n & 0x01) {
+			*(uint8_t *)dstu = *(const uint8_t *)srcu;
+			srcu = (uintptr_t)((const uint8_t *)srcu + 1);
+			dstu = (uintptr_t)((uint8_t *)dstu + 1);
+		}
+		if (n & 0x02) {
+			*(uint16_t *)dstu = *(const uint16_t *)srcu;
+			srcu = (uintptr_t)((const uint16_t *)srcu + 1);
+			dstu = (uintptr_t)((uint16_t *)dstu + 1);
+		}
+		if (n & 0x04) {
+			*(uint32_t *)dstu = *(const uint32_t *)srcu;
+			srcu = (uintptr_t)((const uint32_t *)srcu + 1);
+			dstu = (uintptr_t)((uint32_t *)dstu + 1);
+		}
+		if (n & 0x08) {
+			*(uint64_t *)dstu = *(const uint64_t *)srcu;
+		}
+		return ret;
 	}
 
 	/**
@@ -511,7 +479,7 @@ COPY_BLOCK_128_BACK31:
 	goto COPY_BLOCK_128_BACK31;
 }
 
-#else /* __AVX512F__ */
+#else /* RTE_MACHINE_CPUFLAG */
 
 #define ALIGNMENT_MASK 0x0F
 
@@ -528,8 +496,8 @@ rte_mov16(uint8_t *dst, const uint8_t *src)
 {
 	__m128i xmm0;
 
-	xmm0 = _mm_loadu_si128((const __m128i *)(const void *)src);
-	_mm_storeu_si128((__m128i *)(void *)dst, xmm0);
+	xmm0 = _mm_loadu_si128((const __m128i *)(const __m128i *)src);
+	_mm_storeu_si128((__m128i *)dst, xmm0);
 }
 
 /**
@@ -613,25 +581,25 @@ rte_mov256(uint8_t *dst, const uint8_t *src)
 __extension__ ({                                                                                            \
     size_t tmp;                                                                                                \
     while (len >= 128 + 16 - offset) {                                                                      \
-        xmm0 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 0 * 16));                  \
+        xmm0 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 0 * 16));                  \
         len -= 128;                                                                                         \
-        xmm1 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 1 * 16));                  \
-        xmm2 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 2 * 16));                  \
-        xmm3 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 3 * 16));                  \
-        xmm4 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 4 * 16));                  \
-        xmm5 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 5 * 16));                  \
-        xmm6 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 6 * 16));                  \
-        xmm7 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 7 * 16));                  \
-        xmm8 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 8 * 16));                  \
+        xmm1 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 1 * 16));                  \
+        xmm2 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 2 * 16));                  \
+        xmm3 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 3 * 16));                  \
+        xmm4 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 4 * 16));                  \
+        xmm5 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 5 * 16));                  \
+        xmm6 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 6 * 16));                  \
+        xmm7 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 7 * 16));                  \
+        xmm8 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 8 * 16));                  \
         src = (const uint8_t *)src + 128;                                                                   \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 0 * 16), _mm_alignr_epi8(xmm1, xmm0, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 1 * 16), _mm_alignr_epi8(xmm2, xmm1, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 2 * 16), _mm_alignr_epi8(xmm3, xmm2, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 3 * 16), _mm_alignr_epi8(xmm4, xmm3, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 4 * 16), _mm_alignr_epi8(xmm5, xmm4, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 5 * 16), _mm_alignr_epi8(xmm6, xmm5, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 6 * 16), _mm_alignr_epi8(xmm7, xmm6, offset));        \
-        _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 7 * 16), _mm_alignr_epi8(xmm8, xmm7, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 0 * 16), _mm_alignr_epi8(xmm1, xmm0, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 1 * 16), _mm_alignr_epi8(xmm2, xmm1, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 2 * 16), _mm_alignr_epi8(xmm3, xmm2, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 3 * 16), _mm_alignr_epi8(xmm4, xmm3, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 4 * 16), _mm_alignr_epi8(xmm5, xmm4, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 5 * 16), _mm_alignr_epi8(xmm6, xmm5, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 6 * 16), _mm_alignr_epi8(xmm7, xmm6, offset));        \
+        _mm_storeu_si128((__m128i *)((uint8_t *)dst + 7 * 16), _mm_alignr_epi8(xmm8, xmm7, offset));        \
         dst = (uint8_t *)dst + 128;                                                                         \
     }                                                                                                       \
     tmp = len;                                                                                              \
@@ -641,13 +609,13 @@ __extension__ ({                                                                
     dst = (uint8_t *)dst + tmp;                                                                             \
     if (len >= 32 + 16 - offset) {                                                                          \
         while (len >= 32 + 16 - offset) {                                                                   \
-            xmm0 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 0 * 16));              \
+            xmm0 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 0 * 16));              \
             len -= 32;                                                                                      \
-            xmm1 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 1 * 16));              \
-            xmm2 = _mm_loadu_si128((const __m128i *)(const void *)((const uint8_t *)src - offset + 2 * 16));              \
+            xmm1 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 1 * 16));              \
+            xmm2 = _mm_loadu_si128((const __m128i *)((const uint8_t *)src - offset + 2 * 16));              \
             src = (const uint8_t *)src + 32;                                                                \
-            _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 0 * 16), _mm_alignr_epi8(xmm1, xmm0, offset));    \
-            _mm_storeu_si128((__m128i *)(void *)((uint8_t *)dst + 1 * 16), _mm_alignr_epi8(xmm2, xmm1, offset));    \
+            _mm_storeu_si128((__m128i *)((uint8_t *)dst + 0 * 16), _mm_alignr_epi8(xmm1, xmm0, offset));    \
+            _mm_storeu_si128((__m128i *)((uint8_t *)dst + 1 * 16), _mm_alignr_epi8(xmm2, xmm1, offset));    \
             dst = (uint8_t *)dst + 32;                                                                      \
         }                                                                                                   \
         tmp = len;                                                                                          \
@@ -696,6 +664,8 @@ static __rte_always_inline void *
 rte_memcpy_generic(void *dst, const void *src, size_t n)
 {
 	__m128i xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, xmm8;
+	uintptr_t dstu = (uintptr_t)dst;
+	uintptr_t srcu = (uintptr_t)src;
 	void *ret = dst;
 	size_t dstofss;
 	size_t srcofs;
@@ -704,7 +674,25 @@ rte_memcpy_generic(void *dst, const void *src, size_t n)
 	 * Copy less than 16 bytes
 	 */
 	if (n < 16) {
-		return rte_mov15_or_less(dst, src, n);
+		if (n & 0x01) {
+			*(uint8_t *)dstu = *(const uint8_t *)srcu;
+			srcu = (uintptr_t)((const uint8_t *)srcu + 1);
+			dstu = (uintptr_t)((uint8_t *)dstu + 1);
+		}
+		if (n & 0x02) {
+			*(uint16_t *)dstu = *(const uint16_t *)srcu;
+			srcu = (uintptr_t)((const uint16_t *)srcu + 1);
+			dstu = (uintptr_t)((uint16_t *)dstu + 1);
+		}
+		if (n & 0x04) {
+			*(uint32_t *)dstu = *(const uint32_t *)srcu;
+			srcu = (uintptr_t)((const uint32_t *)srcu + 1);
+			dstu = (uintptr_t)((uint32_t *)dstu + 1);
+		}
+		if (n & 0x08) {
+			*(uint64_t *)dstu = *(const uint64_t *)srcu;
+		}
+		return ret;
 	}
 
 	/**
@@ -815,16 +803,34 @@ COPY_BLOCK_64_BACK15:
 	goto COPY_BLOCK_64_BACK15;
 }
 
-#endif /* __AVX512F__ */
+#endif /* RTE_MACHINE_CPUFLAG */
 
 static __rte_always_inline void *
 rte_memcpy_aligned(void *dst, const void *src, size_t n)
 {
 	void *ret = dst;
 
-	/* Copy size < 16 bytes */
+	/* Copy size <= 16 bytes */
 	if (n < 16) {
-		return rte_mov15_or_less(dst, src, n);
+		if (n & 0x01) {
+			*(uint8_t *)dst = *(const uint8_t *)src;
+			src = (const uint8_t *)src + 1;
+			dst = (uint8_t *)dst + 1;
+		}
+		if (n & 0x02) {
+			*(uint16_t *)dst = *(const uint16_t *)src;
+			src = (const uint16_t *)src + 1;
+			dst = (uint16_t *)dst + 1;
+		}
+		if (n & 0x04) {
+			*(uint32_t *)dst = *(const uint32_t *)src;
+			src = (const uint32_t *)src + 1;
+			dst = (uint32_t *)dst + 1;
+		}
+		if (n & 0x08)
+			*(uint64_t *)dst = *(const uint64_t *)src;
+
+		return ret;
 	}
 
 	/* Copy 16 <= size <= 32 bytes */
@@ -867,8 +873,6 @@ rte_memcpy(void *dst, const void *src, size_t n)
 	else
 		return rte_memcpy_generic(dst, src, n);
 }
-
-#undef ALIGNMENT_MASK
 
 #if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION >= 100000)
 #pragma GCC diagnostic pop

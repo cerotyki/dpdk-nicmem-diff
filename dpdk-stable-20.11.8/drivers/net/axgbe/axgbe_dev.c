@@ -892,7 +892,7 @@ static int axgbe_config_rx_threshold(struct axgbe_port *pdata,
 	return 0;
 }
 
-/* Distributing FIFO size */
+/*Distrubting fifo size  */
 static void axgbe_config_rx_fifo_size(struct axgbe_port *pdata)
 {
 	unsigned int fifo_size;

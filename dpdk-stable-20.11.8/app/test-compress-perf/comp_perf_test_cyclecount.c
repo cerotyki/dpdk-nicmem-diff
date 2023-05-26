@@ -76,6 +76,7 @@ cperf_cyclecount_op_setup(struct rte_comp_op **ops,
 
 	for (iter = 0; iter < num_iter; iter++) {
 		uint32_t remaining_ops = mem->total_bufs;
+		uint32_t total_deq_ops = 0;
 		uint32_t total_enq_ops = 0;
 		uint16_t num_enq = 0;
 		uint16_t num_deq = 0;
@@ -135,6 +136,7 @@ cperf_cyclecount_op_setup(struct rte_comp_op **ops,
 			/* instead of the real dequeue operation */
 			num_deq = num_ops;
 
+			total_deq_ops += num_deq;
 			rte_mempool_put_bulk(mem->op_pool,
 					     (void **)ops, num_deq);
 		}
@@ -175,17 +177,16 @@ main_loop(struct cperf_cyclecount_ctx *ctx, enum rte_comp_xform_type type)
 
 	/* one array for both enqueue and dequeue */
 	ops = rte_zmalloc_socket(NULL,
-		(test_data->burst_sz + mem->total_bufs) *
-		sizeof(struct rte_comp_op *),
+		2 * mem->total_bufs * sizeof(struct rte_comp_op *),
 		0, rte_socket_id());
 
 	if (ops == NULL) {
 		RTE_LOG(ERR, USER1,
-			"Can't allocate memory for ops structures\n");
+			"Can't allocate memory for ops strucures\n");
 		return -1;
 	}
 
-	deq_ops = &ops[test_data->burst_sz];
+	deq_ops = &ops[mem->total_bufs];
 
 	if (type == RTE_COMP_COMPRESS) {
 		xform = (struct rte_comp_xform) {
@@ -274,7 +275,7 @@ main_loop(struct cperf_cyclecount_ctx *ctx, enum rte_comp_xform_type type)
 			/* Allocate compression operations */
 			if (ops_needed && rte_mempool_get_bulk(
 						mem->op_pool,
-						(void **)&ops[ops_unused],
+						(void **)ops,
 						ops_needed) != 0) {
 				RTE_LOG(ERR, USER1,
 				      "Could not allocate enough operations\n");
@@ -510,55 +511,38 @@ cperf_cyclecount_test_runner(void *test_ctx)
 	if (cperf_verify_test_runner(&ctx->ver))
 		return EXIT_FAILURE;
 
-	if (test_data->test_op & COMPRESS) {
-		/*
-		 * Run the test twice, discarding the first performance
-		 * results, before the cache is warmed up
-		 */
-		for (i = 0; i < 2; i++) {
-			if (main_loop(ctx, RTE_COMP_COMPRESS) < 0)
-				return EXIT_FAILURE;
-		}
+	/*
+	 * Run the tests twice, discarding the first performance
+	 * results, before the cache is warmed up
+	 */
 
-		ops_enq_retries_comp = ctx->ops_enq_retries;
-		ops_deq_retries_comp = ctx->ops_deq_retries;
-
-		duration_enq_per_op_comp = ctx->duration_enq /
-				(ctx->ver.mem.total_bufs * test_data->num_iter);
-		duration_deq_per_op_comp = ctx->duration_deq /
-				(ctx->ver.mem.total_bufs * test_data->num_iter);
-	} else {
-		ops_enq_retries_comp = 0;
-		ops_deq_retries_comp = 0;
-
-		duration_enq_per_op_comp = 0;
-		duration_deq_per_op_comp = 0;
+	/* C O M P R E S S */
+	for (i = 0; i < 2; i++) {
+		if (main_loop(ctx, RTE_COMP_COMPRESS) < 0)
+			return EXIT_FAILURE;
 	}
 
-	if (test_data->test_op & DECOMPRESS) {
-		/*
-		 * Run the test twice, discarding the first performance
-		 * results, before the cache is warmed up
-		 */
-		for (i = 0; i < 2; i++) {
-			if (main_loop(ctx, RTE_COMP_DECOMPRESS) < 0)
-				return EXIT_FAILURE;
-		}
+	ops_enq_retries_comp = ctx->ops_enq_retries;
+	ops_deq_retries_comp = ctx->ops_deq_retries;
 
-		ops_enq_retries_decomp = ctx->ops_enq_retries;
-		ops_deq_retries_decomp = ctx->ops_deq_retries;
+	duration_enq_per_op_comp = ctx->duration_enq /
+			(ctx->ver.mem.total_bufs * test_data->num_iter);
+	duration_deq_per_op_comp = ctx->duration_deq /
+			(ctx->ver.mem.total_bufs * test_data->num_iter);
 
-		duration_enq_per_op_decomp = ctx->duration_enq /
-				(ctx->ver.mem.total_bufs * test_data->num_iter);
-		duration_deq_per_op_decomp = ctx->duration_deq /
-				(ctx->ver.mem.total_bufs * test_data->num_iter);
-	} else {
-		ops_enq_retries_decomp = 0;
-		ops_deq_retries_decomp = 0;
-
-		duration_enq_per_op_decomp = 0;
-		duration_deq_per_op_decomp = 0;
+	/* D E C O M P R E S S */
+	for (i = 0; i < 2; i++) {
+		if (main_loop(ctx, RTE_COMP_DECOMPRESS) < 0)
+			return EXIT_FAILURE;
 	}
+
+	ops_enq_retries_decomp = ctx->ops_enq_retries;
+	ops_deq_retries_decomp = ctx->ops_deq_retries;
+
+	duration_enq_per_op_decomp = ctx->duration_enq /
+			(ctx->ver.mem.total_bufs * test_data->num_iter);
+	duration_deq_per_op_decomp = ctx->duration_deq /
+			(ctx->ver.mem.total_bufs * test_data->num_iter);
 
 	duration_setup_per_op = ctx->duration_op /
 			(ctx->ver.mem.total_bufs * test_data->num_iter);
@@ -575,7 +559,7 @@ cperf_cyclecount_test_runner(void *test_ctx)
 		"    [D-e] - decompression enqueue\n"
 		"    [D-d] - decompression dequeue\n"
 		"  - Cycles section: number of cycles per 'op' for the following operations:\n"
-		"    setup/op - memory allocation, op configuration and memory deallocation\n"
+		"    setup/op - memory allocation, op configuration and memory dealocation\n"
 		"    [C-e] - compression enqueue\n"
 		"    [C-d] - compression dequeue\n"
 		"    [D-e] - decompression enqueue\n"

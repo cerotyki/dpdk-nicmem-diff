@@ -26,7 +26,7 @@ Setup overview
 
    PVP setup using 2 NICs
 
-In this diagram, each red arrow represents one logical core. This use case
+In this diagram, each red arrow represents one logical core. This use-case
 requires 6 dedicated logical cores. A forwarding configuration with a single
 NIC is also possible, requiring 3 logical cores.
 
@@ -99,7 +99,14 @@ Build Qemu:
 DPDK build
 ~~~~~~~~~~
 
-See :doc:`../linux_gsg/build_dpdk` for details.
+Build DPDK:
+
+   .. code-block:: console
+
+      git clone git://dpdk.org/dpdk
+      cd dpdk
+      export RTE_SDK=$PWD
+      make install T=x86_64-native-linux-gcc DESTDIR=install
 
 
 Testpmd launch
@@ -110,7 +117,7 @@ Testpmd launch
    .. code-block:: console
 
       modprobe vfio-pci
-      usertools/dpdk-devbind -b vfio-pci 0000:11:00.0 0000:11:00.1
+      $RTE_SDK/install/sbin/dpdk-devbind -b vfio-pci 0000:11:00.0 0000:11:00.1
 
    .. Note::
 
@@ -122,7 +129,7 @@ Testpmd launch
 
    .. code-block:: console
 
-      <build_dir>/app/dpdk-testpmd -l 0,2,3,4,5 --socket-mem=1024 -n 4 \
+      $RTE_SDK/install/bin/testpmd -l 0,2,3,4,5 --socket-mem=1024 -n 4 \
           --vdev 'net_vhost0,iface=/tmp/vhost-user1' \
           --vdev 'net_vhost1,iface=/tmp/vhost-user2' -- \
           --portmask=f -i --rxq=1 --txq=1 \
@@ -306,7 +313,14 @@ Guest tuning
 DPDK build
 ~~~~~~~~~~
 
-See :doc:`../linux_gsg/build_dpdk` for details.
+Build DPDK:
+
+   .. code-block:: console
+
+      git clone git://dpdk.org/dpdk
+      cd dpdk
+      export RTE_SDK=$PWD
+      make install T=x86_64-native-linux-gcc DESTDIR=install
 
 
 Testpmd launch
@@ -326,13 +340,13 @@ Bind the virtio-net devices to DPDK:
 
    .. code-block:: console
 
-      usertools/dpdk-devbind.py -b vfio-pci 0000:00:10.0 0000:00:11.0
+      $RTE_SDK/usertools/dpdk-devbind.py -b vfio-pci 0000:00:10.0 0000:00:11.0
 
 Start testpmd:
 
    .. code-block:: console
 
-      <build_dir>/app/dpdk-testpmd -l 0,1,2 --socket-mem 1024 -n 4 \
+      $RTE_SDK/install/bin/testpmd -l 0,1,2 --socket-mem 1024 -n 4 \
           --proc-type auto --file-prefix pg -- \
           --portmask=3 --forward-mode=macswap --port-topology=chained \
           --disable-rss -i --rxq=1 --txq=1 \

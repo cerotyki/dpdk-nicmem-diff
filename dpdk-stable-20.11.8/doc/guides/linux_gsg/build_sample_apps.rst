@@ -1,16 +1,70 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2010-2014 Intel Corporation.
 
-Running Sample Applications
-===========================
+Compiling and Running Sample Applications
+=========================================
 
-The chapter describes how to compile and run applications in a DPDK environment.
+The chapter describes how to compile and run applications in an DPDK environment.
 It also provides a pointer to where sample applications are stored.
+
+.. note::
+
+    Parts of this process can also be done using the setup script described the
+    :ref:`linux_setup_script` section of this document.
 
 Compiling a Sample Application
 ------------------------------
 
-Please refer to :ref:`building_app_using_installed_dpdk` for detail on compiling sample apps.
+Once an DPDK target environment directory has been created (such as ``x86_64-native-linux-gcc``),
+it contains all libraries and header files required to build an application.
+
+When compiling an application in the Linux* environment on the DPDK, the following variables must be exported:
+
+* ``RTE_SDK`` - Points to the DPDK installation directory.
+
+* ``RTE_TARGET`` - Points to the DPDK target environment directory.
+
+The following is an example of creating the ``helloworld`` application, which runs in the DPDK Linux environment.
+This example may be found in the ``${RTE_SDK}/examples`` directory.
+
+The directory contains the ``main.c`` file. This file, when combined with the libraries in the DPDK target environment,
+calls the various functions to initialize the DPDK environment,
+then launches an entry point (dispatch application) for each core to be utilized.
+By default, the binary is generated in the build directory.
+
+.. code-block:: console
+
+    cd examples/helloworld/
+    export RTE_SDK=$HOME/DPDK
+    export RTE_TARGET=x86_64-native-linux-gcc
+
+    make
+        CC main.o
+        LD helloworld
+        INSTALL-APP helloworld
+        INSTALL-MAP helloworld.map
+
+    ls build/app
+        helloworld helloworld.map
+
+.. note::
+
+    In the above example, ``helloworld`` was in the directory structure of the DPDK.
+    However, it could have been located outside the directory structure to keep the DPDK structure intact.
+    In the following case, the ``helloworld`` application is copied to a new directory as a new starting point.
+
+    .. code-block:: console
+
+       export RTE_SDK=/home/user/DPDK
+       cp -r $(RTE_SDK)/examples/helloworld my_rte_app
+       cd my_rte_app/
+       export RTE_TARGET=x86_64-native-linux-gcc
+
+       make
+         CC main.o
+         LD helloworld
+         INSTALL-APP helloworld
+         INSTALL-MAP helloworld.map
 
 Running a Sample Application
 ----------------------------
@@ -48,7 +102,7 @@ The EAL options are as follows:
   Number of memory channels per processor socket.
 
 * ``-b <domain:bus:devid.func>``:
-  Blocklisting of ports; prevent EAL from using specified PCI device
+  Blacklisting of ports; prevent EAL from using specified PCI device
   (multiple ``-b`` options are allowed).
 
 * ``--use-device``:
@@ -66,7 +120,7 @@ The EAL options are as follows:
 
 * ``-d``:
   Add a driver or driver directory to be loaded.
-  The application should use this option to load the PMDs
+  The application should use this option to load the pmd drivers
   that are built as shared libraries.
 
 * ``-m MB``:
@@ -82,7 +136,7 @@ The EAL options are as follows:
 * ``--huge-dir``:
   The directory where hugetlbfs is mounted.
 
-* ``--mbuf-pool-ops-name``:
+* ``mbuf-pool-ops-name``:
   Pool ops name for mbuf to use.
 
 * ``--file-prefix``:
@@ -114,7 +168,7 @@ Copy the DPDK application binary to your target, then run the application as fol
 (assuming the platform has four memory channels per processor socket,
 and that cores 0-3 are present and are to be used for running the application)::
 
-    ./dpdk-helloworld -l 0-3 -n 4
+    ./helloworld -l 0-3 -n 4
 
 .. note::
 
@@ -131,7 +185,7 @@ Each bit of the mask corresponds to the equivalent logical core number as report
 Since these logical core numbers, and their mapping to specific cores on specific NUMA sockets, can vary from platform to platform,
 it is recommended that the core layout for each platform be considered when choosing the coremask/corelist to use in each case.
 
-On initialization of the EAL layer by a DPDK application, the logical cores to be used and their socket location are displayed.
+On initialization of the EAL layer by an DPDK application, the logical cores to be used and their socket location are displayed.
 This information can also be determined for all cores on the system by examining the ``/proc/cpuinfo`` file, for example, by running cat ``/proc/cpuinfo``.
 The physical id attribute listed for each processor indicates the CPU socket to which it belongs.
 This can be useful when using other processors to understand the mapping of the logical cores to the sockets.
@@ -178,7 +232,19 @@ If the DPDK cannot allocate enough memory on each socket, the EAL initialization
 Additional Sample Applications
 ------------------------------
 
-Additional sample applications are included in the DPDK examples directory.
+Additional sample applications are included in the ${RTE_SDK}/examples directory.
 These sample applications may be built and run in a manner similar to that described in earlier sections in this manual.
 In addition, see the *DPDK Sample Applications User Guide* for a description of the application,
 specific instructions on compilation and execution and some explanation of the code.
+
+Additional Test Applications
+----------------------------
+
+In addition, there are two other applications that are built when the libraries are created.
+The source files for these are in the DPDK/app directory and are called test and testpmd.
+Once the libraries are created, they can be found in the build/app directory.
+
+*   The test application provides a variety of specific tests for the various functions in the DPDK.
+
+*   The testpmd application provides a number of different packet throughput tests and
+    examples of features such as how to use the Flow Director found in the Intel® 82599 10 Gigabit Ethernet Controller.

@@ -178,9 +178,10 @@ int enic_get_vnic_config(struct enic *enic)
 
 	enic->vxlan = ENIC_SETTING(enic, VXLAN) &&
 		vnic_dev_capable_vxlan(enic->vdev);
-	enic->geneve = ENIC_SETTING(enic, GENEVE) &&
-		vnic_dev_capable_geneve(enic->vdev);
-
+	if (vnic_dev_capable_geneve(enic->vdev)) {
+		dev_info(NULL, "Geneve with options offload available\n");
+		enic->geneve_opt_avail = 1;
+	}
 	/*
 	 * Default hardware capabilities. enic_dev_init() may add additional
 	 * flags if it enables overlay offloads.

@@ -4,5 +4,6 @@
 includes += include_directories('.')
 
 headers += files(
+        'rte_kni_common.h',
         'rte_os.h',
 )

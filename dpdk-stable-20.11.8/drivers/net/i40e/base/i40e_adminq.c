@@ -468,7 +468,7 @@ enum i40e_status_code i40e_init_arq(struct i40e_hw *hw)
 	/* initialize base registers */
 	ret_code = i40e_config_arq_regs(hw);
 	if (ret_code != I40E_SUCCESS)
-		goto init_config_regs;
+		goto init_adminq_free_rings;
 
 	/* success! */
 	hw->aq.arq.count = hw->aq.num_arq_entries;
@@ -476,10 +476,6 @@ enum i40e_status_code i40e_init_arq(struct i40e_hw *hw)
 
 init_adminq_free_rings:
 	i40e_free_adminq_arq(hw);
-	return ret_code;
-
-init_config_regs:
-	i40e_free_arq_bufs(hw);
 
 init_adminq_exit:
 	return ret_code;
@@ -607,12 +603,6 @@ STATIC void i40e_set_hw_flags(struct i40e_hw *hw)
 		    (aq->api_maj_ver == 1 &&
 		     aq->api_min_ver >= I40E_MINOR_VER_GET_LINK_INFO_X722))
 			hw->flags |= I40E_HW_FLAG_AQ_PHY_ACCESS_CAPABLE;
-
-		if (aq->api_maj_ver > 1 ||
-		    (aq->api_maj_ver == 1 &&
-		     aq->api_min_ver >= I40E_MINOR_VER_FW_REQUEST_FEC_X722))
-			hw->flags |= I40E_HW_FLAG_X722_FEC_REQUEST_CAPABLE;
-
 		/* fall through */
 	default:
 		break;
@@ -652,10 +642,8 @@ enum i40e_status_code i40e_init_adminq(struct i40e_hw *hw)
 {
 	struct i40e_adminq_info *aq = &hw->aq;
 	enum i40e_status_code ret_code;
-	u16 oem_hi = 0, oem_lo = 0;
-	u16 eetrack_hi = 0;
-	u16 eetrack_lo = 0;
-	u16 cfg_ptr = 0;
+	u16 cfg_ptr, oem_hi, oem_lo;
+	u16 eetrack_lo, eetrack_hi;
 	int retry = 0;
 
 	/* verify input for valid configuration */

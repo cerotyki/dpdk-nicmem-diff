@@ -41,8 +41,7 @@ extern "C" {
 static const char * const cryptodev_pmd_valid_params[] = {
 	RTE_CRYPTODEV_PMD_NAME_ARG,
 	RTE_CRYPTODEV_PMD_MAX_NB_QP_ARG,
-	RTE_CRYPTODEV_PMD_SOCKET_ID_ARG,
-	NULL
+	RTE_CRYPTODEV_PMD_SOCKET_ID_ARG
 };
 
 /**
@@ -113,7 +112,7 @@ extern struct rte_cryptodev *rte_cryptodevs;
 
 /**
  * Definitions of all functions exported by a driver through the
- * generic structure of type *crypto_dev_ops* supplied in the
+ * the generic structure of type *crypto_dev_ops* supplied in the
  * *rte_cryptodev* structure associated with a device.
  */
 
@@ -121,7 +120,7 @@ extern struct rte_cryptodev *rte_cryptodevs;
  *	Function used to configure device.
  *
  * @param	dev	Crypto device pointer
- * @param	config	Crypto device configurations
+ *		config	Crypto device configurations
  *
  * @return	Returns 0 on success
  */
@@ -176,8 +175,7 @@ typedef void (*cryptodev_stats_reset_t)(struct rte_cryptodev *dev);
 /**
  * Function used to get specific information of a device.
  *
- * @param	dev		Crypto device pointer
- * @param	dev_info	Pointer to infos structure to populate
+ * @param	dev	Crypto device pointer
  */
 typedef void (*cryptodev_info_get_t)(struct rte_cryptodev *dev,
 				struct rte_cryptodev_info *dev_info);
@@ -214,7 +212,7 @@ typedef int (*cryptodev_queue_pair_release_t)(struct rte_cryptodev *dev,
  *
  * @param	dev		Crypto device pointer
  * @param	nb_objs		number of sessions objects in mempool
- * @param	obj_cache_size	l-core object cache size, see *rte_ring_create*
+ * @param	obj_cache	l-core object cache size, see *rte_ring_create*
  * @param	socket_id	Socket Id to allocate  mempool on.
  *
  * @return
@@ -254,7 +252,7 @@ typedef unsigned int (*cryptodev_asym_get_session_private_size_t)(
  *
  * @param	dev		Crypto device pointer
  * @param	xform		Single or chain of crypto xforms
- * @param	session		Pointer to cryptodev's private session structure
+ * @param	priv_sess	Pointer to cryptodev's private session structure
  * @param	mp		Mempool where the private session is allocated
  *
  * @return
@@ -272,7 +270,7 @@ typedef int (*cryptodev_sym_configure_session_t)(struct rte_cryptodev *dev,
  *
  * @param	dev		Crypto device pointer
  * @param	xform		Single or chain of crypto xforms
- * @param	session		Pointer to cryptodev's private session structure
+ * @param	priv_sess	Pointer to cryptodev's private session structure
  * @param	mp		Mempool where the private session is allocated
  *
  * @return
@@ -318,41 +316,6 @@ typedef uint32_t (*cryptodev_sym_cpu_crypto_process_t)
 	(struct rte_cryptodev *dev, struct rte_cryptodev_sym_session *sess,
 	union rte_crypto_sym_ofs ofs, struct rte_crypto_sym_vec *vec);
 
-/**
- * Typedef that the driver provided to get service context private date size.
- *
- * @param	dev	Crypto device pointer.
- *
- * @return
- *   - On success return the size of the device's service context private data.
- *   - On failure return negative integer.
- */
-typedef int (*cryptodev_sym_get_raw_dp_ctx_size_t)(struct rte_cryptodev *dev);
-
-/**
- * Typedef that the driver provided to configure raw data-path context.
- *
- * @param	dev		Crypto device pointer.
- * @param	qp_id		Crypto device queue pair index.
- * @param	ctx		The raw data-path context data.
- * @param	sess_type	session type.
- * @param	session_ctx	Session context data. If NULL the driver
- *				shall only configure the drv_ctx_data in
- *				ctx buffer. Otherwise the driver shall only
- *				parse the session_ctx to set appropriate
- *				function pointers in ctx.
- * @param	is_update	Set 0 if it is to initialize the ctx.
- *				Set 1 if ctx is initialized and only to update
- *				session context data.
- * @return
- *   - On success return 0.
- *   - On failure return negative integer.
- */
-typedef int (*cryptodev_sym_configure_raw_dp_ctx_t)(
-	struct rte_cryptodev *dev, uint16_t qp_id,
-	struct rte_crypto_raw_dp_ctx *ctx,
-	enum rte_crypto_op_sess_type sess_type,
-	union rte_cryptodev_session_ctx session_ctx, uint8_t is_update);
 
 /** Crypto device operations function pointer table */
 struct rte_cryptodev_ops {
@@ -385,19 +348,8 @@ struct rte_cryptodev_ops {
 	/**< Clear a Crypto sessions private data. */
 	cryptodev_asym_free_session_t asym_session_clear;
 	/**< Clear a Crypto sessions private data. */
-	union {
-		cryptodev_sym_cpu_crypto_process_t sym_cpu_process;
-		/**< process input data synchronously (cpu-crypto). */
-		__extension__
-		struct {
-			cryptodev_sym_get_raw_dp_ctx_size_t
-				sym_get_raw_dp_ctx_size;
-			/**< Get raw data path service context data size. */
-			cryptodev_sym_configure_raw_dp_ctx_t
-				sym_configure_raw_dp_ctx;
-			/**< Initialize raw data path context data. */
-		};
-	};
+	cryptodev_sym_cpu_crypto_process_t sym_cpu_process;
+	/**< process input data synchronously (cpu-crypto). */
 };
 
 
@@ -435,7 +387,7 @@ rte_cryptodev_pmd_release_device(struct rte_cryptodev *cryptodev);
  * PMD assist function to parse initialisation arguments for crypto driver
  * when creating a new crypto PMD device instance.
  *
- * PMD should set default values for that PMD before calling function,
+ * PMD driver should set default values for that PMD before calling function,
  * these default values will be over-written with successfully parsed values
  * from args string.
  *
@@ -491,6 +443,9 @@ rte_cryptodev_pmd_destroy(struct rte_cryptodev *cryptodev);
  *  *
  * @param	dev	Pointer to cryptodev struct
  * @param	event	Crypto device interrupt event type.
+ *
+ * @return
+ *  void
  */
 void rte_cryptodev_pmd_callback_process(struct rte_cryptodev *dev,
 				enum rte_cryptodev_event_type event);
@@ -538,7 +493,7 @@ set_sym_session_private_data(struct rte_cryptodev_sym_session *sess,
 		uint8_t driver_id, void *private_data)
 {
 	if (unlikely(sess->nb_drivers <= driver_id)) {
-		CDEV_LOG_ERR("Set private data for driver %u not allowed",
+		CDEV_LOG_ERR("Set private data for driver %u not allowed\n",
 				driver_id);
 		return;
 	}

@@ -5,10 +5,6 @@
 #ifndef _RTE_WINDOWS_H_
 #define _RTE_WINDOWS_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
  * @file Windows-specific facilities
  *
@@ -29,13 +25,13 @@ extern "C" {
 #include <psapi.h>
 #include <setupapi.h>
 #include <winioctl.h>
+#include <devguid.h>
 
 /* Have GUIDs defined. */
 #ifndef INITGUID
 #define INITGUID
 #endif
 #include <initguid.h>
-#include <devguid.h>
 #include <rte_log.h>
 
 /**
@@ -45,9 +41,5 @@ extern "C" {
 	RTE_LOG(DEBUG, EAL, RTE_FMT("GetLastError()=%lu: " \
 		RTE_FMT_HEAD(__VA_ARGS__,) "\n", GetLastError(), \
 		RTE_FMT_TAIL(__VA_ARGS__,)))
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* _RTE_WINDOWS_H_ */

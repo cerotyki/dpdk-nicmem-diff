@@ -3,9 +3,9 @@
 
 if not is_linux
 	build = false
-	reason = 'only supported on Linux'
+	reason = 'only supported on linux'
 endif
-dep = dependency('libcrypto', required: false, method: 'pkg-config')
+dep = dependency('libcrypto', required: false)
 if not dep.found()
 	build = false
 	reason = 'missing dependency, "libcrypto"'

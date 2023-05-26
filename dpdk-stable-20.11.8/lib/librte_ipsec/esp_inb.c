@@ -415,7 +415,7 @@ trs_process_check(struct rte_mbuf *mb, struct rte_mbuf **ml,
 
 /*
  * packet checks for tunnel mode:
- * - same as for transport mode
+ * - same as for trasnport mode
  * - esp tail next proto contains expected for that SA value
  */
 static inline int32_t
@@ -501,7 +501,7 @@ trs_process_step3(struct rte_mbuf *mb)
 static inline void
 tun_process_step3(struct rte_mbuf *mb, uint64_t txof_msk, uint64_t txof_val)
 {
-	/* reset mbuf metadata: L2/L3 len, packet type */
+	/* reset mbuf metatdata: L2/L3 len, packet type */
 	mb->packet_type = RTE_PTYPE_UNKNOWN;
 	mb->tx_offload = (mb->tx_offload & txof_msk) | txof_val;
 
@@ -693,9 +693,9 @@ cpu_inb_pkt_prepare(const struct rte_ipsec_session *ss,
 	struct rte_ipsec_sa *sa;
 	struct replay_sqn *rsn;
 	union sym_op_data icv;
-	struct rte_crypto_va_iova_ptr iv[num];
-	struct rte_crypto_va_iova_ptr aad[num];
-	struct rte_crypto_va_iova_ptr dgst[num];
+	void *iv[num];
+	void *aad[num];
+	void *dgst[num];
 	uint32_t dr[num];
 	uint32_t l4ofs[num];
 	uint32_t clen[num];
@@ -720,9 +720,9 @@ cpu_inb_pkt_prepare(const struct rte_ipsec_session *ss,
 				l4ofs + k, rc, ivbuf[k]);
 
 			/* fill iv, digest and aad */
-			iv[k].va = ivbuf[k];
-			aad[k].va = icv.va + sa->icv_len;
-			dgst[k++].va = icv.va;
+			iv[k] = ivbuf[k];
+			aad[k] = icv.va + sa->icv_len;
+			dgst[k++] = icv.va;
 		} else {
 			dr[i - k] = i;
 			rte_errno = -rc;

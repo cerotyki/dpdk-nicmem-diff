@@ -24,6 +24,7 @@
 #include <sys/un.h>
 #include <time.h>
 
+#include <rte_atomic.h>
 #include <rte_ethdev_driver.h>
 #include <rte_bus_pci.h>
 #include <rte_mbuf.h>
@@ -38,7 +39,6 @@
 #include <mlx5_devx_cmds.h>
 #include <mlx5_common.h>
 #include <mlx5_malloc.h>
-#include <mlx5_nl.h>
 
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
@@ -144,17 +144,13 @@ struct ethtool_link_settings {
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx5_get_ifname(const struct rte_eth_dev *dev, char (*ifname)[MLX5_NAMESIZE])
+mlx5_get_ifname(const struct rte_eth_dev *dev, char (*ifname)[IF_NAMESIZE])
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int ifindex;
 
 	MLX5_ASSERT(priv);
 	MLX5_ASSERT(priv->sh);
-	if (priv->bond_ifindex > 0) {
-		memcpy(ifname, priv->bond_name, MLX5_NAMESIZE);
-		return 0;
-	}
 	ifindex = mlx5_ifindex(dev);
 	if (!ifindex) {
 		if (!priv->representor)
@@ -406,7 +402,7 @@ mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev,
 	}
 	link_speed = ethtool_cmd_speed(&edata);
 	if (link_speed == -1)
-		dev_link.link_speed = ETH_SPEED_NUM_UNKNOWN;
+		dev_link.link_speed = ETH_SPEED_NUM_NONE;
 	else
 		dev_link.link_speed = link_speed;
 	priv->link_speed_capa = 0;
@@ -426,6 +422,11 @@ mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev,
 				ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX);
 	dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 			ETH_LINK_SPEED_FIXED);
+	if (((dev_link.link_speed && !dev_link.link_status) ||
+	     (!dev_link.link_speed && dev_link.link_status))) {
+		rte_errno = EAGAIN;
+		return -rte_errno;
+	}
 	*link = dev_link;
 	return 0;
 }
@@ -513,8 +514,8 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev,
 			dev->data->port_id, strerror(rte_errno));
 		return ret;
 	}
-	dev_link.link_speed = (ecmd->speed == UINT32_MAX) ?
-				ETH_SPEED_NUM_UNKNOWN : ecmd->speed;
+	dev_link.link_speed = (ecmd->speed == UINT32_MAX) ? ETH_SPEED_NUM_NONE :
+							    ecmd->speed;
 	sc = ecmd->link_mode_masks[0] |
 		((uint64_t)ecmd->link_mode_masks[1] << 32);
 	priv->link_speed_capa = 0;
@@ -567,6 +568,11 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev,
 				ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX);
 	dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 				  ETH_LINK_SPEED_FIXED);
+	if (((dev_link.link_speed && !dev_link.link_status) ||
+	     (!dev_link.link_speed && dev_link.link_status))) {
+		rte_errno = EAGAIN;
+		return -rte_errno;
+	}
 	*link = dev_link;
 	return 0;
 }
@@ -726,60 +732,9 @@ mlx5_dev_interrupt_device_fatal(struct mlx5_dev_ctx_shared *sh)
 		dev = &rte_eth_devices[sh->port[i].ih_port_id];
 		MLX5_ASSERT(dev);
 		if (dev->data->dev_conf.intr_conf.rmv)
-			rte_eth_dev_callback_process
+			_rte_eth_dev_callback_process
 				(dev, RTE_ETH_EVENT_INTR_RMV, NULL);
 	}
-}
-
-static void
-mlx5_dev_interrupt_nl_cb(struct nlmsghdr *hdr, void *cb_arg)
-{
-	struct mlx5_dev_ctx_shared *sh = cb_arg;
-	uint32_t i;
-	uint32_t if_index;
-
-	if (mlx5_nl_parse_link_status_update(hdr, &if_index) < 0)
-		return;
-	for (i = 0; i < sh->max_port; i++) {
-		struct mlx5_dev_shared_port *port = &sh->port[i];
-		struct rte_eth_dev *dev;
-		struct mlx5_priv *priv;
-		bool configured;
-
-		if (port->nl_ih_port_id >= RTE_MAX_ETHPORTS)
-			continue;
-		dev = &rte_eth_devices[port->nl_ih_port_id];
-		configured = dev->process_private != NULL;
-		/* Probing may initiate an LSC before configuration is done. */
-		if (configured && !dev->data->dev_conf.intr_conf.lsc)
-			break;
-		priv = dev->data->dev_private;
-		if (priv->if_index == if_index) {
-			/* Block logical LSC events. */
-			uint16_t prev_status = dev->data->dev_link.link_status;
-
-			if (mlx5_link_update(dev, 0) < 0)
-				DRV_LOG(ERR, "Failed to update link status: %s",
-					rte_strerror(rte_errno));
-			else if (prev_status != dev->data->dev_link.link_status)
-				rte_eth_dev_callback_process
-					(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
-			break;
-		}
-	}
-}
-
-void
-mlx5_dev_interrupt_handler_nl(void *arg)
-{
-	struct mlx5_dev_ctx_shared *sh = arg;
-	int nlsk_fd = sh->intr_handle_nl.fd;
-
-	if (nlsk_fd < 0)
-		return;
-	if (mlx5_nl_read_events(nlsk_fd, mlx5_dev_interrupt_nl_cb, sh) < 0)
-		DRV_LOG(ERR, "Failed to process Netlink events: %s",
-			rte_strerror(rte_errno));
 }
 
 /**
@@ -845,6 +800,18 @@ mlx5_dev_interrupt_handler(void *cb_arg)
 		tmp = sh->port[tmp - 1].ih_port_id;
 		dev = &rte_eth_devices[tmp];
 		MLX5_ASSERT(dev);
+		if ((event.event_type == IBV_EVENT_PORT_ACTIVE ||
+		     event.event_type == IBV_EVENT_PORT_ERR) &&
+			dev->data->dev_conf.intr_conf.lsc) {
+			mlx5_glue->ack_async_event(&event);
+			if (mlx5_link_update(dev, 0) == -EAGAIN) {
+				usleep(0);
+				continue;
+			}
+			_rte_eth_dev_callback_process
+				(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+			continue;
+		}
 		DRV_LOG(DEBUG,
 			"port %u cannot handle an unknown event (type %d)",
 			dev->data->port_id, event.event_type);
@@ -1053,9 +1020,6 @@ mlx5_sysfs_check_switch_info(bool device_dir,
 		/* New representors naming schema. */
 		switch_info->representor = 1;
 		break;
-	default:
-		switch_info->master = device_dir;
-		break;
 	}
 }
 
@@ -1074,8 +1038,7 @@ int
 mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 {
 	char ifname[IF_NAMESIZE];
-	char *port_name = NULL;
-	size_t port_name_size = 0;
+	char port_name[IF_NAMESIZE];
 	FILE *file;
 	struct mlx5_switch_info data = {
 		.master = 0,
@@ -1088,7 +1051,7 @@ mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 	bool port_switch_id_set = false;
 	bool device_dir = false;
 	char c;
-	ssize_t line_size;
+	int ret;
 
 	if (!if_indextoname(ifindex, ifname)) {
 		rte_errno = errno;
@@ -1104,22 +1067,10 @@ mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 
 	file = fopen(phys_port_name, "rb");
 	if (file != NULL) {
-		char *tail_nl;
-
-		line_size = getline(&port_name, &port_name_size, file);
-		if (line_size < 0) {
-			fclose(file);
-			rte_errno = errno;
-			return -rte_errno;
-		} else if (line_size > 0) {
-			/* Remove tailing newline character. */
-			tail_nl = strchr(port_name, '\n');
-			if (tail_nl)
-				*tail_nl = '\0';
-			mlx5_translate_port_name(port_name, &data);
-		}
-		free(port_name);
+		ret = fscanf(file, "%" RTE_STR(IF_NAMESIZE) "s", port_name);
 		fclose(file);
+		if (ret == 1)
+			mlx5_translate_port_name(port_name, &data);
 	}
 	file = fopen(phys_switch_id, "rb");
 	if (file == NULL) {
@@ -1151,58 +1102,6 @@ mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 }
 
 /**
- * Get bond information associated with network interface.
- *
- * @param pf_ifindex
- *   Network interface index of bond slave interface
- * @param[out] ifindex
- *   Pointer to bond ifindex.
- * @param[out] ifname
- *   Pointer to bond ifname.
- *
- * @return
- *   0 on success, a negative errno value otherwise and rte_errno is set.
- */
-int
-mlx5_sysfs_bond_info(unsigned int pf_ifindex, unsigned int *ifindex,
-		     char *ifname)
-{
-	char name[IF_NAMESIZE];
-	FILE *file;
-	unsigned int index;
-	int ret;
-
-	if (!if_indextoname(pf_ifindex, name) || !strlen(name)) {
-		rte_errno = errno;
-		return -rte_errno;
-	}
-	MKSTR(bond_if, "/sys/class/net/%s/master/ifindex", name);
-	/* read bond ifindex */
-	file = fopen(bond_if, "rb");
-	if (file == NULL) {
-		rte_errno = errno;
-		return -rte_errno;
-	}
-	ret = fscanf(file, "%u", &index);
-	fclose(file);
-	if (ret <= 0) {
-		rte_errno = errno;
-		return -rte_errno;
-	}
-	if (ifindex)
-		*ifindex = index;
-
-	/* read bond device name from symbol link */
-	if (ifname) {
-		if (!if_indextoname(index, ifname)) {
-			rte_errno = errno;
-			return -rte_errno;
-		}
-	}
-	return 0;
-}
-
-/**
  * DPDK callback to retrieve plug-in module EEPROM information (type and size).
  *
  * @param dev
@@ -1225,7 +1124,7 @@ mlx5_get_module_info(struct rte_eth_dev *dev,
 	};
 	int ret = 0;
 
-	if (!dev) {
+	if (!dev || !modinfo) {
 		DRV_LOG(WARNING, "missing argument, cannot get module info");
 		rte_errno = EINVAL;
 		return -rte_errno;
@@ -1259,7 +1158,7 @@ int mlx5_get_module_eeprom(struct rte_eth_dev *dev,
 	struct ifreq ifr;
 	int ret = 0;
 
-	if (!dev) {
+	if (!dev || !info) {
 		DRV_LOG(WARNING, "missing argument, cannot get module eeprom");
 		rte_errno = EINVAL;
 		return -rte_errno;
@@ -1371,71 +1270,71 @@ mlx5_os_get_stats_n(struct rte_eth_dev *dev)
 
 static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 	{
-		.dpdk_name = "rx_unicast_bytes",
+		.dpdk_name = "rx_port_unicast_bytes",
 		.ctr_name = "rx_vport_unicast_bytes",
 	},
 	{
-		.dpdk_name = "rx_multicast_bytes",
+		.dpdk_name = "rx_port_multicast_bytes",
 		.ctr_name = "rx_vport_multicast_bytes",
 	},
 	{
-		.dpdk_name = "rx_broadcast_bytes",
+		.dpdk_name = "rx_port_broadcast_bytes",
 		.ctr_name = "rx_vport_broadcast_bytes",
 	},
 	{
-		.dpdk_name = "rx_unicast_packets",
+		.dpdk_name = "rx_port_unicast_packets",
 		.ctr_name = "rx_vport_unicast_packets",
 	},
 	{
-		.dpdk_name = "rx_multicast_packets",
+		.dpdk_name = "rx_port_multicast_packets",
 		.ctr_name = "rx_vport_multicast_packets",
 	},
 	{
-		.dpdk_name = "rx_broadcast_packets",
+		.dpdk_name = "rx_port_broadcast_packets",
 		.ctr_name = "rx_vport_broadcast_packets",
 	},
 	{
-		.dpdk_name = "tx_unicast_bytes",
+		.dpdk_name = "tx_port_unicast_bytes",
 		.ctr_name = "tx_vport_unicast_bytes",
 	},
 	{
-		.dpdk_name = "tx_multicast_bytes",
+		.dpdk_name = "tx_port_multicast_bytes",
 		.ctr_name = "tx_vport_multicast_bytes",
 	},
 	{
-		.dpdk_name = "tx_broadcast_bytes",
+		.dpdk_name = "tx_port_broadcast_bytes",
 		.ctr_name = "tx_vport_broadcast_bytes",
 	},
 	{
-		.dpdk_name = "tx_unicast_packets",
+		.dpdk_name = "tx_port_unicast_packets",
 		.ctr_name = "tx_vport_unicast_packets",
 	},
 	{
-		.dpdk_name = "tx_multicast_packets",
+		.dpdk_name = "tx_port_multicast_packets",
 		.ctr_name = "tx_vport_multicast_packets",
 	},
 	{
-		.dpdk_name = "tx_broadcast_packets",
+		.dpdk_name = "tx_port_broadcast_packets",
 		.ctr_name = "tx_vport_broadcast_packets",
 	},
 	{
-		.dpdk_name = "rx_wqe_errors",
+		.dpdk_name = "rx_wqe_err",
 		.ctr_name = "rx_wqe_err",
 	},
 	{
-		.dpdk_name = "rx_phy_crc_errors",
+		.dpdk_name = "rx_crc_errors_phy",
 		.ctr_name = "rx_crc_errors_phy",
 	},
 	{
-		.dpdk_name = "rx_phy_in_range_len_errors",
+		.dpdk_name = "rx_in_range_len_errors_phy",
 		.ctr_name = "rx_in_range_len_errors_phy",
 	},
 	{
-		.dpdk_name = "rx_phy_symbol_errors",
+		.dpdk_name = "rx_symbol_err_phy",
 		.ctr_name = "rx_symbol_err_phy",
 	},
 	{
-		.dpdk_name = "tx_phy_errors",
+		.dpdk_name = "tx_errors_phy",
 		.ctr_name = "tx_errors_phy",
 	},
 	{
@@ -1444,44 +1343,44 @@ static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 		.dev = 1,
 	},
 	{
-		.dpdk_name = "tx_phy_packets",
+		.dpdk_name = "tx_packets_phy",
 		.ctr_name = "tx_packets_phy",
 	},
 	{
-		.dpdk_name = "rx_phy_packets",
+		.dpdk_name = "rx_packets_phy",
 		.ctr_name = "rx_packets_phy",
 	},
 	{
-		.dpdk_name = "tx_phy_discard_packets",
+		.dpdk_name = "tx_discards_phy",
 		.ctr_name = "tx_discards_phy",
 	},
 	{
-		.dpdk_name = "rx_phy_discard_packets",
+		.dpdk_name = "rx_discards_phy",
 		.ctr_name = "rx_discards_phy",
 	},
 	{
-		.dpdk_name = "tx_phy_bytes",
+		.dpdk_name = "tx_bytes_phy",
 		.ctr_name = "tx_bytes_phy",
 	},
 	{
-		.dpdk_name = "rx_phy_bytes",
+		.dpdk_name = "rx_bytes_phy",
 		.ctr_name = "rx_bytes_phy",
 	},
 	/* Representor only */
 	{
-		.dpdk_name = "rx_vport_packets",
+		.dpdk_name = "rx_packets",
 		.ctr_name = "vport_rx_packets",
 	},
 	{
-		.dpdk_name = "rx_vport_bytes",
+		.dpdk_name = "rx_bytes",
 		.ctr_name = "vport_rx_bytes",
 	},
 	{
-		.dpdk_name = "tx_vport_packets",
+		.dpdk_name = "tx_packets",
 		.ctr_name = "vport_tx_packets",
 	},
 	{
-		.dpdk_name = "tx_vport_bytes",
+		.dpdk_name = "tx_bytes",
 		.ctr_name = "vport_tx_bytes",
 	},
 };

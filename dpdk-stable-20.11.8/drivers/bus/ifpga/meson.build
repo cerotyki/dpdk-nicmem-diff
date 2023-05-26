@@ -8,5 +8,5 @@ if is_windows
 endif
 
 deps += ['pci', 'kvargs', 'rawdev']
-headers = files('rte_bus_ifpga.h')
+install_headers('rte_bus_ifpga.h')
 sources = files('ifpga_common.c', 'ifpga_bus.c')

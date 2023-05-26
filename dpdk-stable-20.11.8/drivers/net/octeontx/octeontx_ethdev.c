@@ -25,11 +25,6 @@
 #include "octeontx_rxtx.h"
 #include "octeontx_logs.h"
 
-/* Useful in stopping/closing event device if no of
- * eth ports are using it.
- */
-uint16_t evdev_refcnt;
-
 struct evdev_priv_data {
 	OFFLOAD_FLAGS; /*Sequence should not be changed */
 } __rte_cache_aligned;
@@ -232,9 +227,9 @@ octeontx_link_status_poll(void *arg)
 			octeontx_link_status_update(nic, &link);
 			octeontx_link_status_print(dev, &link);
 			rte_eth_linkstatus_set(dev, &link);
-			rte_eth_dev_callback_process(dev,
-						     RTE_ETH_EVENT_INTR_LSC,
-						     NULL);
+			_rte_eth_dev_callback_process(dev,
+						      RTE_ETH_EVENT_INTR_LSC,
+						      NULL);
 		}
 	}
 
@@ -483,7 +478,7 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static int
+static void
 octeontx_dev_close(struct rte_eth_dev *dev)
 {
 	struct octeontx_txq *txq = NULL;
@@ -492,14 +487,8 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
 
-	/* Stopping/closing event device once all eth ports are closed. */
-	if (__atomic_sub_fetch(&evdev_refcnt, 1, __ATOMIC_ACQUIRE) == 0) {
-		rte_event_dev_stop(nic->evdev);
-		rte_event_dev_close(nic->evdev);
-	}
+	rte_event_dev_close(nic->evdev);
 
 	octeontx_dev_flow_ctrl_fini(dev);
 
@@ -520,9 +509,14 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 		rte_free(txq);
 	}
 
+	/* Free MAC address table */
+	rte_free(dev->data->mac_addrs);
+	dev->data->mac_addrs = NULL;
+
 	octeontx_port_close(nic);
 
-	return 0;
+	dev->tx_pkt_burst = NULL;
+	dev->rx_pkt_burst = NULL;
 }
 
 static int
@@ -561,7 +555,7 @@ octeontx_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 	if (rc)
 		return rc;
 
-	if (frame_size > OCCTX_L2_MAX_LEN)
+	if (frame_size > RTE_ETHER_MAX_LEN)
 		nic->rx_offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		nic->rx_offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -682,7 +676,7 @@ error:
 	return ret;
 }
 
-static int
+static void
 octeontx_dev_stop(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
@@ -690,18 +684,20 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	rte_event_dev_stop(nic->evdev);
+
 	ret = octeontx_port_stop(nic);
 	if (ret < 0) {
 		octeontx_log_err("failed to req stop port %d res=%d",
 					nic->port_id, ret);
-		return ret;
+		return;
 	}
 
 	ret = octeontx_pki_port_stop(nic->port_id);
 	if (ret < 0) {
 		octeontx_log_err("failed to stop pki port %d res=%d",
 					nic->port_id, ret);
-		return ret;
+		return;
 	}
 
 	ret = octeontx_pko_channel_stop(nic->base_ochan);
@@ -709,10 +705,8 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 		octeontx_log_err("failed to stop channel %d VF%d %d %d",
 			     nic->base_ochan, nic->port_id, nic->num_tx_queues,
 			     ret);
-		return ret;
+		return;
 	}
-
-	return 0;
 }
 
 static int
@@ -874,6 +868,7 @@ octeontx_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->max_mac_addrs =
 				octeontx_bgx_port_mac_entries_get(nic->port_id);
+	dev_info->max_rx_pktlen = PKI_MAX_PKTLEN;
 	dev_info->max_rx_queues = 1;
 	dev_info->max_tx_queues = PKO_MAX_NUM_DQ;
 	dev_info->min_rx_bufsize = 0;
@@ -1109,7 +1104,7 @@ octeontx_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 
 	/* Verify queue index */
 	if (qidx >= dev->data->nb_rx_queues) {
-		octeontx_log_err("QID %d not supported (0 - %d available)\n",
+		octeontx_log_err("QID %d not supporteded (0 - %d available)\n",
 				qidx, (dev->data->nb_rx_queues - 1));
 		return -ENOTSUP;
 	}
@@ -1353,7 +1348,6 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	nic->pko_vfid = pko_vfid;
 	nic->port_id = port;
 	nic->evdev = evdev;
-	__atomic_add_fetch(&evdev_refcnt, 1, __ATOMIC_ACQUIRE);
 
 	res = octeontx_port_open(nic);
 	if (res < 0)
@@ -1369,6 +1363,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 
 	eth_dev->device = &dev->device;
 	eth_dev->intr_handle = NULL;
+	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->data->numa_node = dev->device.numa_node;
 
 	data->port_id = eth_dev->data->port_id;
@@ -1469,9 +1464,10 @@ octeontx_remove(struct rte_vdev_device *dev)
 	for (i = 0; i < OCTEONTX_VDEV_DEFAULT_MAX_NR_PORT; i++) {
 		sprintf(octtx_name, "eth_octeontx_%d", i);
 
+		/* reserve an ethdev entry */
 		eth_dev = rte_eth_dev_allocated(octtx_name);
 		if (eth_dev == NULL)
-			continue; /* port already released */
+			return -ENODEV;
 
 		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 			rte_eth_dev_release_port(eth_dev);
@@ -1481,8 +1477,9 @@ octeontx_remove(struct rte_vdev_device *dev)
 		nic = octeontx_pmd_priv(eth_dev);
 		rte_event_dev_stop(nic->evdev);
 		PMD_INIT_LOG(INFO, "Closing octeontx device %s", octtx_name);
-		octeontx_dev_close(eth_dev);
+
 		rte_eth_dev_release_port(eth_dev);
+		rte_event_dev_close(nic->evdev);
 	}
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
@@ -1603,7 +1600,6 @@ octeontx_probe(struct rte_vdev_device *dev)
 		}
 	}
 
-	__atomic_store_n(&evdev_refcnt, 0, __ATOMIC_RELEASE);
 	/*
 	 * Do 1:1 links for ports & queues. All queues would be mapped to
 	 * one port. If there are more ports than queues, then some ports

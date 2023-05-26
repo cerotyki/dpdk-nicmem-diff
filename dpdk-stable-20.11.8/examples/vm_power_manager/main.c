@@ -31,13 +31,13 @@
 #include "vm_power_cli.h"
 #include "oob_monitor.h"
 #include "parse.h"
-#ifdef RTE_NET_IXGBE
+#ifdef RTE_LIBRTE_IXGBE_PMD
 #include <rte_pmd_ixgbe.h>
 #endif
-#ifdef RTE_NET_I40E
+#ifdef RTE_LIBRTE_I40E_PMD
 #include <rte_pmd_i40e.h>
 #endif
-#ifdef RTE_NET_BNXT
+#ifdef RTE_LIBRTE_BNXT_PMD
 #include <rte_pmd_bnxt.h>
 #endif
 
@@ -206,7 +206,6 @@ parse_args(int argc, char **argv)
 			}
 			if (branch_ratio <= 0.0 || branch_ratio > 100.0) {
 				printf("invalid branch ratio specified\n");
-				free(oob_enable);
 				return -1;
 			}
 			for (i = 0; i < ci->core_count; i++) {
@@ -247,7 +246,6 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid, count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
-	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -271,10 +269,15 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				rte_eth_link_to_str(link_status_text,
-					sizeof(link_status_text), &link);
-				printf("Port %d %s\n", portid,
-				       link_status_text);
+				if (link.link_status)
+					printf("Port %d Link Up - speed %u "
+						"Mbps - %s\n", (uint16_t)portid,
+						(unsigned int)link.link_speed,
+				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+					("full-duplex") : ("half-duplex"));
+				else
+					printf("Port %d Link Down\n",
+						(uint16_t)portid);
 				continue;
 			}
 		       /* clear all_ports_up flag if any link down */
@@ -394,20 +397,20 @@ main(int argc, char **argv)
 					"Cannot init port %"PRIu8 "\n",
 					portid);
 
-			for (w = 0; w < RTE_POWER_MAX_VFS; w++) {
+			for (w = 0; w < MAX_VFS; w++) {
 				eth.addr_bytes[5] = w + 0xf0;
 
 				ret = -ENOTSUP;
-#ifdef RTE_NET_IXGBE
+#ifdef RTE_LIBRTE_IXGBE_PMD
 				ret = rte_pmd_ixgbe_set_vf_mac_addr(portid,
 							w, &eth);
 #endif
-#ifdef RTE_NET_I40E
+#ifdef RTE_LIBRTE_I40E_PMD
 				if (ret == -ENOTSUP)
 					ret = rte_pmd_i40e_set_vf_mac_addr(
 							portid, w, &eth);
 #endif
-#ifdef RTE_NET_BNXT
+#ifdef RTE_LIBRTE_BNXT_PMD
 				if (ret == -ENOTSUP)
 					ret = rte_pmd_bnxt_set_vf_mac_addr(
 							portid, w, &eth);
@@ -467,9 +470,6 @@ main(int argc, char **argv)
 	rte_eal_mp_wait_lcore();
 
 	free(ci->cd);
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 
 	return 0;
 }

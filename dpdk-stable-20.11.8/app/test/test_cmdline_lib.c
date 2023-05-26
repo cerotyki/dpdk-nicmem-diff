@@ -46,37 +46,28 @@ complete_buffer(__rte_unused struct rdline *rdl,
 static int
 test_cmdline_parse_fns(void)
 {
-	struct cmdline *cl;
-	cmdline_parse_ctx_t ctx;
+	struct cmdline cl;
 	int i = 0;
 	char dst[CMDLINE_TEST_BUFSIZE];
 
-	cl = cmdline_new(&ctx, "prompt", -1, -1);
-	if (cl == NULL) {
-		printf("Error: cannot create cmdline to test parse fns!\n");
-		return -1;
-	}
-
 	if (cmdline_parse(NULL, "buffer") >= 0)
 		goto error;
-	if (cmdline_parse(cl, NULL) >= 0)
+	if (cmdline_parse(&cl, NULL) >= 0)
 		goto error;
 
 	if (cmdline_complete(NULL, "buffer", &i, dst, sizeof(dst)) >= 0)
 		goto error;
-	if (cmdline_complete(cl, NULL, &i, dst, sizeof(dst)) >= 0)
+	if (cmdline_complete(&cl, NULL, &i, dst, sizeof(dst)) >= 0)
 		goto error;
-	if (cmdline_complete(cl, "buffer", NULL, dst, sizeof(dst)) >= 0)
+	if (cmdline_complete(&cl, "buffer", NULL, dst, sizeof(dst)) >= 0)
 		goto error;
-	if (cmdline_complete(cl, "buffer", &i, NULL, sizeof(dst)) >= 0)
+	if (cmdline_complete(&cl, "buffer", &i, NULL, sizeof(dst)) >= 0)
 		goto error;
 
-	cmdline_free(cl);
 	return 0;
 
 error:
 	printf("Error: function accepted null parameter!\n");
-	cmdline_free(cl);
 	return -1;
 }
 
@@ -142,45 +133,32 @@ static int
 test_cmdline_socket_fns(void)
 {
 	cmdline_parse_ctx_t ctx;
-	struct cmdline *cl;
 
-	cl = cmdline_stdin_new(NULL, "prompt");
-	if (cl != NULL)
+	if (cmdline_stdin_new(NULL, "prompt") != NULL)
 		goto error;
-	cl = cmdline_stdin_new(&ctx, NULL);
-	if (cl != NULL)
+	if (cmdline_stdin_new(&ctx, NULL) != NULL)
 		goto error;
-	cl = cmdline_file_new(NULL, "prompt", "/dev/null");
-	if (cl != NULL)
+	if (cmdline_file_new(NULL, "prompt", "/dev/null") != NULL)
 		goto error;
-	cl = cmdline_file_new(&ctx, NULL, "/dev/null");
-	if (cl != NULL)
+	if (cmdline_file_new(&ctx, NULL, "/dev/null") != NULL)
 		goto error;
-	cl = cmdline_file_new(&ctx, "prompt", NULL);
-	if (cl != NULL)
+	if (cmdline_file_new(&ctx, "prompt", NULL) != NULL)
 		goto error;
-	cl = cmdline_file_new(&ctx, "prompt", "-/invalid/~/path");
-	if (cl != NULL) {
+	if (cmdline_file_new(&ctx, "prompt", "-/invalid/~/path") != NULL) {
 		printf("Error: succeeded in opening invalid file for reading!");
-		cmdline_free(cl);
 		return -1;
 	}
-	cl = cmdline_file_new(&ctx, "prompt", "/dev/null");
-	if (cl == NULL) {
+	if (cmdline_file_new(&ctx, "prompt", "/dev/null") == NULL) {
 		printf("Error: failed to open /dev/null for reading!");
 		return -1;
 	}
-	cmdline_free(cl);
-	cl = NULL;
 
 	/* void functions */
 	cmdline_stdin_exit(NULL);
 
-	cmdline_free(cl);
 	return 0;
 error:
 	printf("Error: function accepted null parameter!\n");
-	cmdline_free(cl);
 	return -1;
 }
 
@@ -188,21 +166,20 @@ static int
 test_cmdline_fns(void)
 {
 	cmdline_parse_ctx_t ctx;
-	struct cmdline *cl;
+	struct cmdline cl, *tmp;
 
 	memset(&ctx, 0, sizeof(ctx));
-	cl = cmdline_new(NULL, "prompt", 0, 0);
-	if (cl != NULL)
+	tmp = cmdline_new(&ctx, "test", -1, -1);
+	if (tmp == NULL)
 		goto error;
-	cl = cmdline_new(&ctx, NULL, 0, 0);
-	if (cl != NULL)
+
+	if (cmdline_new(NULL, "prompt", 0, 0) != NULL)
 		goto error;
-	cl = cmdline_new(&ctx, "test", -1, -1);
-	if (cl == NULL)
+	if (cmdline_new(&ctx, NULL, 0, 0) != NULL)
 		goto error;
 	if (cmdline_in(NULL, "buffer", CMDLINE_TEST_BUFSIZE) >= 0)
 		goto error;
-	if (cmdline_in(cl, NULL, CMDLINE_TEST_BUFSIZE) >= 0)
+	if (cmdline_in(&cl, NULL, CMDLINE_TEST_BUFSIZE) >= 0)
 		goto error;
 	if (cmdline_write_char(NULL, 0) >= 0)
 		goto error;
@@ -211,16 +188,30 @@ test_cmdline_fns(void)
 	cmdline_set_prompt(NULL, "prompt");
 	cmdline_free(NULL);
 	cmdline_printf(NULL, "format");
+	/* this should fail as stream handles are invalid */
+	cmdline_printf(tmp, "format");
 	cmdline_interact(NULL);
 	cmdline_quit(NULL);
 
-	cmdline_free(cl);
+	/* check if void calls change anything when they should fail */
+	cl = *tmp;
+
+	cmdline_printf(&cl, NULL);
+	if (memcmp(&cl, tmp, sizeof(cl))) goto mismatch;
+	cmdline_set_prompt(&cl, NULL);
+	if (memcmp(&cl, tmp, sizeof(cl))) goto mismatch;
+	cmdline_in(&cl, NULL, CMDLINE_TEST_BUFSIZE);
+	if (memcmp(&cl, tmp, sizeof(cl))) goto mismatch;
+
+	cmdline_free(tmp);
+
 	return 0;
 
 error:
 	printf("Error: function accepted null parameter!\n");
-	if (cl != NULL)
-		cmdline_free(cl);
+	return -1;
+mismatch:
+	printf("Error: data changed!\n");
 	return -1;
 }
 

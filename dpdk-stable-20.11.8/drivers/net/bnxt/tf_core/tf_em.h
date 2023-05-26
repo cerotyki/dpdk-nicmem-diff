@@ -9,6 +9,12 @@
 #include "tf_core.h"
 #include "tf_session.h"
 
+
+#define SUPPORT_CFA_HW_P4 1
+#define SUPPORT_CFA_HW_P58 0
+#define SUPPORT_CFA_HW_P59 0
+#define SUPPORT_CFA_HW_ALL 0
+
 #include "hcapi/hcapi_cfa_defs.h"
 
 #define TF_EM_MIN_ENTRIES     (1 << 15) /* 32K */
@@ -358,7 +364,7 @@ int tf_em_ext_free(struct tf *tfp,
 		   struct tf_free_tbl_scope_parms *parms);
 
 /**
- * Common free table scope for external EEM using host or system memory
+ * Common free for external EEM using host or system memory
  *
  * [in] tfp
  *   Pointer to TruFlow handle
@@ -374,7 +380,7 @@ int tf_em_ext_common_free(struct tf *tfp,
 			  struct tf_free_tbl_scope_parms *parms);
 
 /**
- * Common alloc table scope for external EEM using host or system memory
+ * Common alloc for external EEM using host or system memory
  *
  * [in] tfp
  *   Pointer to TruFlow handle
@@ -388,21 +394,6 @@ int tf_em_ext_common_free(struct tf *tfp,
  */
 int tf_em_ext_common_alloc(struct tf *tfp,
 			   struct tf_alloc_tbl_scope_parms *parms);
-/**
- * Map a set of parifs to a set of EEM base addresses (table scope)
- *
- * [in] tfp
- *   Pointer to TruFlow handle
- *
- * [in] parms
- *   Pointer to input parameters
- *
- * Returns:
- *   0       - Success
- *   -EINVAL - Parameter error
- */
-int tf_em_ext_map_tbl_scope(struct tf *tfp,
-			    struct tf_map_tbl_scope_parms *parms);
 
 /**
  * Allocate External Tbl entry from the scope pool.

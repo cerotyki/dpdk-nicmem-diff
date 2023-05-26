@@ -186,7 +186,7 @@ tfp_msg_hwrm_oem_cmd(struct tf *tfp,
 		     uint32_t max_flows);
 
 /**
- * Allocates zeroed memory from the heap.
+ * Allocates zero'ed memory from the heap.
  *
  * NOTE: Also performs virt2phy address conversion by default thus is
  * can be expensive to invoke.
@@ -267,21 +267,5 @@ int tfp_get_fid(struct tf *tfp, uint16_t *fw_fid);
  *   -EINVAL - Parameter error
  */
 int tfp_get_fid(struct tf *tfp, uint16_t *fw_fid);
-
-/**
- * Get the PF associated with the fw communications channel.
- *
- * [in] session
- *   Pointer to session handle
- *
- * [out] pf
- *   Pointer to the pf id
- *
- * Returns:
- *   0       - Success
- *   -EINVAL - Failure
- *
- */
-int tfp_get_pf(struct tf *tfp, uint16_t *pf);
 
 #endif /* _TFP_H_ */

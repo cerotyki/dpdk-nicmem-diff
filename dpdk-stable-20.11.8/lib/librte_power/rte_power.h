@@ -14,7 +14,6 @@
 #include <rte_byteorder.h>
 #include <rte_log.h>
 #include <rte_string_fns.h>
-#include <rte_power_guest_channel.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -171,6 +170,14 @@ typedef int (*rte_power_freq_change_t)(unsigned int lcore_id);
  * Scale up the frequency of a specific lcore according to the available
  * frequencies.
  * Review each environments specific documentation for usage.
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 1 on success with frequency changed.
+ *  - 0 on success without frequency changed.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_freq_up;
 
@@ -178,13 +185,30 @@ extern rte_power_freq_change_t rte_power_freq_up;
  * Scale down the frequency of a specific lcore according to the available
  * frequencies.
  * Review each environments specific documentation for usage.
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 1 on success with frequency changed.
+ *  - 0 on success without frequency changed.
+ *  - Negative on error.
  */
+
 extern rte_power_freq_change_t rte_power_freq_down;
 
 /**
  * Scale up the frequency of a specific lcore to the highest according to the
  * available frequencies.
  * Review each environments specific documentation for usage.
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 1 on success with frequency changed.
+ *  - 0 on success without frequency changed.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_freq_max;
 
@@ -192,24 +216,54 @@ extern rte_power_freq_change_t rte_power_freq_max;
  * Scale down the frequency of a specific lcore to the lowest according to the
  * available frequencies.
  * Review each environments specific documentation for usage..
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 1 on success with frequency changed.
+ *  - 0 on success without frequency changed.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_freq_min;
 
 /**
  * Query the Turbo Boost status of a specific lcore.
  * Review each environments specific documentation for usage..
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 1 Turbo Boost is enabled for this lcore.
+ *  - 0 Turbo Boost is disabled for this lcore.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_turbo_status;
 
 /**
  * Enable Turbo Boost for this lcore.
  * Review each environments specific documentation for usage..
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 0 on success.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_freq_enable_turbo;
 
 /**
  * Disable Turbo Boost for this lcore.
  * Review each environments specific documentation for usage..
+ *
+ * @param lcore_id
+ *  lcore id.
+ *
+ * @return
+ *  - 0 on success.
+ *  - Negative on error.
  */
 extern rte_power_freq_change_t rte_power_freq_disable_turbo;
 

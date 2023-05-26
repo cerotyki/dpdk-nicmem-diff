@@ -758,7 +758,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			continue;
 		}
 
-		/* unrecognizable input */
+		/* unrecognizeable input */
 		APP_CHECK(0, status, "unrecognized input \"%s\"",
 			tokens[ti]);
 		return;
@@ -998,7 +998,7 @@ get_spi_proto(uint32_t spi, enum rte_security_ipsec_sa_direction dir,
 	if (rc4 >= 0) {
 		if (rc6 >= 0) {
 			RTE_LOG(ERR, IPSEC,
-				"%s: SPI %u used simultaneously by "
+				"%s: SPI %u used simultaeously by "
 				"IPv4(%d) and IPv6 (%d) SP rules\n",
 				__func__, spi, rc4, rc6);
 			return -EINVAL;
@@ -1377,7 +1377,7 @@ ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size)
 }
 
 /*
- * Allocate space and init rte_ipsec_sa structures,
+ * Allocate space and init rte_ipsec_sa strcutures,
  * one per session.
  */
 static int
@@ -1593,17 +1593,9 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 	struct ipsec_sa *rule;
 	uint32_t idx_sa;
 	enum rte_security_session_action_type rule_type;
-	struct rte_eth_dev_info dev_info;
-	int ret;
 
 	*rx_offloads = 0;
 	*tx_offloads = 0;
-
-	ret = rte_eth_dev_info_get(port_id, &dev_info);
-	if (ret != 0)
-		rte_exit(EXIT_FAILURE,
-			"Error during getting device (port %u) info: %s\n",
-			port_id, strerror(-ret));
 
 	/* Check for inbound rules that use offloads and use this port */
 	for (idx_sa = 0; idx_sa < nb_sa_in; idx_sa++) {
@@ -1620,38 +1612,11 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 	for (idx_sa = 0; idx_sa < nb_sa_out; idx_sa++) {
 		rule = &sa_out[idx_sa];
 		rule_type = ipsec_get_action_type(rule);
-		if (rule->portid == port_id) {
-			switch (rule_type) {
-			case RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL:
-				/* Checksum offload is not needed for inline
-				 * protocol as all processing for Outbound IPSec
-				 * packets will be implicitly taken care and for
-				 * non-IPSec packets, there is no need of
-				 * IPv4 Checksum offload.
-				 */
-				*tx_offloads |= DEV_TX_OFFLOAD_SECURITY;
-				break;
-			case RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO:
-				*tx_offloads |= DEV_TX_OFFLOAD_SECURITY;
-				if (dev_info.tx_offload_capa &
-						DEV_TX_OFFLOAD_IPV4_CKSUM)
-					*tx_offloads |=
-						DEV_TX_OFFLOAD_IPV4_CKSUM;
-				break;
-			default:
-				/* Enable IPv4 checksum offload even if
-				 * one of lookaside SA's are present.
-				 */
-				if (dev_info.tx_offload_capa &
-				    DEV_TX_OFFLOAD_IPV4_CKSUM)
-					*tx_offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
-				break;
-			}
-		} else {
-			if (dev_info.tx_offload_capa &
-			    DEV_TX_OFFLOAD_IPV4_CKSUM)
-				*tx_offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
-		}
+		if ((rule_type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
+				rule_type ==
+				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
+				&& rule->portid == port_id)
+			*tx_offloads |= DEV_TX_OFFLOAD_SECURITY;
 	}
 	return 0;
 }

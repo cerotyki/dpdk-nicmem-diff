@@ -120,7 +120,7 @@ eal_dynmem_memseg_lists_init(void)
 
 	if (max_seglists_per_type == 0) {
 		RTE_LOG(ERR, EAL, "Cannot accommodate all memory types, please increase %s\n",
-			RTE_STR(RTE_MAX_MEMSEG_LISTS));
+			RTE_STR(CONFIG_RTE_MAX_MEMSEG_LISTS));
 		goto out;
 	}
 
@@ -180,7 +180,7 @@ eal_dynmem_memseg_lists_init(void)
 			if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
 				RTE_LOG(ERR, EAL,
 					"No more space in memseg lists, please increase %s\n",
-					RTE_STR(RTE_MAX_MEMSEG_LISTS));
+					RTE_STR(CONFIG_RTE_MAX_MEMSEG_LISTS));
 				goto out;
 			}
 			msl = &mcfg->memsegs[msl_idx++];
@@ -304,10 +304,6 @@ eal_dynmem_hugepage_init(void)
 				needed = num_pages - num_pages_alloc;
 
 				pages = malloc(sizeof(*pages) * needed);
-				if (pages == NULL) {
-					RTE_LOG(ERR, EAL, "Failed to malloc pages\n");
-					return -1;
-				}
 
 				/* do not request exact number of pages */
 				cur_pages = eal_memalloc_alloc_seg_bulk(pages,
@@ -431,19 +427,19 @@ eal_dynmem_calc_num_pages_per_socket(
 			total_size -= default_size;
 		}
 #else
-		/* in 32-bit mode, allocate all of the memory only on main
+		/* in 32-bit mode, allocate all of the memory only on master
 		 * lcore socket
 		 */
 		total_size = internal_conf->memory;
 		for (socket = 0; socket < RTE_MAX_NUMA_NODES && total_size != 0;
 				socket++) {
 			struct rte_config *cfg = rte_eal_get_configuration();
-			unsigned int main_lcore_socket;
+			unsigned int master_lcore_socket;
 
-			main_lcore_socket =
-				rte_lcore_to_socket_id(cfg->main_lcore);
+			master_lcore_socket =
+				rte_lcore_to_socket_id(cfg->master_lcore);
 
-			if (main_lcore_socket != socket)
+			if (master_lcore_socket != socket)
 				continue;
 
 			/* Update sizes */

@@ -8,4 +8,4 @@ sources = files('rte_eth_bond_api.c', 'rte_eth_bond_pmd.c', 'rte_eth_bond_flow.c
 deps += 'sched' # needed for rte_bitmap.h
 deps += ['ip_frag']
 
-headers = files('rte_eth_bond.h', 'rte_eth_bond_8023ad.h')
+install_headers('rte_eth_bond.h', 'rte_eth_bond_8023ad.h')

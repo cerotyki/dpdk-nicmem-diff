@@ -78,11 +78,9 @@ rte_rawdev_socket_id(uint16_t dev_id)
 }
 
 int
-rte_rawdev_info_get(uint16_t dev_id, struct rte_rawdev_info *dev_info,
-		size_t dev_private_size)
+rte_rawdev_info_get(uint16_t dev_id, struct rte_rawdev_info *dev_info)
 {
 	struct rte_rawdev *rawdev;
-	int ret = 0;
 
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 	RTE_FUNC_PTR_OR_ERR_RET(dev_info, -EINVAL);
@@ -91,21 +89,18 @@ rte_rawdev_info_get(uint16_t dev_id, struct rte_rawdev_info *dev_info,
 
 	if (dev_info->dev_private != NULL) {
 		RTE_FUNC_PTR_OR_ERR_RET(*rawdev->dev_ops->dev_info_get, -ENOTSUP);
-		ret = (*rawdev->dev_ops->dev_info_get)(rawdev,
-				dev_info->dev_private,
-				dev_private_size);
+		(*rawdev->dev_ops->dev_info_get)(rawdev, dev_info->dev_private);
 	}
 
 	dev_info->driver_name = rawdev->driver_name;
 	dev_info->device = rawdev->device;
 	dev_info->socket_id = rawdev->socket_id;
 
-	return ret;
+	return 0;
 }
 
 int
-rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf,
-		size_t dev_private_size)
+rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf)
 {
 	struct rte_rawdev *dev;
 	int diag;
@@ -124,8 +119,7 @@ rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf,
 	}
 
 	/* Configure the device */
-	diag = (*dev->dev_ops->dev_configure)(dev, dev_conf->dev_private,
-			dev_private_size);
+	diag = (*dev->dev_ops->dev_configure)(dev, dev_conf->dev_private);
 	if (diag != 0)
 		RTE_RDEV_ERR("dev%d dev_configure = %d", dev_id, diag);
 	else
@@ -137,8 +131,7 @@ rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf,
 int
 rte_rawdev_queue_conf_get(uint16_t dev_id,
 			  uint16_t queue_id,
-			  rte_rawdev_obj_t queue_conf,
-			  size_t queue_conf_size)
+			  rte_rawdev_obj_t queue_conf)
 {
 	struct rte_rawdev *dev;
 
@@ -146,15 +139,14 @@ rte_rawdev_queue_conf_get(uint16_t dev_id,
 	dev = &rte_rawdevs[dev_id];
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->queue_def_conf, -ENOTSUP);
-	return (*dev->dev_ops->queue_def_conf)(dev, queue_id, queue_conf,
-			queue_conf_size);
+	(*dev->dev_ops->queue_def_conf)(dev, queue_id, queue_conf);
+	return 0;
 }
 
 int
 rte_rawdev_queue_setup(uint16_t dev_id,
 		       uint16_t queue_id,
-		       rte_rawdev_obj_t queue_conf,
-		       size_t queue_conf_size)
+		       rte_rawdev_obj_t queue_conf)
 {
 	struct rte_rawdev *dev;
 
@@ -162,8 +154,7 @@ rte_rawdev_queue_setup(uint16_t dev_id,
 	dev = &rte_rawdevs[dev_id];
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->queue_setup, -ENOTSUP);
-	return (*dev->dev_ops->queue_setup)(dev, queue_id, queue_conf,
-			queue_conf_size);
+	return (*dev->dev_ops->queue_setup)(dev, queue_id, queue_conf);
 }
 
 int
@@ -398,21 +389,20 @@ rte_rawdev_start(uint16_t dev_id)
 
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 	dev = &rte_rawdevs[dev_id];
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_start, -ENOTSUP);
+
 	if (dev->started != 0) {
 		RTE_RDEV_ERR("Device with dev_id=%" PRIu8 "already started",
 			     dev_id);
 		return 0;
 	}
 
-	if (dev->dev_ops->dev_start == NULL)
-		goto mark_started;
-
 	diag = (*dev->dev_ops->dev_start)(dev);
-	if (diag != 0)
+	if (diag == 0)
+		dev->started = 1;
+	else
 		return diag;
 
-mark_started:
-	dev->started = 1;
 	return 0;
 }
 
@@ -426,18 +416,15 @@ rte_rawdev_stop(uint16_t dev_id)
 	RTE_RAWDEV_VALID_DEVID_OR_RET(dev_id);
 	dev = &rte_rawdevs[dev_id];
 
+	RTE_FUNC_PTR_OR_RET(*dev->dev_ops->dev_stop);
+
 	if (dev->started == 0) {
 		RTE_RDEV_ERR("Device with dev_id=%" PRIu8 "already stopped",
 			dev_id);
 		return;
 	}
 
-	if (dev->dev_ops->dev_stop == NULL)
-		goto mark_stopped;
-
 	(*dev->dev_ops->dev_stop)(dev);
-
-mark_stopped:
 	dev->started = 0;
 }
 
@@ -578,15 +565,11 @@ handle_dev_xstats(const char *cmd __rte_unused,
 	struct rte_rawdev_xstats_name *xstat_names;
 	int dev_id, num_xstats, i, ret;
 	unsigned int *ids;
-	char *end_param;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
 		return -1;
 
-	dev_id = strtoul(params, &end_param, 0);
-	if (*end_param != '\0')
-		RTE_RDEV_LOG(NOTICE,
-			"Extra parameters passed to rawdev telemetry command, ignoring");
+	dev_id = atoi(params);
 	if (!rte_rawdev_pmd_is_valid_dev(dev_id))
 		return -1;
 

@@ -21,16 +21,14 @@
 extern "C" {
 #endif
 
-#ifndef __cplusplus
 /* These are not C++-aware. */
 #include <linux/vhost.h>
 #include <linux/virtio_ring.h>
 #include <linux/virtio_net.h>
-#endif
 
 #define RTE_VHOST_USER_CLIENT		(1ULL << 0)
 #define RTE_VHOST_USER_NO_RECONNECT	(1ULL << 1)
-#define RTE_VHOST_USER_RESERVED_1	(1ULL << 2)
+#define RTE_VHOST_USER_DEQUEUE_ZERO_COPY	(1ULL << 2)
 #define RTE_VHOST_USER_IOMMU_SUPPORT	(1ULL << 3)
 #define RTE_VHOST_USER_POSTCOPY_SUPPORT		(1ULL << 4)
 /* support mbuf with external buffer attached */
@@ -38,7 +36,6 @@ extern "C" {
 /* support only linear buffers (no chained mbufs) */
 #define RTE_VHOST_USER_LINEARBUF_SUPPORT	(1ULL << 6)
 #define RTE_VHOST_USER_ASYNC_COPY	(1ULL << 7)
-#define RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS	(1ULL << 8)
 
 /* Features. */
 #ifndef VIRTIO_NET_F_GUEST_ANNOUNCE
@@ -433,6 +430,7 @@ int rte_vhost_driver_unregister(const char *path);
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_driver_attach_vdpa_device(const char *path,
 		struct rte_vdpa_device *dev);
@@ -445,6 +443,7 @@ rte_vhost_driver_attach_vdpa_device(const char *path,
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_driver_detach_vdpa_device(const char *path);
 
@@ -456,6 +455,7 @@ rte_vhost_driver_detach_vdpa_device(const char *path);
  * @return
  *  vDPA device pointer, NULL on failure
  */
+__rte_experimental
 struct rte_vdpa_device *
 rte_vhost_driver_get_vdpa_device(const char *path);
 
@@ -763,7 +763,7 @@ rte_vhost_get_vhost_ring_inflight(int vid, uint16_t vring_idx,
 /**
  * Set split inflight descriptor.
  *
- * This function save descriptors that has been consumed in available
+ * This function save descriptors that has been comsumed in available
  * ring
  *
  * @param vid
@@ -783,7 +783,7 @@ rte_vhost_set_inflight_desc_split(int vid, uint16_t vring_idx,
 /**
  * Set packed inflight descriptor and get corresponding inflight entry
  *
- * This function save descriptors that has been consumed
+ * This function save descriptors that has been comsumed
  *
  * @param vid
  *  vhost device ID
@@ -890,21 +890,6 @@ rte_vhost_clr_inflight_desc_packed(int vid, uint16_t vring_idx,
 int rte_vhost_vring_call(int vid, uint16_t vring_idx);
 
 /**
- * Notify the guest that used descriptors have been added to the vring.  This
- * function acts as a memory barrier.  This function will return -EAGAIN when
- * vq's access lock is held by other thread, user should try again later.
- *
- * @param vid
- *  vhost device ID
- * @param vring_idx
- *  vring index
- * @return
- *  0 on success, -1 on failure, -EAGAIN for another retry
- */
-__rte_experimental
-int rte_vhost_vring_call_nonblock(int vid, uint16_t vring_idx);
-
-/**
  * Get vhost RX queue avail count.
  *
  * @param vid
@@ -928,6 +913,7 @@ uint32_t rte_vhost_rx_queue_count(int vid, uint16_t qid);
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_get_log_base(int vid, uint64_t *log_base, uint64_t *log_size);
 
@@ -945,6 +931,7 @@ rte_vhost_get_log_base(int vid, uint64_t *log_base, uint64_t *log_size);
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_get_vring_base(int vid, uint16_t queue_id,
 		uint16_t *last_avail_idx, uint16_t *last_used_idx);
@@ -986,6 +973,7 @@ rte_vhost_get_vring_base_from_inflight(int vid,
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_set_vring_base(int vid, uint16_t queue_id,
 		uint16_t last_avail_idx, uint16_t last_used_idx);
@@ -1015,6 +1003,7 @@ rte_vhost_extern_callback_register(int vid,
  * @return
  *  vDPA device pointer on success, NULL on failure
  */
+__rte_experimental
 struct rte_vdpa_device *
 rte_vhost_get_vdpa_device(int vid);
 

@@ -16,13 +16,13 @@ PCRE atomic grouping
   Support PCRE atomic grouping.
 
 PCRE back reference
-  Support PCRE back reference.
+  Support PCRE back regerence.
 
 PCRE back tracking ctrl
   Support PCRE back tracking ctrl.
 
 PCRE call outs
-  Support PCRE call routes.
+  Support PCRE call outes.
 
 PCRE forward reference
   Support Forward reference.

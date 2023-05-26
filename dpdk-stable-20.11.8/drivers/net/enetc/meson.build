@@ -3,7 +3,7 @@
 
 if not is_linux
 	build = false
-	reason = 'only supported on Linux'
+	reason = 'only supported on linux'
 endif
 
 deps += ['common_dpaax']

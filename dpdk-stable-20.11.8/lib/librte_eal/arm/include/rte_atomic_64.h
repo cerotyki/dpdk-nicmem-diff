@@ -7,7 +7,7 @@
 #define _RTE_ATOMIC_ARM64_H_
 
 #ifndef RTE_FORCE_INTRINSICS
-#  error Platform must be built with RTE_FORCE_INTRINSICS
+#  error Platform must be built with CONFIG_RTE_FORCE_INTRINSICS
 #endif
 
 #ifdef __cplusplus
@@ -37,35 +37,32 @@ extern "C" {
 
 #define rte_io_rmb() rte_rmb()
 
+#define rte_cio_wmb() rte_wmb()
+
+#define rte_cio_rmb() rte_rmb()
+
 static __rte_always_inline void
-rte_atomic_thread_fence(int memorder)
+rte_atomic_thread_fence(int memory_order)
 {
-	__atomic_thread_fence(memorder);
+	__atomic_thread_fence(memory_order);
 }
 
 /*------------------------ 128 bit atomic operations -------------------------*/
 
 #if defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)
-#if defined(RTE_CC_CLANG)
-#define __LSE_PREAMBLE	".arch armv8-a+lse\n"
-#else
-#define __LSE_PREAMBLE	""
-#endif
-
 #define __ATOMIC128_CAS_OP(cas_op_name, op_string)                          \
-static __rte_noinline void                                                  \
-cas_op_name(rte_int128_t *dst, rte_int128_t *old, rte_int128_t updated)     \
+static __rte_noinline rte_int128_t                                          \
+cas_op_name(rte_int128_t *dst, rte_int128_t old, rte_int128_t updated)      \
 {                                                                           \
 	/* caspX instructions register pair must start from even-numbered
 	 * register at operand 1.
 	 * So, specify registers for local variables here.
 	 */                                                                 \
-	register uint64_t x0 __asm("x0") = (uint64_t)old->val[0];           \
-	register uint64_t x1 __asm("x1") = (uint64_t)old->val[1];           \
+	register uint64_t x0 __asm("x0") = (uint64_t)old.val[0];            \
+	register uint64_t x1 __asm("x1") = (uint64_t)old.val[1];            \
 	register uint64_t x2 __asm("x2") = (uint64_t)updated.val[0];        \
 	register uint64_t x3 __asm("x3") = (uint64_t)updated.val[1];        \
 	asm volatile(                                                       \
-		__LSE_PREAMBLE						    \
 		op_string " %[old0], %[old1], %[upd0], %[upd1], [%[dst]]"   \
 		: [old0] "+r" (x0),                                         \
 		[old1] "+r" (x1)                                            \
@@ -73,8 +70,9 @@ cas_op_name(rte_int128_t *dst, rte_int128_t *old, rte_int128_t updated)     \
 		[upd1] "r" (x3),                                            \
 		[dst] "r" (dst)                                             \
 		: "memory");                                                \
-	old->val[0] = x0;                                                   \
-	old->val[1] = x1;                                                   \
+	old.val[0] = x0;                                                    \
+	old.val[1] = x1;                                                    \
+	return old;                                                         \
 }
 
 __ATOMIC128_CAS_OP(__cas_128_relaxed, "casp")
@@ -82,7 +80,6 @@ __ATOMIC128_CAS_OP(__cas_128_acquire, "caspa")
 __ATOMIC128_CAS_OP(__cas_128_release, "caspl")
 __ATOMIC128_CAS_OP(__cas_128_acq_rel, "caspal")
 
-#undef __LSE_PREAMBLE
 #undef __ATOMIC128_CAS_OP
 
 #endif
@@ -112,14 +109,13 @@ rte_atomic128_cmp_exchange(rte_int128_t *dst, rte_int128_t *exp,
 
 #if defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)
 	if (success == __ATOMIC_RELAXED)
-		__cas_128_relaxed(dst, exp, desired);
+		old = __cas_128_relaxed(dst, expected, desired);
 	else if (success == __ATOMIC_ACQUIRE)
-		__cas_128_acquire(dst, exp, desired);
+		old = __cas_128_acquire(dst, expected, desired);
 	else if (success == __ATOMIC_RELEASE)
-		__cas_128_release(dst, exp, desired);
+		old = __cas_128_release(dst, expected, desired);
 	else
-		__cas_128_acq_rel(dst, exp, desired);
-	old = *exp;
+		old = __cas_128_acq_rel(dst, expected, desired);
 #else
 #define __HAS_ACQ(mo) ((mo) != __ATOMIC_RELAXED && (mo) != __ATOMIC_RELEASE)
 #define __HAS_RLS(mo) ((mo) == __ATOMIC_RELEASE || (mo) == __ATOMIC_ACQ_REL || \
@@ -183,12 +179,12 @@ rte_atomic128_cmp_exchange(rte_int128_t *dst, rte_int128_t *exp,
 #undef __STORE_128
 
 	} while (unlikely(ret));
+#endif
 
-	/* Unconditionally updating the value of exp removes an 'if' statement.
-	 * The value of exp should already be in register if not in the cache.
+	/* Unconditionally updating expected removes an 'if' statement.
+	 * expected should already be in register if not in the cache.
 	 */
 	*exp = old;
-#endif
 
 	return (old.int128 == expected.int128);
 }

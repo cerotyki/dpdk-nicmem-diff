@@ -5,14 +5,9 @@
 #ifndef _RTE_VDPA_H_DEV_
 #define _RTE_VDPA_H_DEV_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdbool.h>
 
 #include "rte_vhost.h"
-#include "rte_vdpa.h"
 
 #define RTE_VHOST_QUEUE_ALL UINT16_MAX
 
@@ -83,6 +78,9 @@ struct rte_vdpa_device {
 };
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Register a vdpa device
  *
  * @param rte_dev
@@ -92,11 +90,15 @@ struct rte_vdpa_device {
  * @return
  *  vDPA device pointer on success, NULL on failure
  */
+__rte_experimental
 struct rte_vdpa_device *
 rte_vdpa_register_device(struct rte_device *rte_dev,
 		struct rte_vdpa_dev_ops *ops);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Unregister a vdpa device
  *
  * @param dev
@@ -104,10 +106,14 @@ rte_vdpa_register_device(struct rte_device *rte_dev,
  * @return
  *  device id on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vdpa_unregister_device(struct rte_vdpa_device *dev);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Enable/Disable host notifier mapping for a vdpa port.
  *
  * @param vid
@@ -119,10 +125,14 @@ rte_vdpa_unregister_device(struct rte_vdpa_device *dev);
  * @return
  *  0 on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vhost_host_notifier_ctrl(int vid, uint16_t qid, bool enable);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
  * Synchronize the used ring from mediated ring to guest, log dirty
  * page for each writeable buffer, caller should handle the used
  * ring logging before device stop.
@@ -136,11 +146,8 @@ rte_vhost_host_notifier_ctrl(int vid, uint16_t qid, bool enable);
  * @return
  *  number of synced used entries on success, -1 on failure
  */
+__rte_experimental
 int
 rte_vdpa_relay_vring_used(int vid, uint16_t qid, void *vring_m);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* _RTE_VDPA_DEV_H_ */

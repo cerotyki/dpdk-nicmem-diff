@@ -27,15 +27,15 @@
 #include <rte_spinlock.h>
 #include <rte_malloc.h>
 
-#ifdef RTE_LIB_HASH
+#ifdef RTE_LIBRTE_HASH
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
-#endif /* RTE_LIB_HASH */
+#endif /* RTE_LIBRTE_HASH */
 
-#ifdef RTE_LIB_LPM
+#ifdef RTE_LIBRTE_LPM
 #include <rte_lpm.h>
-#endif /* RTE_LIB_LPM */
+#endif /* RTE_LIBRTE_LPM */
 
 #include <rte_string_fns.h>
 
@@ -57,8 +57,8 @@ typedef void (*case_clean_t)(unsigned lcore_id);
 static rte_atomic32_t obj_count = RTE_ATOMIC32_INIT(0);
 static rte_atomic32_t synchro = RTE_ATOMIC32_INIT(0);
 
-#define WAIT_SYNCHRO_FOR_WORKERS()   do { \
-	if (lcore_self != rte_get_main_lcore())                  \
+#define WAIT_SYNCHRO_FOR_SLAVES()   do{ \
+	if (lcore_self != rte_get_master_lcore())                  \
 		while (rte_atomic32_read(&synchro) == 0);        \
 } while(0)
 
@@ -70,7 +70,7 @@ test_eal_init_once(__rte_unused void *arg)
 {
 	unsigned lcore_self =  rte_lcore_id();
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	rte_atomic32_set(&obj_count, 1); /* silent the check in the caller */
 	if (rte_eal_init(0, NULL) != -1)
@@ -89,10 +89,6 @@ ring_clean(unsigned int lcore_id)
 	char ring_name[MAX_STRING_SIZE];
 	int i;
 
-	rp = rte_ring_lookup("fr_test_once");
-	if (rp != NULL)
-		rte_ring_free(rp);
-
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(ring_name, sizeof(ring_name),
 				"fr_test_%d_%d", lcore_id, i);
@@ -110,7 +106,7 @@ ring_create_lookup(__rte_unused void *arg)
 	char ring_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	/* create the same ring simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -152,10 +148,7 @@ mempool_clean(unsigned int lcore_id)
 	char mempool_name[MAX_STRING_SIZE];
 	int i;
 
-	mp = rte_mempool_lookup("fr_test_once");
-	if (mp != NULL)
-		rte_mempool_free(mp);
-
+	/* verify all ring created successful */
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(mempool_name, sizeof(mempool_name), "fr_test_%d_%d",
 			 lcore_id, i);
@@ -173,7 +166,7 @@ mempool_create_lookup(__rte_unused void *arg)
 	char mempool_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	/* create the same mempool simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -207,17 +200,13 @@ mempool_create_lookup(__rte_unused void *arg)
 	return 0;
 }
 
-#ifdef RTE_LIB_HASH
+#ifdef RTE_LIBRTE_HASH
 static void
 hash_clean(unsigned lcore_id)
 {
 	char hash_name[MAX_STRING_SIZE];
 	struct rte_hash *handle;
 	int i;
-
-	handle = rte_hash_find_existing("fr_test_once");
-	if (handle != NULL)
-		rte_hash_free(handle);
 
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(hash_name, sizeof(hash_name), "fr_test_%d_%d",  lcore_id, i);
@@ -243,7 +232,7 @@ hash_create_free(__rte_unused void *arg)
 		.socket_id = 0,
 	};
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	/* create the same hash simultaneously on all threads */
 	hash_params.name = "fr_test_once";
@@ -253,7 +242,7 @@ hash_create_free(__rte_unused void *arg)
 			rte_atomic32_inc(&obj_count);
 	}
 
-	/* create multiple times simultaneously */
+	/* create mutiple times simultaneously */
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(hash_name, sizeof(hash_name), "fr_test_%d_%d", lcore_self, i);
 		hash_params.name = hash_name;
@@ -283,10 +272,6 @@ fbk_clean(unsigned lcore_id)
 	struct rte_fbk_hash_table *handle;
 	int i;
 
-	handle = rte_fbk_hash_find_existing("fr_test_once");
-	if (handle != NULL)
-		rte_fbk_hash_free(handle);
-
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(fbk_name, sizeof(fbk_name), "fr_test_%d_%d",  lcore_id, i);
 
@@ -311,7 +296,7 @@ fbk_create_free(__rte_unused void *arg)
 		.init_val = RTE_FBK_HASH_INIT_VAL_DEFAULT,
 	};
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	/* create the same fbk hash table simultaneously on all threads */
 	fbk_params.name = "fr_test_once";
@@ -321,7 +306,7 @@ fbk_create_free(__rte_unused void *arg)
 			rte_atomic32_inc(&obj_count);
 	}
 
-	/* create multiple fbk tables simultaneously */
+	/* create mutiple fbk tables simultaneously */
 	for (i = 0; i < MAX_ITER_MULTI; i++) {
 		snprintf(fbk_name, sizeof(fbk_name), "fr_test_%d_%d", lcore_self, i);
 		fbk_params.name = fbk_name;
@@ -343,19 +328,15 @@ fbk_create_free(__rte_unused void *arg)
 
 	return 0;
 }
-#endif /* RTE_LIB_HASH */
+#endif /* RTE_LIBRTE_HASH */
 
-#ifdef RTE_LIB_LPM
+#ifdef RTE_LIBRTE_LPM
 static void
 lpm_clean(unsigned int lcore_id)
 {
 	char lpm_name[MAX_STRING_SIZE];
 	struct rte_lpm *lpm;
 	int i;
-
-	lpm = rte_lpm_find_existing("fr_test_once");
-	if (lpm != NULL)
-		rte_lpm_free(lpm);
 
 	for (i = 0; i < MAX_LPM_ITER_TIMES; i++) {
 		snprintf(lpm_name, sizeof(lpm_name), "fr_test_%d_%d",  lcore_id, i);
@@ -378,7 +359,7 @@ lpm_create_free(__rte_unused void *arg)
 	char lpm_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_WORKERS();
+	WAIT_SYNCHRO_FOR_SLAVES();
 
 	/* create the same lpm simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -387,7 +368,7 @@ lpm_create_free(__rte_unused void *arg)
 			rte_atomic32_inc(&obj_count);
 	}
 
-	/* create multiple fbk tables simultaneously */
+	/* create mutiple fbk tables simultaneously */
 	for (i = 0; i < MAX_LPM_ITER_TIMES; i++) {
 		snprintf(lpm_name, sizeof(lpm_name), "fr_test_%d_%d", lcore_self, i);
 		lpm = rte_lpm_create(lpm_name, SOCKET_ID_ANY, &config);
@@ -407,7 +388,7 @@ lpm_create_free(__rte_unused void *arg)
 
 	return 0;
 }
-#endif /* RTE_LIB_LPM */
+#endif /* RTE_LIBRTE_LPM */
 
 struct test_case{
 	case_func_t    func;
@@ -422,13 +403,13 @@ struct test_case test_cases[] = {
 	{ ring_create_lookup,     NULL,  ring_clean,   "ring create/lookup" },
 	{ mempool_create_lookup,  NULL,  mempool_clean,
 			"mempool create/lookup" },
-#ifdef RTE_LIB_HASH
+#ifdef RTE_LIBRTE_HASH
 	{ hash_create_free,       NULL,  hash_clean,   "hash create/free" },
 	{ fbk_create_free,        NULL,  fbk_clean,    "fbk create/free" },
-#endif /* RTE_LIB_HASH */
-#ifdef RTE_LIB_LPM
+#endif /* RTE_LIBRTE_HASH */
+#ifdef RTE_LIBRTE_LPM
 	{ lpm_create_free,        NULL,  lpm_clean,    "lpm create/free" },
-#endif /* RTE_LIB_LPM */
+#endif /* RTE_LIBRTE_LPM */
 };
 
 /**
@@ -437,10 +418,11 @@ struct test_case test_cases[] = {
 static int
 launch_test(struct test_case *pt_case)
 {
-	unsigned int lcore_id;
-	unsigned int cores;
-	unsigned int count;
 	int ret = 0;
+	unsigned lcore_id;
+	unsigned cores_save = rte_lcore_count();
+	unsigned cores = RTE_MIN(cores_save, MAX_LCORES);
+	unsigned count;
 
 	if (pt_case->func == NULL)
 		return -1;
@@ -448,8 +430,7 @@ launch_test(struct test_case *pt_case)
 	rte_atomic32_set(&obj_count, 0);
 	rte_atomic32_set(&synchro, 0);
 
-	cores = RTE_MIN(rte_lcore_count(), MAX_LCORES);
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (cores == 1)
 			break;
 		cores--;
@@ -461,12 +442,14 @@ launch_test(struct test_case *pt_case)
 	if (pt_case->func(pt_case->arg) < 0)
 		ret = -1;
 
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	cores = cores_save;
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		if (cores == 1)
+			break;
+		cores--;
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			ret = -1;
-	}
 
-	RTE_LCORE_FOREACH(lcore_id) {
 		if (pt_case->clean != NULL)
 			pt_case->clean(lcore_id);
 	}

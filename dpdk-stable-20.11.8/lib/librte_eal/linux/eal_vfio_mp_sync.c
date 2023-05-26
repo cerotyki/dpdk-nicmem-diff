@@ -17,7 +17,7 @@
  * @file
  * VFIO socket for communication between primary and secondary processes.
  *
- * This file is only compiled if RTE_EAL_VFIO is set.
+ * This file is only compiled if CONFIG_RTE_EAL_VFIO is set to "y".
  */
 
 #ifdef VFIO_PRESENT
@@ -44,9 +44,9 @@ vfio_mp_primary(const struct rte_mp_msg *msg, const void *peer)
 		r->req = SOCKET_REQ_GROUP;
 		r->group_num = m->group_num;
 		fd = rte_vfio_get_group_fd(m->group_num);
-		if (fd < 0 && fd != -ENOENT)
+		if (fd < 0)
 			r->result = SOCKET_ERR;
-		else if (fd == -ENOENT)
+		else if (fd == 0)
 			/* if VFIO group exists but isn't bound to VFIO driver */
 			r->result = SOCKET_NO_FD;
 		else {
@@ -120,12 +120,4 @@ vfio_mp_sync_setup(void)
 	return 0;
 }
 
-void
-vfio_mp_sync_cleanup(void)
-{
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
-
-	rte_mp_action_unregister(EAL_VFIO_MP);
-}
 #endif

@@ -5,10 +5,6 @@
 #ifndef _RTE_COMPRESSDEV_INTERNAL_H_
 #define _RTE_COMPRESSDEV_INTERNAL_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* rte_compressdev_internal.h
  * This file holds Compressdev private data structures.
  */
@@ -22,7 +18,7 @@ extern "C" {
 /* Logging Macros */
 extern int compressdev_logtype;
 #define COMPRESSDEV_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, compressdev_logtype, "%s(): " fmt "\n", \
+	rte_log(RTE_LOG_ ## level, compressdev_logtype, "%s(): "fmt "\n", \
 			__func__, ##args)
 
 /**
@@ -98,7 +94,7 @@ struct rte_compressdev {
 struct rte_compressdev_data {
 	uint8_t dev_id;
 	/**< Compress device identifier */
-	int socket_id;
+	uint8_t socket_id;
 	/**< Socket identifier where memory is allocated */
 	char name[RTE_COMPRESSDEV_NAME_MAX_LEN];
 	/**< Unique identifier name */
@@ -115,9 +111,4 @@ struct rte_compressdev_data {
 	void *dev_private;
 	/**< PMD-specific private data */
 } __rte_cache_aligned;
-
-#ifdef __cplusplus
-}
-#endif
-
 #endif

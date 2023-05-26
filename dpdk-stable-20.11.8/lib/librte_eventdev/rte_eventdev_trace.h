@@ -34,7 +34,6 @@ RTE_TRACE_POINT(
 	rte_trace_point_emit_u32(dev_conf->nb_event_port_dequeue_depth);
 	rte_trace_point_emit_u32(dev_conf->nb_event_port_enqueue_depth);
 	rte_trace_point_emit_u32(dev_conf->event_dev_cfg);
-	rte_trace_point_emit_u8(dev_conf->nb_single_link_event_port_queues);
 	rte_trace_point_emit_int(rc);
 )
 
@@ -60,7 +59,7 @@ RTE_TRACE_POINT(
 	rte_trace_point_emit_i32(port_conf->new_event_threshold);
 	rte_trace_point_emit_u16(port_conf->dequeue_depth);
 	rte_trace_point_emit_u16(port_conf->enqueue_depth);
-	rte_trace_point_emit_u32(port_conf->event_port_cfg);
+	rte_trace_point_emit_u8(port_conf->disable_implicit_release);
 	rte_trace_point_emit_int(rc);
 )
 
@@ -166,7 +165,7 @@ RTE_TRACE_POINT(
 	rte_trace_point_emit_i32(port_conf->new_event_threshold);
 	rte_trace_point_emit_u16(port_conf->dequeue_depth);
 	rte_trace_point_emit_u16(port_conf->enqueue_depth);
-	rte_trace_point_emit_u32(port_conf->event_port_cfg);
+	rte_trace_point_emit_u8(port_conf->disable_implicit_release);
 	rte_trace_point_emit_ptr(conf_cb);
 	rte_trace_point_emit_int(rc);
 )
@@ -258,7 +257,7 @@ RTE_TRACE_POINT(
 	rte_trace_point_emit_i32(port_conf->new_event_threshold);
 	rte_trace_point_emit_u16(port_conf->dequeue_depth);
 	rte_trace_point_emit_u16(port_conf->enqueue_depth);
-	rte_trace_point_emit_u32(port_conf->event_port_cfg);
+	rte_trace_point_emit_u8(port_conf->disable_implicit_release);
 )
 
 RTE_TRACE_POINT(

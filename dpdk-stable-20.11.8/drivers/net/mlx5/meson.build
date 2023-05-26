@@ -9,7 +9,6 @@ if not (is_linux or is_windows)
 endif
 
 deps += ['hash', 'common_mlx5']
-headers = files('rte_pmd_mlx5.h')
 sources = files(
 	'mlx5.c',
 	'mlx5_ethdev.c',
@@ -17,7 +16,6 @@ sources = files(
 	'mlx5_flow_meter.c',
 	'mlx5_flow_dv.c',
 	'mlx5_flow_verbs.c',
-        'mlx5_flow_age.c',
 	'mlx5_mac.c',
 	'mlx5_mr.c',
 	'mlx5_rss.c',
@@ -30,7 +28,6 @@ sources = files(
 	'mlx5_txpp.c',
 	'mlx5_vlan.c',
 	'mlx5_utils.c',
-	'mlx5_devx.c',
 )
 if (dpdk_conf.has('RTE_ARCH_X86_64')
 	or dpdk_conf.has('RTE_ARCH_ARM64')

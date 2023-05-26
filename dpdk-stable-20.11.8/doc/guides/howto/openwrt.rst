@@ -100,8 +100,13 @@ first.
     ar = 'x86_64-openwrt-linux-ar'
     strip = 'x86_64-openwrt-linux-strip'
 
-    meson setup builddir --cross-file openwrt-cross
+    meson builddir --cross-file openwrt-cross
     ninja -C builddir
+
+.. note::
+
+    For compiling the igb_uio with the kernel version used in target machine,
+    you need to explicitly specify kernel_dir in meson_options.txt.
 
 Running DPDK application on OpenWrt
 -----------------------------------

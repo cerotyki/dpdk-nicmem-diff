@@ -603,7 +603,7 @@ test_realloc_numa(void)
 		}
 	}
 
-	/* Print warning if only a single socket, but don't fail the test */
+	/* Print warnign if only a single socket, but don't fail the test */
 	if (socket_count < 2)
 		printf("WARNING: realloc_socket test needs memory on multiple sockets!\n");
 
@@ -846,9 +846,6 @@ test_malloc_bad_params(void)
 	if (bad_ptr != NULL)
 		goto err_return;
 
-#if defined(RTE_CC_GCC) || defined(RTE_CC_CLANG)
-	/* this test can not be built, will get trapped at compile time! */
-#else
 	/* rte_malloc expected to return null with size will cause overflow */
 	align = RTE_CACHE_LINE_SIZE;
 	size = (size_t)-8;
@@ -860,7 +857,7 @@ test_malloc_bad_params(void)
 	bad_ptr = rte_realloc(NULL, size, align);
 	if (bad_ptr != NULL)
 		goto err_return;
-#endif
+
 	return 0;
 
 err_return:
@@ -971,7 +968,7 @@ test_alloc_socket(void)
 		}
 	}
 
-	/* Print warning if only a single socket, but don't fail the test */
+	/* Print warnign if only a single socket, but don't fail the test */
 	if (socket_count < 2) {
 		printf("WARNING: alloc_socket test needs memory on multiple sockets!\n");
 	}
@@ -1010,11 +1007,11 @@ test_malloc(void)
 	else printf("test_realloc() passed\n");
 
 	/*----------------------------*/
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		rte_eal_remote_launch(test_align_overlap_per_lcore, NULL, lcore_id);
 	}
 
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			ret = -1;
 	}
@@ -1025,11 +1022,11 @@ test_malloc(void)
 	else printf("test_align_overlap_per_lcore() passed\n");
 
 	/*----------------------------*/
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		rte_eal_remote_launch(test_reordered_free_per_lcore, NULL, lcore_id);
 	}
 
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			ret = -1;
 	}
@@ -1040,11 +1037,11 @@ test_malloc(void)
 	else printf("test_reordered_free_per_lcore() passed\n");
 
 	/*----------------------------*/
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		rte_eal_remote_launch(test_random_alloc_free, NULL, lcore_id);
 	}
 
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			ret = -1;
 	}

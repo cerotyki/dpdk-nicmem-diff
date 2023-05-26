@@ -57,13 +57,12 @@ struct virtnet_ctl;
 #define VIRTIO_ID_9P       0x09
 
 /* Status byte for guest to report progress. */
-#define VIRTIO_CONFIG_STATUS_RESET		0x00
-#define VIRTIO_CONFIG_STATUS_ACK		0x01
-#define VIRTIO_CONFIG_STATUS_DRIVER		0x02
-#define VIRTIO_CONFIG_STATUS_DRIVER_OK		0x04
-#define VIRTIO_CONFIG_STATUS_FEATURES_OK	0x08
-#define VIRTIO_CONFIG_STATUS_DEV_NEED_RESET	0x40
-#define VIRTIO_CONFIG_STATUS_FAILED		0x80
+#define VIRTIO_CONFIG_STATUS_RESET     0x00
+#define VIRTIO_CONFIG_STATUS_ACK       0x01
+#define VIRTIO_CONFIG_STATUS_DRIVER    0x02
+#define VIRTIO_CONFIG_STATUS_DRIVER_OK 0x04
+#define VIRTIO_CONFIG_STATUS_FEATURES_OK 0x08
+#define VIRTIO_CONFIG_STATUS_FAILED    0x80
 
 /*
  * Each virtqueue indirect descriptor list must be physically contiguous.
@@ -259,22 +258,15 @@ struct virtio_hw {
 	uint8_t     use_inorder_rx;
 	uint8_t     use_inorder_tx;
 	uint8_t     weak_barriers;
-	bool        rx_ol_scatter;
 	bool        has_tx_offload;
 	bool        has_rx_offload;
 	uint16_t    port_id;
 	uint8_t     mac_addr[RTE_ETHER_ADDR_LEN];
-	/*
-	 * Speed is specified via 'speed' devarg or
-	 * negotiated via VIRTIO_NET_F_SPEED_DUPLEX
-	 */
-	bool get_speed_via_feat;
 	uint32_t    notify_off_multiplier;
 	uint32_t    speed;  /* link speed in MB */
 	uint8_t     duplex;
 	uint8_t     *isr;
 	uint16_t    *notify_base;
-	size_t      max_rx_pkt_len;
 	struct virtio_pci_common_cfg *common_cfg;
 	struct virtio_net_config *dev_cfg;
 	void	    *virtio_user_dev;

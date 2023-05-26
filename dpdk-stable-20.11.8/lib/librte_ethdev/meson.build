@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+name = 'ethdev'
 sources = files('ethdev_private.c',
 	'ethdev_profile.c',
 	'ethdev_trace_points.c',

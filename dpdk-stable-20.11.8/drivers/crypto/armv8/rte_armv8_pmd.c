@@ -143,8 +143,7 @@ crypto_chain_order[] = {
 	crypto_func_tbl_t *func_tbl =					\
 				(crypto_chain_order[(order)])[(cop)];	\
 									\
-	((calg >= CRYPTO_CIPHER_MAX) || (aalg >= CRYPTO_AUTH_MAX)) ?	\
-		NULL : ((*func_tbl)[(calg)][(aalg)][KEYL(keyl)]);	\
+	((*func_tbl)[(calg)][(aalg)][KEYL(keyl)]);		\
 })
 
 /*----------------------------------------------------------------------------*/
@@ -189,8 +188,7 @@ crypto_key_sched_dir[] = {
 ({									\
 	crypto_key_sched_tbl_t *ks_tbl = crypto_key_sched_dir[(cop)];	\
 									\
-	(calg >= CRYPTO_CIPHER_MAX) ?					\
-		NULL : ((*ks_tbl)[(calg)][KEYL(keyl)]);			\
+	((*ks_tbl)[(calg)][KEYL(keyl)]);				\
 })
 
 /*----------------------------------------------------------------------------*/
@@ -438,8 +436,7 @@ armv8_crypto_set_session_chained_parameters(struct armv8_crypto_session *sess,
 		return -ENOTSUP;
 	}
 
-	if (unlikely(sess->crypto_func == NULL ||
-		sess->cipher.key_sched == NULL)) {
+	if (unlikely(sess->crypto_func == NULL)) {
 		/*
 		 * If we got here that means that there must be a bug
 		 * in the algorithms selection above. Nevertheless keep
@@ -677,8 +674,8 @@ process_op(struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 		memset(op->sym->session, 0,
 			rte_cryptodev_sym_get_existing_header_session_size(
 				op->sym->session));
-		rte_mempool_put(qp->sess_mp_priv, sess);
-		rte_mempool_put(qp->sess_mp, op->sym->session);
+		rte_mempool_put(qp->sess_mp, sess);
+		rte_mempool_put(qp->sess_mp_priv, op->sym->session);
 		op->sym->session = NULL;
 	}
 

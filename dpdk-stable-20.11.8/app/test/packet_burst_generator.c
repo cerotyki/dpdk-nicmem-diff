@@ -117,7 +117,6 @@ initialize_tcp_header(struct rte_tcp_hdr *tcp_hdr, uint16_t src_port,
 	memset(tcp_hdr, 0, sizeof(struct rte_tcp_hdr));
 	tcp_hdr->src_port = rte_cpu_to_be_16(src_port);
 	tcp_hdr->dst_port = rte_cpu_to_be_16(dst_port);
-	tcp_hdr->data_off = (sizeof(struct rte_tcp_hdr) << 2) & 0xF0;
 
 	return pkt_len;
 }
@@ -142,8 +141,8 @@ uint16_t
 initialize_ipv6_header(struct rte_ipv6_hdr *ip_hdr, uint8_t *src_addr,
 		uint8_t *dst_addr, uint16_t pkt_data_len)
 {
-	ip_hdr->vtc_flow = rte_cpu_to_be_32(0x60000000); /* Set version to 6. */
-	ip_hdr->payload_len = rte_cpu_to_be_16(pkt_data_len);
+	ip_hdr->vtc_flow = 0;
+	ip_hdr->payload_len = pkt_data_len;
 	ip_hdr->proto = IPPROTO_UDP;
 	ip_hdr->hop_limits = IP_DEFTTL;
 
@@ -262,11 +261,11 @@ generate_packet_burst(struct rte_mempool *mp, struct rte_mbuf **pkts_burst,
 		void *ip_hdr, uint8_t ipv4, struct rte_udp_hdr *udp_hdr,
 		int nb_pkt_per_burst, uint8_t pkt_len, uint8_t nb_pkt_segs)
 {
-	const uint8_t pkt_seg_data_len = pkt_len / nb_pkt_segs;
+	int i, nb_pkt = 0;
+	size_t eth_hdr_size;
+
 	struct rte_mbuf *pkt_seg;
 	struct rte_mbuf *pkt;
-	size_t eth_hdr_size;
-	int i, nb_pkt = 0;
 
 	for (nb_pkt = 0; nb_pkt < nb_pkt_per_burst; nb_pkt++) {
 		pkt = rte_pktmbuf_alloc(mp);
@@ -277,7 +276,7 @@ nomore_mbuf:
 			break;
 		}
 
-		pkt->data_len = pkt_seg_data_len;
+		pkt->data_len = pkt_len;
 		pkt_seg = pkt;
 		for (i = 1; i < nb_pkt_segs; i++) {
 			pkt_seg->next = rte_pktmbuf_alloc(mp);
@@ -287,10 +286,7 @@ nomore_mbuf:
 				goto nomore_mbuf;
 			}
 			pkt_seg = pkt_seg->next;
-			if (i != nb_pkt_segs - 1)
-				pkt_seg->data_len = pkt_seg_data_len;
-			else
-				pkt_seg->data_len = pkt_seg_data_len + pkt_len % nb_pkt_segs;
+			pkt_seg->data_len = pkt_len;
 		}
 		pkt_seg->next = NULL; /* Last segment of packet. */
 
@@ -346,11 +342,11 @@ generate_packet_burst_proto(struct rte_mempool *mp,
 		uint8_t ipv4, uint8_t proto, void *proto_hdr,
 		int nb_pkt_per_burst, uint8_t pkt_len, uint8_t nb_pkt_segs)
 {
-	const uint8_t pkt_seg_data_len = pkt_len / nb_pkt_segs;
+	int i, nb_pkt = 0;
+	size_t eth_hdr_size;
+
 	struct rte_mbuf *pkt_seg;
 	struct rte_mbuf *pkt;
-	size_t eth_hdr_size;
-	int i, nb_pkt = 0;
 
 	for (nb_pkt = 0; nb_pkt < nb_pkt_per_burst; nb_pkt++) {
 		pkt = rte_pktmbuf_alloc(mp);
@@ -361,7 +357,7 @@ nomore_mbuf:
 			break;
 		}
 
-		pkt->data_len = pkt_seg_data_len;
+		pkt->data_len = pkt_len;
 		pkt_seg = pkt;
 		for (i = 1; i < nb_pkt_segs; i++) {
 			pkt_seg->next = rte_pktmbuf_alloc(mp);
@@ -371,10 +367,7 @@ nomore_mbuf:
 				goto nomore_mbuf;
 			}
 			pkt_seg = pkt_seg->next;
-			if (i != nb_pkt_segs - 1)
-				pkt_seg->data_len = pkt_seg_data_len;
-			else
-				pkt_seg->data_len = pkt_seg_data_len + pkt_len % nb_pkt_segs;
+			pkt_seg->data_len = pkt_len;
 		}
 		pkt_seg->next = NULL; /* Last segment of packet. */
 

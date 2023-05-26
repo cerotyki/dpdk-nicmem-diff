@@ -94,15 +94,19 @@ drivers can be compiled with the following steps,
 
 .. code-block:: console
 
-        meson setup build -Dexamples=<application>
-        ninja -C build
+        cd <dpdk directory>
+        make config T=arm64-thunderx-linux-gcc
+        make
 
 The example applications can be compiled using the following:
 
 .. code-block:: console
 
-        meson setup build -Dexamples=<application>
-        ninja -C build
+        cd <dpdk directory>
+        export RTE_SDK=$PWD
+        export RTE_TARGET=build
+        cd examples/<application>
+        make
 
 Cross Compilation
 ~~~~~~~~~~~~~~~~~
@@ -111,7 +115,10 @@ The DPDK applications can be cross-compiled on any x86 based platform. The
 OCTEON TX SDK need to be installed on the build system. The SDK package will
 provide the required toolchain etc.
 
-Refer to :doc:`../linux_gsg/cross_build_dpdk_for_arm64` for generic arm64 details.
+Refer to :doc:`../linux_gsg/cross_build_dpdk_for_arm64` for further steps on
+compilation. The 'host' & 'CC' to be used in the commands would change,
+in addition to the paths to which libnuma related files have to be
+copied.
 
 The following steps can be used to perform cross-compilation with OCTEON TX
 SDK 6.2.0 patch 3:
@@ -121,28 +128,34 @@ SDK 6.2.0 patch 3:
         cd <sdk_install_dir>
         source env-setup
 
-The above steps will prepare build system with required toolchain.
-Now this build system can be used to build applications for **OCTEON TX** :sup:`®` platforms.
+        git clone https://github.com/numactl/numactl.git
+        cd numactl
+        git checkout v2.0.11 -b v2.0.11
+        ./autogen.sh
+        autoconf -i
+        ./configure --host=aarch64-thunderx-linux CC=aarch64-thunderx-linux-gnu-gcc --prefix=<numa install dir>
+        make install
+
+The above steps will prepare build system with numa additions. Now this build system can be used
+to build applications for **OCTEON TX** :sup:`®` platforms.
 
 .. code-block:: console
 
         cd <dpdk directory>
-        meson setup build --cross-file config/arm/arm64_thunderx_linux_gcc
-        ninja -C build
+        export RTE_SDK=$PWD
+        export RTE_KERNELDIR=$THUNDER_ROOT/linux/kernel/linux
+        make config T=arm64-thunderx-linux-gcc
+        make -j CROSS=aarch64-thunderx-linux-gnu- CONFIG_RTE_KNI_KMOD=n CONFIG_RTE_EAL_IGB_UIO=n EXTRA_CFLAGS="-isystem <numa_install_dir>/include" EXTRA_LDFLAGS="-L<numa_install_dir>/lib -lnuma"
 
-The example applications can be compiled using the following:
+If NUMA support is not required, it can be disabled as explained in
+:doc:`../linux_gsg/cross_build_dpdk_for_arm64`.
+
+Following steps could be used in that case.
 
 .. code-block:: console
 
-        cd <dpdk directory>
-        meson setup build --cross-file config/arm/arm64_thunderx_linux_gcc -Dexamples=<application>
-        ninja -C build
+        make config T=arm64-thunderx-linux-gcc
+        make CROSS=aarch64-thunderx-linux-gnu-
 
-.. note::
-
-   By default, meson cross compilation uses ``aarch64-linux-gnu-gcc`` toolchain,
-   if OCTEON TX SDK 6.2.0 patch 3 is available then it can be used by
-   overriding the c, cpp, ar, strip ``binaries`` attributes to respective thunderx
-   toolchain binaries in ``config/arm/arm64_thunderx_linux_gcc`` file.
 
 SDK and related information can be obtained from: `Cavium support site <https://support.cavium.com/>`_.

@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <rte_errno.h>
+#include <rte_atomic.h>
 
 #include "mlx5_nl.h"
 #include "mlx5_common_utils.h"
@@ -33,8 +34,6 @@
 #define MLX5_SEND_BUF_SIZE 32768
 /* Receive buffer size for the Netlink socket */
 #define MLX5_RECV_BUF_SIZE 32768
-/* Maximal physical port name length. */
-#define MLX5_PHYS_PORT_NAME_MAX 128
 
 /** Parameters of VLAN devices created by driver. */
 #define MLX5_VMWA_VLAN_DEVICE_PFX "evmlx"
@@ -170,32 +169,29 @@ struct mlx5_nl_ifindex_data {
 	uint32_t portnum; /**< IB device max port number (out). */
 };
 
-uint32_t atomic_sn;
+rte_atomic32_t atomic_sn = RTE_ATOMIC32_INIT(0);
 
 /* Generate Netlink sequence number. */
-#define MLX5_NL_SN_GENERATE __atomic_add_fetch(&atomic_sn, 1, __ATOMIC_RELAXED)
+#define MLX5_NL_SN_GENERATE ((uint32_t)rte_atomic32_add_return(&atomic_sn, 1))
 
 /**
  * Opens a Netlink socket.
  *
  * @param protocol
  *   Netlink protocol (e.g. NETLINK_ROUTE, NETLINK_RDMA).
- * @param groups
- *   Groups to listen (e.g. RTMGRP_LINK), can be 0.
  *
  * @return
  *   A file descriptor on success, a negative errno value otherwise and
  *   rte_errno is set.
  */
 int
-mlx5_nl_init(int protocol, int groups)
+mlx5_nl_init(int protocol)
 {
 	int fd;
-	int buf_size;
-	socklen_t opt_size;
+	int sndbuf_size = MLX5_SEND_BUF_SIZE;
+	int rcvbuf_size = MLX5_RECV_BUF_SIZE;
 	struct sockaddr_nl local = {
 		.nl_family = AF_NETLINK,
-		.nl_groups = groups,
 	};
 	int ret;
 
@@ -204,35 +200,15 @@ mlx5_nl_init(int protocol, int groups)
 		rte_errno = errno;
 		return -rte_errno;
 	}
-	opt_size = sizeof(buf_size);
-	ret = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf_size, &opt_size);
+	ret = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf_size, sizeof(int));
 	if (ret == -1) {
 		rte_errno = errno;
 		goto error;
 	}
-	DRV_LOG(DEBUG, "Netlink socket send buffer: %d", buf_size);
-	if (buf_size < MLX5_SEND_BUF_SIZE) {
-		ret = setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
-				 &buf_size, sizeof(buf_size));
-		if (ret == -1) {
-			rte_errno = errno;
-			goto error;
-		}
-	}
-	opt_size = sizeof(buf_size);
-	ret = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_size, &opt_size);
+	ret = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(int));
 	if (ret == -1) {
 		rte_errno = errno;
 		goto error;
-	}
-	DRV_LOG(DEBUG, "Netlink socket recv buffer: %d", buf_size);
-	if (buf_size < MLX5_RECV_BUF_SIZE) {
-		ret = setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
-				 &buf_size, sizeof(buf_size));
-		if (ret == -1) {
-			rte_errno = errno;
-			goto error;
-		}
 	}
 	ret = bind(fd, (struct sockaddr *)&local, sizeof(local));
 	if (ret == -1) {
@@ -355,7 +331,11 @@ mlx5_nl_recv(int nlsk_fd, uint32_t sn, int (*cb)(struct nlmsghdr *, void *arg),
 	     void *arg)
 {
 	struct sockaddr_nl sa;
-	struct iovec iov;
+	void *buf = mlx5_malloc(0, MLX5_RECV_BUF_SIZE, 0, SOCKET_ID_ANY);
+	struct iovec iov = {
+		.iov_base = buf,
+		.iov_len = MLX5_RECV_BUF_SIZE,
+	};
 	struct msghdr msg = {
 		.msg_name = &sa,
 		.msg_namelen = sizeof(sa),
@@ -363,43 +343,18 @@ mlx5_nl_recv(int nlsk_fd, uint32_t sn, int (*cb)(struct nlmsghdr *, void *arg),
 		/* One message at a time */
 		.msg_iovlen = 1,
 	};
-	void *buf = NULL;
 	int multipart = 0;
 	int ret = 0;
 
+	if (!buf) {
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
 	do {
 		struct nlmsghdr *nh;
-		int recv_bytes;
+		int recv_bytes = 0;
 
 		do {
-			/* Query length of incoming message. */
-			iov.iov_base = NULL;
-			iov.iov_len = 0;
-			recv_bytes = recvmsg(nlsk_fd, &msg,
-					     MSG_PEEK | MSG_TRUNC);
-			if (recv_bytes < 0) {
-				rte_errno = errno;
-				ret = -rte_errno;
-				goto exit;
-			}
-			if (recv_bytes == 0) {
-				rte_errno = ENODATA;
-				ret = -rte_errno;
-				goto exit;
-			}
-			/* Allocate buffer to fetch the message. */
-			if (recv_bytes < MLX5_RECV_BUF_SIZE)
-				recv_bytes = MLX5_RECV_BUF_SIZE;
-			mlx5_free(buf);
-			buf = mlx5_malloc(0, recv_bytes, 0, SOCKET_ID_ANY);
-			if (!buf) {
-				rte_errno = ENOMEM;
-				ret = -rte_errno;
-				goto exit;
-			}
-			/* Fetch the message. */
-			iov.iov_base = buf;
-			iov.iov_len = recv_bytes;
 			recv_bytes = recvmsg(nlsk_fd, &msg, 0);
 			if (recv_bytes == -1) {
 				rte_errno = errno;
@@ -792,7 +747,6 @@ mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
 	int i;
 	int ret;
 
-	memset(macs, 0, n * sizeof(macs[0]));
 	ret = mlx5_nl_mac_addr_list(nlsk_fd, iface_idx, &macs, &macs_n);
 	if (ret)
 		return;
@@ -805,21 +759,11 @@ mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
 				break;
 		if (j != n)
 			continue;
-		if (rte_is_multicast_ether_addr(&macs[i])) {
-			/* Find the first entry available. */
-			for (j = MLX5_MAX_UC_MAC_ADDRESSES; j != n; ++j) {
-				if (rte_is_zero_ether_addr(&mac_addrs[j])) {
-					mac_addrs[j] = macs[i];
-					break;
-				}
-			}
-		} else {
-			/* Find the first entry available. */
-			for (j = 0; j != MLX5_MAX_UC_MAC_ADDRESSES; ++j) {
-				if (rte_is_zero_ether_addr(&mac_addrs[j])) {
-					mac_addrs[j] = macs[i];
-					break;
-				}
+		/* Find the first entry available. */
+		for (j = 0; j != n; ++j) {
+			if (rte_is_zero_ether_addr(&mac_addrs[j])) {
+				mac_addrs[j] = macs[i];
+				break;
 			}
 		}
 	}
@@ -1205,8 +1149,6 @@ mlx5_nl_check_switch_info(bool num_vf_set,
 	case MLX5_PHYS_PORT_NAME_TYPE_PFHPF:
 		/* Fallthrough */
 	case MLX5_PHYS_PORT_NAME_TYPE_PFVF:
-		/* Fallthrough */
-	case MLX5_PHYS_PORT_NAME_TYPE_PFSF:
 		/* New representors naming schema. */
 		switch_info->representor = 1;
 		break;
@@ -1237,7 +1179,6 @@ mlx5_nl_switch_info_cb(struct nlmsghdr *nh, void *arg)
 	size_t off = NLMSG_LENGTH(sizeof(struct ifinfomsg));
 	bool switch_id_set = false;
 	bool num_vf_set = false;
-	int len;
 
 	if (nh->nlmsg_type != RTM_NEWLINK)
 		goto error;
@@ -1253,24 +1194,7 @@ mlx5_nl_switch_info_cb(struct nlmsghdr *nh, void *arg)
 			num_vf_set = true;
 			break;
 		case IFLA_PHYS_PORT_NAME:
-			len = RTA_PAYLOAD(ra);
-			/* Some kernels do not pad attributes with zero. */
-			if (len > 0 && len < MLX5_PHYS_PORT_NAME_MAX) {
-				char name[MLX5_PHYS_PORT_NAME_MAX];
-
-				/*
-				 * We can't just patch the message with padding
-				 * zero - it might corrupt the following items
-				 * in the message, we have to copy the string
-				 * by attribute length and pad the copied one.
-				 */
-				memcpy(name, payload, len);
-				name[len] = 0;
-				mlx5_translate_port_name(name, &info);
-			} else {
-				info.name_type =
-					MLX5_PHYS_PORT_NAME_TYPE_UNKNOWN;
-			}
+			mlx5_translate_port_name((char *)payload, &info);
 			break;
 		case IFLA_PHYS_SWITCH_ID:
 			info.switch_id = 0;
@@ -1800,104 +1724,4 @@ mlx5_nl_enable_roce_set(int nlsk_fd, int family_id, const char *pci_addr,
 		pci_addr, enable ? "en" : "dis");
 	/* Now, need to reload the driver. */
 	return mlx5_nl_driver_reload(nlsk_fd, family_id, pci_addr);
-}
-
-/**
- * Try to parse a Netlink message as a link status update.
- *
- * @param hdr
- *  Netlink message header.
- * @param[out] ifindex
- *  Index of the updated interface.
- * @param[out] flags
- *  New interface flags.
- *
- * @return
- *  0 on success, negative on failure.
- */
-int
-mlx5_nl_parse_link_status_update(struct nlmsghdr *hdr, uint32_t *ifindex)
-{
-	struct ifinfomsg *info;
-
-	switch (hdr->nlmsg_type) {
-	case RTM_NEWLINK:
-	case RTM_DELLINK:
-	case RTM_GETLINK:
-	case RTM_SETLINK:
-		info = NLMSG_DATA(hdr);
-		*ifindex = info->ifi_index;
-		return 0;
-	}
-	return -1;
-}
-
-/**
- * Read pending events from a Netlink socket.
- *
- * @param nlsk_fd
- *  Netlink socket.
- * @param cb
- *  Callback invoked for each of the events.
- * @param cb_arg
- *  User data for the callback.
- *
- * @return
- *  0 on success, including the case when there are no events.
- *  Negative on failure and rte_errno is set.
- */
-int
-mlx5_nl_read_events(int nlsk_fd, mlx5_nl_event_cb *cb, void *cb_arg)
-{
-	char buf[8192];
-	struct sockaddr_nl addr;
-	struct iovec iov = {
-		.iov_base = buf,
-		.iov_len = sizeof(buf),
-	};
-	struct msghdr msg = {
-		.msg_name = &addr,
-		.msg_namelen = sizeof(addr),
-		.msg_iov = &iov,
-		.msg_iovlen = 1,
-	};
-	struct nlmsghdr *hdr;
-	ssize_t size;
-
-	while (1) {
-		size = recvmsg(nlsk_fd, &msg, MSG_DONTWAIT);
-		if (size < 0) {
-			if (errno == EAGAIN)
-				return 0;
-			if (errno == EINTR)
-				continue;
-			DRV_LOG(DEBUG, "Failed to receive netlink message: %s",
-				strerror(errno));
-			rte_errno = errno;
-			return -rte_errno;
-
-		}
-		hdr = (struct nlmsghdr *)buf;
-		while (size >= (ssize_t)sizeof(*hdr)) {
-			ssize_t msg_len = hdr->nlmsg_len;
-			ssize_t data_len = msg_len - sizeof(*hdr);
-			ssize_t aligned_len;
-
-			if (data_len < 0) {
-				DRV_LOG(DEBUG, "Netlink message too short");
-				rte_errno = EINVAL;
-				return -rte_errno;
-			}
-			aligned_len = NLMSG_ALIGN(msg_len);
-			if (aligned_len > size) {
-				DRV_LOG(DEBUG, "Netlink message too long");
-				rte_errno = EINVAL;
-				return -rte_errno;
-			}
-			cb(hdr, cb_arg);
-			hdr = RTE_PTR_ADD(hdr, aligned_len);
-			size -= aligned_len;
-		}
-	}
-	return 0;
 }

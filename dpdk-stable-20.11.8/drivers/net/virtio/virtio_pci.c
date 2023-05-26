@@ -31,6 +31,22 @@
 #define VIRTIO_PCI_CONFIG(hw) \
 		(((hw)->use_msix == VIRTIO_MSIX_ENABLED) ? 24 : 20)
 
+static inline int
+check_vq_phys_addr_ok(struct virtqueue *vq)
+{
+	/* Virtio PCI device VIRTIO_PCI_QUEUE_PF register is 32bit,
+	 * and only accepts 32 bit page frame number.
+	 * Check if the allocated physical memory exceeds 16TB.
+	 */
+	if ((vq->vq_ring_mem + vq->vq_ring_size - 1) >>
+			(VIRTIO_PCI_QUEUE_ADDR_SHIFT + 32)) {
+		PMD_INIT_LOG(ERR, "vring address shouldn't be above 16TB!");
+		return 0;
+	}
+
+	return 1;
+}
+
 /*
  * Since we are in legacy mode:
  * http://ozlabs.org/~rusty/virtio-spec/virtio-0.9.5.pdf
@@ -159,7 +175,7 @@ legacy_get_isr(struct virtio_hw *hw)
 	return dst;
 }
 
-/* Enable one vector (0) for Link State Interrupt */
+/* Enable one vector (0) for Link State Intrerrupt */
 static uint16_t
 legacy_set_config_irq(struct virtio_hw *hw, uint16_t vec)
 {
@@ -197,15 +213,8 @@ legacy_setup_queue(struct virtio_hw *hw, struct virtqueue *vq)
 {
 	uint32_t src;
 
-	/* Virtio PCI device VIRTIO_PCI_QUEUE_PFN register is 32bit,
-	 * and only accepts 32 bit page frame number.
-	 * Check if the allocated physical memory exceeds 16TB.
-	 */
-	if ((vq->vq_ring_mem + vq->vq_ring_size - 1) >>
-			(VIRTIO_PCI_QUEUE_ADDR_SHIFT + 32)) {
-		PMD_INIT_LOG(ERR, "vring address shouldn't be above 16TB!");
+	if (!check_vq_phys_addr_ok(vq))
 		return -1;
-	}
 
 	rte_pci_ioport_write(VTPCI_IO(hw), &vq->vq_queue_index, 2,
 		VIRTIO_PCI_QUEUE_SEL);
@@ -356,6 +365,9 @@ modern_setup_queue(struct virtio_hw *hw, struct virtqueue *vq)
 {
 	uint64_t desc_addr, avail_addr, used_addr;
 	uint16_t notify_off;
+
+	if (!check_vq_phys_addr_ok(vq))
+		return -1;
 
 	desc_addr = vq->vq_ring_mem;
 	avail_addr = desc_addr + vq->vq_nentries * sizeof(struct vring_desc);
@@ -670,7 +682,7 @@ next:
  * Return -1:
  *   if there is error mapping with VFIO/UIO.
  *   if port map error when driver type is KDRV_NONE.
- *   if marked as allowed but driver type is KDRV_UNKNOWN.
+ *   if whitelisted but driver type is KDRV_UNKNOWN.
  * Return 1 if kernel driver is managing the device.
  * Return 0 on success.
  */
@@ -692,7 +704,7 @@ vtpci_init(struct rte_pci_device *dev, struct virtio_hw *hw)
 	PMD_INIT_LOG(INFO, "trying with legacy virtio pci.");
 	if (rte_pci_ioport_map(dev, 0, VTPCI_IO(hw)) < 0) {
 		rte_pci_unmap_device(dev);
-		if (dev->kdrv == RTE_PCI_KDRV_UNKNOWN &&
+		if (dev->kdrv == RTE_KDRV_UNKNOWN &&
 		    (!dev->device.devargs ||
 		     dev->device.devargs->bus !=
 		     rte_bus_find_by_name("pci"))) {

@@ -188,8 +188,8 @@ static int ena_com_sq_update_llq_tail(struct ena_com_io_sq *io_sq)
 
 		pkt_ctrl->curr_bounce_buf =
 			ena_com_get_next_bounce_buffer(&io_sq->bounce_buf_ctrl);
-		memset(io_sq->llq_buf_ctrl.curr_bounce_buf,
-		       0x0, llq_info->desc_list_entry_size);
+			memset(io_sq->llq_buf_ctrl.curr_bounce_buf,
+			       0x0, llq_info->desc_list_entry_size);
 
 		pkt_ctrl->idx = 0;
 		if (unlikely(llq_info->desc_stride_ctrl == ENA_ADMIN_SINGLE_DESC_PER_ENTRY))
@@ -268,9 +268,6 @@ static int ena_com_create_meta(struct ena_com_io_sq *io_sq,
 	struct ena_eth_io_tx_meta_desc *meta_desc = NULL;
 
 	meta_desc = get_sq_desc(io_sq);
-	if (unlikely(!meta_desc))
-		return ENA_COM_FAULT;
-
 	memset(meta_desc, 0x0, sizeof(struct ena_eth_io_tx_meta_desc));
 
 	meta_desc->len_ctrl |= ENA_ETH_IO_TX_META_DESC_META_DESC_MASK;
@@ -278,7 +275,7 @@ static int ena_com_create_meta(struct ena_com_io_sq *io_sq,
 	meta_desc->len_ctrl |= ENA_ETH_IO_TX_META_DESC_EXT_VALID_MASK;
 
 	/* bits 0-9 of the mss */
-	meta_desc->word2 |= ((u32)ena_meta->mss <<
+	meta_desc->word2 |= (ena_meta->mss <<
 		ENA_ETH_IO_TX_META_DESC_MSS_LO_SHIFT) &
 		ENA_ETH_IO_TX_META_DESC_MSS_LO_MASK;
 	/* bits 10-13 of the mss */
@@ -288,7 +285,7 @@ static int ena_com_create_meta(struct ena_com_io_sq *io_sq,
 
 	/* Extended meta desc */
 	meta_desc->len_ctrl |= ENA_ETH_IO_TX_META_DESC_ETH_META_TYPE_MASK;
-	meta_desc->len_ctrl |= ((u32)io_sq->phase <<
+	meta_desc->len_ctrl |= (io_sq->phase <<
 		ENA_ETH_IO_TX_META_DESC_PHASE_SHIFT) &
 		ENA_ETH_IO_TX_META_DESC_PHASE_MASK;
 
@@ -301,7 +298,7 @@ static int ena_com_create_meta(struct ena_com_io_sq *io_sq,
 		ENA_ETH_IO_TX_META_DESC_L3_HDR_OFF_SHIFT) &
 		ENA_ETH_IO_TX_META_DESC_L3_HDR_OFF_MASK;
 
-	meta_desc->word2 |= ((u32)ena_meta->l4_hdr_len <<
+	meta_desc->word2 |= (ena_meta->l4_hdr_len <<
 		ENA_ETH_IO_TX_META_DESC_L4_HDR_LEN_IN_WORDS_SHIFT) &
 		ENA_ETH_IO_TX_META_DESC_L4_HDR_LEN_IN_WORDS_MASK;
 
@@ -323,18 +320,16 @@ static int ena_com_create_and_store_tx_meta_desc(struct ena_com_io_sq *io_sq,
 
 		*have_meta = true;
 		return ena_com_create_meta(io_sq, ena_meta);
-	}
-
-	if (ena_com_meta_desc_changed(io_sq, ena_tx_ctx)) {
+	} else if (ena_com_meta_desc_changed(io_sq, ena_tx_ctx)) {
 		*have_meta = true;
 		/* Cache the meta desc */
 		memcpy(&io_sq->cached_tx_meta, ena_meta,
 		       sizeof(struct ena_com_tx_meta));
 		return ena_com_create_meta(io_sq, ena_meta);
+	} else {
+		*have_meta = false;
+		return ENA_COM_OK;
 	}
-
-	*have_meta = false;
-	return ENA_COM_OK;
 }
 
 static void ena_com_rx_set_flags(struct ena_com_rx_ctx *ena_rx_ctx,
@@ -436,16 +431,16 @@ int ena_com_prepare_tx(struct ena_com_io_sq *io_sq,
 	if (!have_meta)
 		desc->len_ctrl |= ENA_ETH_IO_TX_DESC_FIRST_MASK;
 
-	desc->buff_addr_hi_hdr_sz |= ((u32)header_len <<
+	desc->buff_addr_hi_hdr_sz |= (header_len <<
 		ENA_ETH_IO_TX_DESC_HEADER_LENGTH_SHIFT) &
 		ENA_ETH_IO_TX_DESC_HEADER_LENGTH_MASK;
-	desc->len_ctrl |= ((u32)io_sq->phase << ENA_ETH_IO_TX_DESC_PHASE_SHIFT) &
+	desc->len_ctrl |= (io_sq->phase << ENA_ETH_IO_TX_DESC_PHASE_SHIFT) &
 		ENA_ETH_IO_TX_DESC_PHASE_MASK;
 
 	desc->len_ctrl |= ENA_ETH_IO_TX_DESC_COMP_REQ_MASK;
 
 	/* Bits 0-9 */
-	desc->meta_ctrl |= ((u32)ena_tx_ctx->req_id <<
+	desc->meta_ctrl |= (ena_tx_ctx->req_id <<
 		ENA_ETH_IO_TX_DESC_REQ_ID_LO_SHIFT) &
 		ENA_ETH_IO_TX_DESC_REQ_ID_LO_MASK;
 
@@ -493,7 +488,7 @@ int ena_com_prepare_tx(struct ena_com_io_sq *io_sq,
 
 			memset(desc, 0x0, sizeof(struct ena_eth_io_tx_desc));
 
-			desc->len_ctrl |= ((u32)io_sq->phase <<
+			desc->len_ctrl |= (io_sq->phase <<
 				ENA_ETH_IO_TX_DESC_PHASE_SHIFT) &
 				ENA_ETH_IO_TX_DESC_PHASE_MASK;
 		}
@@ -533,7 +528,6 @@ int ena_com_rx_pkt(struct ena_com_io_cq *io_cq,
 {
 	struct ena_com_rx_buf_info *ena_buf = &ena_rx_ctx->ena_bufs[0];
 	struct ena_eth_io_rx_cdesc_base *cdesc = NULL;
-	u16 q_depth = io_cq->q_depth;
 	u16 cdesc_idx = 0;
 	u16 nb_hw_desc;
 	u16 i = 0;
@@ -560,17 +554,10 @@ int ena_com_rx_pkt(struct ena_com_io_cq *io_cq,
 	ena_rx_ctx->pkt_offset = cdesc->offset;
 
 	do {
-		ena_buf[i].len = cdesc->length;
-		ena_buf[i].req_id = cdesc->req_id;
-		if (unlikely(ena_buf[i].req_id >= q_depth))
-			return ENA_COM_EIO;
-
-		if (++i >= nb_hw_desc)
-			break;
-
-		cdesc = ena_com_rx_cdesc_idx_to_ptr(io_cq, cdesc_idx + i);
-
-	} while (1);
+		ena_buf->len = cdesc->length;
+		ena_buf->req_id = cdesc->req_id;
+		ena_buf++;
+	} while ((++i < nb_hw_desc) && (cdesc = ena_com_rx_cdesc_idx_to_ptr(io_cq, cdesc_idx + i)));
 
 	/* Update SQ head ptr */
 	io_sq->next_to_comp += nb_hw_desc;
@@ -606,9 +593,9 @@ int ena_com_add_single_rx_desc(struct ena_com_io_sq *io_sq,
 	desc->length = ena_buf->len;
 
 	desc->ctrl = ENA_ETH_IO_RX_DESC_FIRST_MASK |
-		     ENA_ETH_IO_RX_DESC_LAST_MASK |
-		     ENA_ETH_IO_RX_DESC_COMP_REQ_MASK |
-		     (io_sq->phase & ENA_ETH_IO_RX_DESC_PHASE_MASK);
+		ENA_ETH_IO_RX_DESC_LAST_MASK |
+		(io_sq->phase & ENA_ETH_IO_RX_DESC_PHASE_MASK) |
+		ENA_ETH_IO_RX_DESC_COMP_REQ_MASK;
 
 	desc->req_id = req_id;
 

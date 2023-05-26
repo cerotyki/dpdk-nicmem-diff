@@ -4,7 +4,7 @@
 
 /*
  * This sample application is a simple multi-process application which
- * demonstrates sharing of queues and memory pools between processes, and
+ * demostrates sharing of queues and memory pools between processes, and
  * using those queues/pools for communication between the processes.
  *
  * Application is designed to run with two processes, a primary and a
@@ -108,12 +108,12 @@ main(int argc, char **argv)
 
 	RTE_LOG(INFO, APP, "Finished Process Init.\n");
 
-	/* call lcore_recv() on every worker lcore */
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	/* call lcore_recv() on every slave lcore */
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		rte_eal_remote_launch(lcore_recv, NULL, lcore_id);
 	}
 
-	/* call cmd prompt on main lcore */
+	/* call cmd prompt on master lcore */
 	struct cmdline *cl = cmdline_stdin_new(simple_mp_ctx, "\nsimple_mp > ");
 	if (cl == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create cmdline instance\n");
@@ -121,9 +121,5 @@ main(int argc, char **argv)
 	cmdline_stdin_exit(cl);
 
 	rte_eal_mp_wait_lcore();
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
-
 	return 0;
 }

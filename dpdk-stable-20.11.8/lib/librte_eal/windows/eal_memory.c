@@ -18,12 +18,13 @@
 #include <rte_virt2phys.h>
 
 /* MinGW-w64 headers lack VirtualAlloc2() in some distributions.
+ * Provide a copy of definitions and code to load it dynamically.
  * Note: definitions are copied verbatim from Microsoft documentation
  * and don't follow DPDK code style.
+ *
+ * MEM_RESERVE_PLACEHOLDER being defined means VirtualAlloc2() is present too.
  */
-#ifndef MEM_EXTENDED_PARAMETER_TYPE_BITS
-
-#define MEM_EXTENDED_PARAMETER_TYPE_BITS 4
+#ifndef MEM_PRESERVE_PLACEHOLDER
 
 /* https://docs.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-mem_extended_parameter_type */
 typedef enum MEM_EXTENDED_PARAMETER_TYPE {
@@ -35,6 +36,8 @@ typedef enum MEM_EXTENDED_PARAMETER_TYPE {
 	MemExtendedParameterAttributeFlags,
 	MemExtendedParameterMax
 } *PMEM_EXTENDED_PARAMETER_TYPE;
+
+#define MEM_EXTENDED_PARAMETER_TYPE_BITS 4
 
 /* https://docs.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-mem_extended_parameter */
 typedef struct MEM_EXTENDED_PARAMETER {
@@ -51,8 +54,6 @@ typedef struct MEM_EXTENDED_PARAMETER {
 	} DUMMYUNIONNAME;
 } MEM_EXTENDED_PARAMETER, *PMEM_EXTENDED_PARAMETER;
 
-#endif /* defined(MEM_EXTENDED_PARAMETER_TYPE_BITS) */
-
 /* https://docs.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc2 */
 typedef PVOID (*VirtualAlloc2_type)(
 	HANDLE                 Process,
@@ -64,18 +65,16 @@ typedef PVOID (*VirtualAlloc2_type)(
 	ULONG                  ParameterCount
 );
 
-/* MinGW-w64 distributions, even those that declare VirtualAlloc2(),
- * lack it in import libraries, which results in a failure at link time.
- * Link it dynamically in such case.
- */
-static VirtualAlloc2_type VirtualAlloc2_ptr;
-
-#ifdef RTE_TOOLCHAIN_GCC
-
+/* VirtualAlloc2() flags. */
 #define MEM_COALESCE_PLACEHOLDERS 0x00000001
 #define MEM_PRESERVE_PLACEHOLDER  0x00000002
 #define MEM_REPLACE_PLACEHOLDER   0x00004000
 #define MEM_RESERVE_PLACEHOLDER   0x00040000
+
+/* Named exactly as the function, so that user code does not depend
+ * on it being found at compile time or dynamically.
+ */
+static VirtualAlloc2_type VirtualAlloc2;
 
 int
 eal_mem_win32api_init(void)
@@ -90,7 +89,7 @@ eal_mem_win32api_init(void)
 	int ret = 0;
 
 	/* Already done. */
-	if (VirtualAlloc2_ptr != NULL)
+	if (VirtualAlloc2 != NULL)
 		return 0;
 
 	library = LoadLibraryA(library_name);
@@ -99,9 +98,9 @@ eal_mem_win32api_init(void)
 		return -1;
 	}
 
-	VirtualAlloc2_ptr = (VirtualAlloc2_type)(
+	VirtualAlloc2 = (VirtualAlloc2_type)(
 		(void *)GetProcAddress(library, function));
-	if (VirtualAlloc2_ptr == NULL) {
+	if (VirtualAlloc2 == NULL) {
 		RTE_LOG_WIN32_ERR("GetProcAddress(\"%s\", \"%s\")\n",
 			library_name, function);
 
@@ -118,15 +117,14 @@ eal_mem_win32api_init(void)
 
 #else
 
-/* Stub in case VirtualAlloc2() is provided by the toolchain. */
+/* Stub in case VirtualAlloc2() is provided by the compiler. */
 int
 eal_mem_win32api_init(void)
 {
-	VirtualAlloc2_ptr = VirtualAlloc2;
 	return 0;
 }
 
-#endif /* defined(RTE_TOOLCHAIN_GCC) */
+#endif /* defined(MEM_RESERVE_PLACEHOLDER) */
 
 static HANDLE virt2phys_device = INVALID_HANDLE_VALUE;
 
@@ -198,13 +196,6 @@ exit:
 	return ret;
 }
 
-void
-eal_mem_virt2iova_cleanup(void)
-{
-	if (virt2phys_device != INVALID_HANDLE_VALUE)
-		CloseHandle(virt2phys_device);
-}
-
 phys_addr_t
 rte_mem_virt2phy(const void *virt)
 {
@@ -225,17 +216,19 @@ rte_mem_virt2phy(const void *virt)
 	return phys.QuadPart;
 }
 
+/* Windows currently only supports IOVA as PA. */
 rte_iova_t
 rte_mem_virt2iova(const void *virt)
 {
 	phys_addr_t phys;
 
-	if (rte_eal_iova_mode() == RTE_IOVA_VA)
-		return (rte_iova_t)virt;
+	if (virt2phys_device == INVALID_HANDLE_VALUE)
+		return RTE_BAD_IOVA;
 
 	phys = rte_mem_virt2phy(virt);
 	if (phys == RTE_BAD_PHYS_ADDR)
 		return RTE_BAD_IOVA;
+
 	return (rte_iova_t)phys;
 }
 
@@ -285,7 +278,7 @@ eal_mem_reserve(void *requested_addr, size_t size, int flags)
 
 	process = GetCurrentProcess();
 
-	virt = VirtualAlloc2_ptr(process, requested_addr, size,
+	virt = VirtualAlloc2(process, requested_addr, size,
 		MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS,
 		NULL, 0);
 	if (virt == NULL) {
@@ -371,7 +364,7 @@ eal_mem_commit(void *requested_addr, size_t size, int socket_id)
 	}
 
 	flags = MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES;
-	addr = VirtualAlloc2_ptr(process, requested_addr, size,
+	addr = VirtualAlloc2(process, requested_addr, size,
 		flags, PAGE_READWRITE, &param, param_count);
 	if (addr == NULL) {
 		/* Logging may overwrite GetLastError() result. */
@@ -413,7 +406,7 @@ eal_mem_decommit(void *addr, size_t size)
 	}
 
 	flags = MEM_RESERVE | MEM_RESERVE_PLACEHOLDER;
-	stub = VirtualAlloc2_ptr(
+	stub = VirtualAlloc2(
 		process, addr, size, flags, PAGE_NOACCESS, NULL, 0);
 	if (stub == NULL) {
 		/* We lost the race for the VA. */
@@ -513,7 +506,7 @@ eal_mem_set_dump(void *virt, size_t size, bool dump)
 
 void *
 rte_mem_map(void *requested_addr, size_t size, int prot, int flags,
-	int fd, uint64_t offset)
+	int fd, size_t offset)
 {
 	HANDLE file_handle = INVALID_HANDLE_VALUE;
 	HANDLE mapping_handle = INVALID_HANDLE_VALUE;

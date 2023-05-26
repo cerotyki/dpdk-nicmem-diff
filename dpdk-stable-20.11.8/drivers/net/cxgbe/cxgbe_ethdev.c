@@ -71,9 +71,6 @@ uint16_t cxgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	t4_os_lock(&txq->txq_lock);
 	/* free up desc from already completed tx */
 	reclaim_completed_tx(&txq->q);
-	if (unlikely(!nb_pkts))
-		goto out_unlock;
-
 	rte_prefetch0(rte_pktmbuf_mtod(tx_pkts[0], volatile void *));
 	while (total_sent < nb_pkts) {
 		pkts_remain = nb_pkts - total_sent;
@@ -94,7 +91,6 @@ uint16_t cxgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		reclaim_completed_tx(&txq->q);
 	}
 
-out_unlock:
 	t4_os_unlock(&txq->txq_lock);
 	return total_sent;
 }
@@ -116,6 +112,7 @@ int cxgbe_dev_info_get(struct rte_eth_dev *eth_dev,
 {
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
+	int max_queues = adapter->sge.max_ethqsets / adapter->params.nports;
 
 	static const struct rte_eth_desc_lim cxgbe_desc_lim = {
 		.nb_max = CXGBE_MAX_RING_DESC_SIZE,
@@ -125,8 +122,8 @@ int cxgbe_dev_info_get(struct rte_eth_dev *eth_dev,
 
 	device_info->min_rx_bufsize = CXGBE_MIN_RX_BUFSIZE;
 	device_info->max_rx_pktlen = CXGBE_MAX_RX_PKTLEN;
-	device_info->max_rx_queues = adapter->sge.max_ethqsets;
-	device_info->max_tx_queues = adapter->sge.max_ethqsets;
+	device_info->max_rx_queues = max_queues;
+	device_info->max_tx_queues = max_queues;
 	device_info->max_mac_addrs = 1;
 	/* XXX: For now we support one MAC/port */
 	device_info->max_vfs = adapter->params.arch.vfcount;
@@ -300,7 +297,7 @@ int cxgbe_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 		return -EINVAL;
 
 	/* set to jumbo mode if needed */
-	if (new_mtu > CXGBE_ETH_MAX_LEN)
+	if (new_mtu > RTE_ETHER_MAX_LEN)
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -318,41 +315,23 @@ int cxgbe_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 /*
  * Stop device.
  */
-int cxgbe_dev_close(struct rte_eth_dev *eth_dev)
+void cxgbe_dev_close(struct rte_eth_dev *eth_dev)
 {
-	struct port_info *temp_pi, *pi = eth_dev->data->dev_private;
+	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
-	u8 i;
 
 	CXGBE_FUNC_TRACE();
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
 	if (!(adapter->flags & FULL_INIT_DONE))
-		return 0;
-
-	if (!pi->viid)
-		return 0;
+		return;
 
 	cxgbe_down(pi);
-	t4_sge_eth_release_queues(pi);
-	t4_free_vi(adapter, adapter->mbox, adapter->pf, 0, pi->viid);
-	pi->viid = 0;
 
-	/* Free up the adapter-wide resources only after all the ports
-	 * under this PF have been closed.
+	/*
+	 *  We clear queues only if both tx and rx path of the port
+	 *  have been disabled
 	 */
-	for_each_port(adapter, i) {
-		temp_pi = adap2pinfo(adapter, i);
-		if (temp_pi->viid)
-			return 0;
-	}
-
-	cxgbe_close(adapter);
-	rte_free(adapter);
-
-	return 0;
+	t4_sge_eth_clear_queues(pi);
 }
 
 /* Start the device.
@@ -416,7 +395,7 @@ out:
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-int cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
+void cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
@@ -424,7 +403,7 @@ int cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 	CXGBE_FUNC_TRACE();
 
 	if (!(adapter->flags & FULL_INIT_DONE))
-		return 0;
+		return;
 
 	cxgbe_down(pi);
 
@@ -434,8 +413,6 @@ int cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 	 */
 	t4_sge_eth_clear_queues(pi);
 	eth_dev->data->scattered_rx = 0;
-
-	return 0;
 }
 
 int cxgbe_dev_configure(struct rte_eth_dev *eth_dev)
@@ -507,14 +484,13 @@ int cxgbe_dev_tx_queue_setup(struct rte_eth_dev *eth_dev,
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
 	struct sge *s = &adapter->sge;
-	unsigned int temp_nb_desc;
-	struct sge_eth_txq *txq;
+	struct sge_eth_txq *txq = &s->ethtxq[pi->first_qset + queue_idx];
 	int err = 0;
+	unsigned int temp_nb_desc;
 
-	txq = &s->ethtxq[pi->first_txqset + queue_idx];
 	dev_debug(adapter, "%s: eth_dev->data->nb_tx_queues = %d; queue_idx = %d; nb_desc = %d; socket_id = %d; pi->first_qset = %u\n",
 		  __func__, eth_dev->data->nb_tx_queues, queue_idx, nb_desc,
-		  socket_id, pi->first_txqset);
+		  socket_id, pi->first_qset);
 
 	/*  Free up the existing queue  */
 	if (eth_dev->data->tx_queues[queue_idx]) {
@@ -569,16 +545,17 @@ void cxgbe_dev_tx_queue_release(void *q)
 
 int cxgbe_dev_rx_queue_start(struct rte_eth_dev *eth_dev, uint16_t rx_queue_id)
 {
+	int ret;
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adap = pi->adapter;
-	struct sge_eth_rxq *rxq;
-	int ret;
+	struct sge_rspq *q;
 
 	dev_debug(adapter, "%s: pi->port_id = %d; rx_queue_id = %d\n",
 		  __func__, pi->port_id, rx_queue_id);
 
-	rxq = eth_dev->data->rx_queues[rx_queue_id];
-	ret = t4_sge_eth_rxq_start(adap, rxq);
+	q = eth_dev->data->rx_queues[rx_queue_id];
+
+	ret = t4_sge_eth_rxq_start(adap, q);
 	if (ret == 0)
 		eth_dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
 
@@ -587,16 +564,16 @@ int cxgbe_dev_rx_queue_start(struct rte_eth_dev *eth_dev, uint16_t rx_queue_id)
 
 int cxgbe_dev_rx_queue_stop(struct rte_eth_dev *eth_dev, uint16_t rx_queue_id)
 {
+	int ret;
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adap = pi->adapter;
-	struct sge_eth_rxq *rxq;
-	int ret;
+	struct sge_rspq *q;
 
 	dev_debug(adapter, "%s: pi->port_id = %d; rx_queue_id = %d\n",
 		  __func__, pi->port_id, rx_queue_id);
 
-	rxq = eth_dev->data->rx_queues[rx_queue_id];
-	ret = t4_sge_eth_rxq_stop(adap, rxq);
+	q = eth_dev->data->rx_queues[rx_queue_id];
+	ret = t4_sge_eth_rxq_stop(adap, q);
 	if (ret == 0)
 		eth_dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
@@ -609,16 +586,16 @@ int cxgbe_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 			     const struct rte_eth_rxconf *rx_conf __rte_unused,
 			     struct rte_mempool *mp)
 {
-	unsigned int pkt_len = eth_dev->data->dev_conf.rxmode.max_rx_pkt_len;
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
-	struct rte_eth_dev_info dev_info;
 	struct sge *s = &adapter->sge;
+	struct sge_eth_rxq *rxq = &s->ethrxq[pi->first_qset + queue_idx];
+	int err = 0;
+	int msi_idx = 0;
 	unsigned int temp_nb_desc;
-	int err = 0, msi_idx = 0;
-	struct sge_eth_rxq *rxq;
+	struct rte_eth_dev_info dev_info;
+	unsigned int pkt_len = eth_dev->data->dev_conf.rxmode.max_rx_pkt_len;
 
-	rxq = &s->ethrxq[pi->first_rxqset + queue_idx];
 	dev_debug(adapter, "%s: eth_dev->data->nb_rx_queues = %d; queue_idx = %d; nb_desc = %d; socket_id = %d; mp = %p\n",
 		  __func__, eth_dev->data->nb_rx_queues, queue_idx, nb_desc,
 		  socket_id, mp);
@@ -665,10 +642,11 @@ int cxgbe_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 	}
 
 	rxq->rspq.size = temp_nb_desc;
-	rxq->fl.size = temp_nb_desc;
+	if ((&rxq->fl) != NULL)
+		rxq->fl.size = temp_nb_desc;
 
 	/* Set to jumbo mode if necessary */
-	if (pkt_len > CXGBE_ETH_MAX_LEN)
+	if (pkt_len > RTE_ETHER_MAX_LEN)
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -690,10 +668,11 @@ int cxgbe_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 void cxgbe_dev_rx_queue_release(void *q)
 {
 	struct sge_eth_rxq *rxq = (struct sge_eth_rxq *)q;
+	struct sge_rspq *rq = &rxq->rspq;
 
-	if (rxq) {
+	if (rq) {
 		struct port_info *pi = (struct port_info *)
-				       (rxq->rspq.eth_dev->data->dev_private);
+				       (rq->eth_dev->data->dev_private);
 		struct adapter *adap = pi->adapter;
 
 		dev_debug(adapter, "%s: pi->port_id = %d; rx_queue_id = %d\n",
@@ -733,7 +712,7 @@ static int cxgbe_dev_stats_get(struct rte_eth_dev *eth_dev,
 
 	for (i = 0; i < pi->n_rx_qsets; i++) {
 		struct sge_eth_rxq *rxq =
-			&s->ethrxq[pi->first_rxqset + i];
+			&s->ethrxq[pi->first_qset + i];
 
 		eth_stats->q_ipackets[i] = rxq->stats.pkts;
 		eth_stats->q_ibytes[i] = rxq->stats.rx_bytes;
@@ -743,7 +722,7 @@ static int cxgbe_dev_stats_get(struct rte_eth_dev *eth_dev,
 
 	for (i = 0; i < pi->n_tx_qsets; i++) {
 		struct sge_eth_txq *txq =
-			&s->ethtxq[pi->first_txqset + i];
+			&s->ethtxq[pi->first_qset + i];
 
 		eth_stats->q_opackets[i] = txq->stats.pkts;
 		eth_stats->q_obytes[i] = txq->stats.tx_bytes;
@@ -764,14 +743,14 @@ static int cxgbe_dev_stats_reset(struct rte_eth_dev *eth_dev)
 	cxgbe_stats_reset(pi);
 	for (i = 0; i < pi->n_rx_qsets; i++) {
 		struct sge_eth_rxq *rxq =
-			&s->ethrxq[pi->first_rxqset + i];
+			&s->ethrxq[pi->first_qset + i];
 
 		rxq->stats.pkts = 0;
 		rxq->stats.rx_bytes = 0;
 	}
 	for (i = 0; i < pi->n_tx_qsets; i++) {
 		struct sge_eth_txq *txq =
-			&s->ethtxq[pi->first_txqset + i];
+			&s->ethtxq[pi->first_qset + i];
 
 		txq->stats.pkts = 0;
 		txq->stats.tx_bytes = 0;
@@ -924,69 +903,6 @@ static int cxgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 			mod_key[j] = be32_to_cpu(key[i]);
 
 		memcpy(rss_conf->rss_key, mod_key, CXGBE_DEFAULT_RSS_KEY_LEN);
-	}
-
-	return 0;
-}
-
-static int cxgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
-				     struct rte_eth_rss_reta_entry64 *reta_conf,
-				     uint16_t reta_size)
-{
-	struct port_info *pi = dev->data->dev_private;
-	struct adapter *adapter = pi->adapter;
-	u16 i, idx, shift, *rss;
-	int ret;
-
-	if (!(adapter->flags & FULL_INIT_DONE))
-		return -ENOMEM;
-
-	if (!reta_size || reta_size > pi->rss_size)
-		return -EINVAL;
-
-	rss = rte_calloc(NULL, pi->rss_size, sizeof(u16), 0);
-	if (!rss)
-		return -ENOMEM;
-
-	rte_memcpy(rss, pi->rss, pi->rss_size * sizeof(u16));
-	for (i = 0; i < reta_size; i++) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
-		if (!(reta_conf[idx].mask & (1ULL << shift)))
-			continue;
-
-		rss[i] = reta_conf[idx].reta[shift];
-	}
-
-	ret = cxgbe_write_rss(pi, rss);
-	if (!ret)
-		rte_memcpy(pi->rss, rss, pi->rss_size * sizeof(u16));
-
-	rte_free(rss);
-	return ret;
-}
-
-static int cxgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
-				    struct rte_eth_rss_reta_entry64 *reta_conf,
-				    uint16_t reta_size)
-{
-	struct port_info *pi = dev->data->dev_private;
-	struct adapter *adapter = pi->adapter;
-	u16 i, idx, shift;
-
-	if (!(adapter->flags & FULL_INIT_DONE))
-		return -ENOMEM;
-
-	if (!reta_size || reta_size > pi->rss_size)
-		return -EINVAL;
-
-	for (i = 0; i < reta_size; i++) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
-		if (!(reta_conf[idx].mask & (1ULL << shift)))
-			continue;
-
-		reta_conf[idx].reta[shift] = pi->rss[i];
 	}
 
 	return 0;
@@ -1211,8 +1127,6 @@ static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.rss_hash_update	= cxgbe_dev_rss_hash_update,
 	.rss_hash_conf_get	= cxgbe_dev_rss_hash_conf_get,
 	.mac_addr_set		= cxgbe_mac_addr_set,
-	.reta_update            = cxgbe_dev_rss_reta_update,
-	.reta_query             = cxgbe_dev_rss_reta_query,
 };
 
 /*
@@ -1261,8 +1175,6 @@ static int eth_cxgbe_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
-
 	snprintf(name, sizeof(name), "cxgbeadapter%d", eth_dev->data->port_id);
 	adapter = rte_zmalloc(name, sizeof(*adapter), 0);
 	if (!adapter)
@@ -1297,15 +1209,12 @@ out_free_adapter:
 
 static int eth_cxgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	uint16_t port_id;
-	int err = 0;
+	struct port_info *pi = eth_dev->data->dev_private;
+	struct adapter *adap = pi->adapter;
 
 	/* Free up other ports and all resources */
-	RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device)
-		err |= rte_eth_dev_close(port_id);
-
-	return err == 0 ? 0 : -EIO;
+	cxgbe_close(adap);
+	return 0;
 }
 
 static int eth_cxgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,

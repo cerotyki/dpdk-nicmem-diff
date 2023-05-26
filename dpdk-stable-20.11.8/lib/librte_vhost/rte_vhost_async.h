@@ -48,15 +48,15 @@ struct rte_vhost_async_channel_ops {
 	/**
 	 * instruct async engines to perform copies for a batch of packets
 	 *
-	 *  vid
+	 * @param vid
 	 *  id of vhost device to perform data copies
-	 *  queue_id
+	 * @param queue_id
 	 *  queue id to perform data copies
-	 *  descs
+	 * @param descs
 	 *  an array of DMA transfer memory descriptors
-	 *  opaque_data
+	 * @param opaque_data
 	 *  opaque data pair sending to DMA engine
-	 *  count
+	 * @param count
 	 *  number of elements in the "descs" array
 	 * @return
 	 *  number of descs processed
@@ -67,33 +67,20 @@ struct rte_vhost_async_channel_ops {
 		uint16_t count);
 	/**
 	 * check copy-completed packets from the async engine
-	 *  vid
+	 * @param vid
 	 *  id of vhost device to check copy completion
-	 *  queue_id
+	 * @param queue_id
 	 *  queue id to check copy completion
-	 *  opaque_data
+	 * @param opaque_data
 	 *  buffer to receive the opaque data pair from DMA engine
-	 *  max_packets
+	 * @param max_packets
 	 *  max number of packets could be completed
 	 * @return
-	 *  number of async descs completed
+	 *  number of iov segments completed
 	 */
 	uint32_t (*check_completed_copies)(int vid, uint16_t queue_id,
 		struct rte_vhost_async_status *opaque_data,
 		uint16_t max_packets);
-};
-
-/**
- * inflight async packet information
- */
-struct async_inflight_info {
-	union {
-		uint32_t info;
-		struct {
-			uint16_t descs; /* num of descs inflight */
-			uint16_t segs; /* iov segs inflight */
-		};
-	};
 };
 
 /**

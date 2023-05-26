@@ -353,7 +353,7 @@ rte_compressdev_stats_reset(uint8_t dev_id);
  * @note The capabilities field of dev_info is set to point to the first
  * element of an array of struct rte_compressdev_capabilities.
  * The element after the last valid element has it's op field set to
- * RTE_COMP_ALGO_UNSPECIFIED.
+ * RTE_COMP_ALGO_LIST_END.
  */
 __rte_experimental
 void

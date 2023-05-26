@@ -8,12 +8,10 @@
 
 if not is_linux
 	build = false
-	subdir_done()
 endif
 
 if not cc.has_header('linux/virtio_blk.h')
 	build = false
-	subdir_done()
 endif
 
 deps += 'vhost'

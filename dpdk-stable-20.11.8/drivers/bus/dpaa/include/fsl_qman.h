@@ -16,7 +16,7 @@ extern "C" {
 #include <rte_eventdev.h>
 
 /* FQ lookups (turn this on for 64bit user-space) */
-#ifdef RTE_ARCH_64
+#if (__WORDSIZE == 64)
 #define CONFIG_FSL_QMAN_FQ_LOOKUP
 /* if FQ lookups are supported, this controls the number of initialised,
  * s/w-consumed FQs that can be supported at any one time.
@@ -1229,7 +1229,6 @@ struct qman_fq {
 
 	int q_fd;
 	u16 ch_id;
-	int8_t vsp_id;
 	u8 cgr_groupid;
 	u8 is_static:4;
 	u8 qp_initialized:4;
@@ -1353,7 +1352,7 @@ __rte_internal
 int qman_irqsource_add(u32 bits);
 
 /**
- * qman_fq_portal_irqsource_add - similar to qman_irqsource_add, but it
+ * qman_fq_portal_irqsource_add - samilar to qman_irqsource_add, but it
  * takes portal (fq specific) as input rather than using the thread affined
  * portal.
  */
@@ -1416,7 +1415,7 @@ __rte_internal
 struct qm_dqrr_entry *qman_dequeue(struct qman_fq *fq);
 
 /**
- * qman_dqrr_consume - Consume the DQRR entry after volatile dequeue
+ * qman_dqrr_consume - Consume the DQRR entriy after volatile dequeue
  * @fq: Frame Queue on which the volatile dequeue command is issued
  * @dq: DQRR entry to consume. This is the one which is provided by the
  *    'qbman_dequeue' command.
@@ -1897,7 +1896,6 @@ int qman_enqueue_orp(struct qman_fq *fq, const struct qm_fd *fd, u32 flags,
  * FQs than requested (though alignment will be as requested). If @partial is
  * zero, the return value will either be 'count' or negative.
  */
-__rte_internal
 int qman_alloc_fqid_range(u32 *result, u32 count, u32 align, int partial);
 static inline int qman_alloc_fqid(u32 *result)
 {
@@ -2017,7 +2015,7 @@ int qman_create_cgr_to_dcp(struct qman_cgr *cgr, u32 flags, u16 dcp_portal,
  * @cgr: the 'cgr' object to deregister
  *
  * "Unplugs" this CGR object from the portal affine to the cpu on which this API
- * is executed. This must be executed on the same affine portal on which it was
+ * is executed. This must be excuted on the same affine portal on which it was
  * created.
  */
 __rte_internal

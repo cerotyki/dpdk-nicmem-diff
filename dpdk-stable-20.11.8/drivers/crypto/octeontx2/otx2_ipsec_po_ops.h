@@ -59,12 +59,16 @@ process_outb_sa(struct rte_crypto_op *cop,
 	uint32_t dlen, rlen, extend_head, extend_tail;
 	struct rte_crypto_sym_op *sym_op = cop->sym;
 	struct rte_mbuf *m_src = sym_op->m_src;
+	struct otx2_ipsec_po_sa_ctl *ctl_wrd;
 	struct cpt_request_info *req = NULL;
 	struct otx2_ipsec_po_out_hdr *hdr;
+	struct otx2_ipsec_po_out_sa *sa;
 	int hdr_len, mdata_len, ret = 0;
 	vq_cmd_word0_t word0;
 	char *mdata, *data;
 
+	sa = &sess->out_sa;
+	ctl_wrd = &sa->ctl;
 	hdr_len = sizeof(*hdr);
 
 	dlen = rte_pktmbuf_pkt_len(m_src) + hdr_len;
@@ -100,8 +104,14 @@ process_outb_sa(struct rte_crypto_op *cop,
 	hdr = (struct otx2_ipsec_po_out_hdr *)rte_pktmbuf_adj(m_src,
 							RTE_ETHER_HDR_LEN);
 
-	memcpy(&hdr->iv[0], rte_crypto_op_ctod_offset(cop, uint8_t *,
-		sess->iv_offset), sess->iv_length);
+	if (ctl_wrd->enc_type == OTX2_IPSEC_FP_SA_ENC_AES_GCM) {
+		memcpy(&hdr->iv[0], &sa->iv.gcm.nonce, 4);
+		memcpy(&hdr->iv[4], rte_crypto_op_ctod_offset(cop, uint8_t *,
+			sess->iv_offset), sess->iv_length);
+	} else if (ctl_wrd->auth_type == OTX2_IPSEC_FP_SA_ENC_AES_CBC) {
+		memcpy(&hdr->iv[0], rte_crypto_op_ctod_offset(cop, uint8_t *,
+			sess->iv_offset), sess->iv_length);
+	}
 
 	/* Prepare CPT instruction */
 	word0.u64 = sess->ucmd_w0;
@@ -110,6 +120,7 @@ process_outb_sa(struct rte_crypto_op *cop,
 	req->ist.ei0 = word0.u64;
 	req->ist.ei1 = rte_pktmbuf_iova(m_src);
 	req->ist.ei2 = req->ist.ei1;
+	req->ist.ei3 = sess->ucmd_w3;
 
 	hdr->seq = rte_cpu_to_be_32(sess->seq_lo);
 	hdr->ip_id = rte_cpu_to_be_32(sess->ip_id);
@@ -155,6 +166,7 @@ process_inb_sa(struct rte_crypto_op *cop,
 	req->ist.ei0 = word0.u64;
 	req->ist.ei1 = rte_pktmbuf_iova(m_src);
 	req->ist.ei2 = req->ist.ei1;
+	req->ist.ei3 = sess->ucmd_w3;
 
 exit:
 	*prep_req = req;

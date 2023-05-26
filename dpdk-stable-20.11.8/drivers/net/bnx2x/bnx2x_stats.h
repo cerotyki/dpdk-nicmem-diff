@@ -314,7 +314,7 @@ struct bnx2x_eth_stats_old {
 };
 
 struct bnx2x_eth_q_stats_old {
-    /* Fields to preserve over FW reset */
+    /* Fields to perserve over fw reset*/
     uint32_t total_unicast_bytes_received_hi;
     uint32_t total_unicast_bytes_received_lo;
     uint32_t total_broadcast_bytes_received_hi;
@@ -328,7 +328,7 @@ struct bnx2x_eth_q_stats_old {
     uint32_t total_multicast_bytes_transmitted_hi;
     uint32_t total_multicast_bytes_transmitted_lo;
 
-    /* Fields to preserve last of */
+    /* Fields to perserve last of */
     uint32_t total_bytes_received_hi;
     uint32_t total_bytes_received_lo;
     uint32_t total_bytes_transmitted_hi;

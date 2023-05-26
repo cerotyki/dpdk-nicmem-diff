@@ -27,7 +27,7 @@
 #define DEFAULT_RX_RING_SIZE	256
 #define DEFAULT_TX_RING_SIZE	256
 
-#define AGG_RING_SIZE_FACTOR	4
+#define AGG_RING_SIZE_FACTOR	2
 #define AGG_RING_MULTIPLIER	2
 
 /* These assume 4k pages */
@@ -66,7 +66,7 @@ struct bnxt_rx_ring_info;
 struct bnxt_cp_ring_info;
 void bnxt_free_ring(struct bnxt_ring *ring);
 int bnxt_alloc_ring_grps(struct bnxt *bp);
-int bnxt_alloc_rings(struct bnxt *bp, unsigned int socket_id, uint16_t qidx,
+int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 			    struct bnxt_tx_queue *txq,
 			    struct bnxt_rx_queue *rxq,
 			    struct bnxt_cp_ring_info *cp_ring_info,
@@ -82,10 +82,12 @@ void bnxt_free_rxtx_nq_ring(struct bnxt *bp);
 
 static inline void bnxt_db_write(struct bnxt_db_info *db, uint32_t idx)
 {
+	rte_cio_wmb();
+
 	if (db->db_64)
-		rte_write64(db->db_key64 | idx, db->doorbell);
+		rte_write64_relaxed(db->db_key64 | idx, db->doorbell);
 	else
-		rte_write32(db->db_key32 | idx, db->doorbell);
+		rte_write32_relaxed(db->db_key32 | idx, db->doorbell);
 }
 
 /* Ring an NQ doorbell and disable interrupts for the ring. */
@@ -94,9 +96,10 @@ static inline void bnxt_db_nq(struct bnxt_cp_ring_info *cpr)
 	if (unlikely(!cpr->cp_db.db_64))
 		return;
 
-	rte_write64(cpr->cp_db.db_key64 | DBR_TYPE_NQ |
-		    RING_CMP(cpr->cp_ring_struct, cpr->cp_raw_cons),
-		    cpr->cp_db.doorbell);
+	rte_cio_wmb();
+	rte_write64_relaxed(cpr->cp_db.db_key64 | DBR_TYPE_NQ |
+			    RING_CMP(cpr->cp_ring_struct, cpr->cp_raw_cons),
+			    cpr->cp_db.doorbell);
 }
 
 /* Ring an NQ doorbell and enable interrupts for the ring. */
@@ -105,9 +108,10 @@ static inline void bnxt_db_nq_arm(struct bnxt_cp_ring_info *cpr)
 	if (unlikely(!cpr->cp_db.db_64))
 		return;
 
-	rte_write64(cpr->cp_db.db_key64 | DBR_TYPE_NQ_ARM |
-		    RING_CMP(cpr->cp_ring_struct, cpr->cp_raw_cons),
-		    cpr->cp_db.doorbell);
+	rte_cio_wmb();
+	rte_write64_relaxed(cpr->cp_db.db_key64 | DBR_TYPE_NQ_ARM |
+			    RING_CMP(cpr->cp_ring_struct, cpr->cp_raw_cons),
+			    cpr->cp_db.doorbell);
 }
 
 static inline void bnxt_db_cq(struct bnxt_cp_ring_info *cpr)
@@ -115,18 +119,11 @@ static inline void bnxt_db_cq(struct bnxt_cp_ring_info *cpr)
 	struct bnxt_db_info *db = &cpr->cp_db;
 	uint32_t idx = RING_CMP(cpr->cp_ring_struct, cpr->cp_raw_cons);
 
-	if (db->db_64) {
-		uint64_t key_idx = db->db_key64 | idx;
-		void *doorbell = db->doorbell;
-
-		rte_compiler_barrier();
-		rte_write64_relaxed(key_idx, doorbell);
-	} else {
-		uint32_t cp_raw_cons = cpr->cp_raw_cons;
-
-		rte_compiler_barrier();
-		B_CP_DIS_DB(cpr, cp_raw_cons);
-	}
+	rte_compiler_barrier();
+	if (db->db_64)
+		rte_write64_relaxed(db->db_key64 | idx, db->doorbell);
+	else
+		B_CP_DIS_DB(cpr, cpr->cp_raw_cons);
 }
 
 #endif

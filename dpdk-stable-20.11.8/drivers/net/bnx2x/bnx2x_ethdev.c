@@ -17,7 +17,6 @@
  * The set of PCI devices this driver supports
  */
 #define BROADCOM_PCI_VENDOR_ID 0x14E4
-#define QLOGIC_PCI_VENDOR_ID 0x1077
 static const struct rte_pci_id pci_id_bnx2x_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57800) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57711) },
@@ -25,13 +24,11 @@ static const struct rte_pci_id pci_id_bnx2x_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_OBS) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_4_10) },
-	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_4_10) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_2_20) },
 #ifdef RTE_LIBRTE_BNX2X_MF_SUPPORT
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57810_MF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811_MF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_MF) },
-	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_MF) },
 #endif
 	{ .vendor_id = 0, }
 };
@@ -41,7 +38,6 @@ static const struct rte_pci_id pci_id_bnx2xvf_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57810_VF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811_VF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_VF) },
-	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_VF) },
 	{ .vendor_id = 0, }
 };
 
@@ -251,7 +247,7 @@ bnx2x_dev_start(struct rte_eth_dev *dev)
 	return ret;
 }
 
-static int
+static void
 bnx2x_dev_stop(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
@@ -278,22 +274,18 @@ bnx2x_dev_stop(struct rte_eth_dev *dev)
 	ret = bnx2x_nic_unload(sc, UNLOAD_NORMAL, FALSE);
 	if (ret) {
 		PMD_DRV_LOG(DEBUG, sc, "bnx2x_nic_unload failed (%d)", ret);
-		return ret;
+		return;
 	}
 
-	return 0;
+	return;
 }
 
-static int
+static void
 bnx2x_dev_close(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
 
 	PMD_INIT_FUNC_TRACE(sc);
-
-	/* only close in case of the primary process */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
 
 	if (IS_VF(sc))
 		bnx2x_vf_close(sc);
@@ -303,11 +295,6 @@ bnx2x_dev_close(struct rte_eth_dev *dev)
 
 	/* free ilt */
 	bnx2x_free_ilt_mem(sc);
-
-	/* mac_addrs must not be freed alone because part of dev_private */
-	dev->data->mac_addrs = NULL;
-
-	return 0;
 }
 
 static int
@@ -766,9 +753,8 @@ eth_bnx2xvf_dev_init(struct rte_eth_dev *eth_dev)
 
 static int eth_bnx2x_dev_uninit(struct rte_eth_dev *eth_dev)
 {
-	struct bnx2x_softc *sc = eth_dev->data->dev_private;
-	PMD_INIT_FUNC_TRACE(sc);
-	bnx2x_dev_close(eth_dev);
+	/* mac_addrs must not be freed alone because part of dev_private */
+	eth_dev->data->mac_addrs = NULL;
 	return 0;
 }
 

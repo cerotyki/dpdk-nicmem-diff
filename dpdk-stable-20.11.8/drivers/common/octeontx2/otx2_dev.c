@@ -11,7 +11,6 @@
 #include <rte_common.h>
 #include <rte_eal.h>
 #include <rte_memcpy.h>
-#include <rte_eal_paging.h>
 
 #include "otx2_dev.h"
 #include "otx2_mbox.h"
@@ -35,11 +34,10 @@ mbox_mem_map(off_t off, size_t size)
 	if (mem_fd < 0)
 		goto error;
 
-	va = rte_mem_map(NULL, size, RTE_PROT_READ | RTE_PROT_WRITE,
-			RTE_MAP_SHARED, mem_fd, off);
+	va = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, off);
 	close(mem_fd);
 
-	if (va == NULL)
+	if (va == MAP_FAILED)
 		otx2_err("Failed to mmap sz=0x%zx, fd=%d, off=%jd",
 			 size, mem_fd, (intmax_t)off);
 error:
@@ -50,7 +48,7 @@ static void
 mbox_mem_unmap(void *va, size_t size)
 {
 	if (va)
-		rte_mem_unmap(va, size);
+		munmap(va, size);
 }
 
 static int

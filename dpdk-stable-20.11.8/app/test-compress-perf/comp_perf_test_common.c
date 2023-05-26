@@ -227,43 +227,23 @@ comp_perf_allocate_memory(struct comp_test_data *test_data,
 {
 	uint16_t comp_mbuf_size;
 	uint16_t decomp_mbuf_size;
-	size_t comp_data_size;
-	size_t decomp_data_size;
-	size_t output_data_sz;
 
 	test_data->out_seg_sz = find_buf_size(test_data->seg_sz);
 
-	if (test_data->test_op & COMPRESS) {
-		/*
-		 * Number of segments for input and output
-		 * (compression and decompression)
-		 */
-		test_data->total_segs = DIV_CEIL(test_data->input_data_sz,
-						 test_data->seg_sz);
-	} else {
-		/*
-		 * When application does decompression only, input data is
-		 * compressed and smaller than the output. The expected size of
-		 * uncompressed data given by the user in segment size argument.
-		 */
-		test_data->total_segs = test_data->max_sgl_segs;
-	}
-
-	output_data_sz = (size_t) test_data->out_seg_sz * test_data->total_segs;
-	output_data_sz =
-		RTE_MAX(output_data_sz, (size_t) MIN_COMPRESSED_BUF_SIZE);
+	/* Number of segments for input and output
+	 * (compression and decompression)
+	 */
+	test_data->total_segs = DIV_CEIL(test_data->input_data_sz,
+			test_data->seg_sz);
 
 	if (test_data->use_external_mbufs != 0) {
 		if (comp_perf_allocate_external_mbufs(test_data, mem) < 0)
 			return -1;
 		comp_mbuf_size = 0;
 		decomp_mbuf_size = 0;
-	} else if (test_data->test_op & COMPRESS) {
+	} else {
 		comp_mbuf_size = test_data->out_seg_sz + RTE_PKTMBUF_HEADROOM;
 		decomp_mbuf_size = test_data->seg_sz + RTE_PKTMBUF_HEADROOM;
-	} else {
-		comp_mbuf_size = test_data->seg_sz + RTE_PKTMBUF_HEADROOM;
-		decomp_mbuf_size = test_data->out_seg_sz + RTE_PKTMBUF_HEADROOM;
 	}
 
 	char pool_name[32] = "";
@@ -307,28 +287,26 @@ comp_perf_allocate_memory(struct comp_test_data *test_data,
 		return -1;
 	}
 
-	if (test_data->test_op & COMPRESS) {
-		/*
-		 * Compressed data might be a bit larger than input data,
-		 * if data cannot be compressed
-		 */
-		comp_data_size = output_data_sz;
-		decomp_data_size = test_data->input_data_sz;
-	} else {
-		comp_data_size = test_data->input_data_sz;
-		decomp_data_size = output_data_sz;
-	}
-
-	mem->compressed_data = rte_zmalloc_socket(NULL, comp_data_size, 0,
-						  rte_socket_id());
+	/*
+	 * Compressed data might be a bit larger than input data,
+	 * if data cannot be compressed
+	 */
+	mem->compressed_data = rte_zmalloc_socket(NULL,
+				RTE_MAX(
+				    (size_t) test_data->out_seg_sz *
+							  test_data->total_segs,
+				    (size_t) MIN_COMPRESSED_BUF_SIZE),
+				0,
+				rte_socket_id());
 	if (mem->compressed_data == NULL) {
 		RTE_LOG(ERR, USER1, "Memory to hold the data from the input "
 				"file could not be allocated\n");
 		return -1;
 	}
 
-	mem->decompressed_data = rte_zmalloc_socket(NULL, decomp_data_size, 0,
-						    rte_socket_id());
+	mem->decompressed_data = rte_zmalloc_socket(NULL,
+				test_data->input_data_sz, 0,
+				rte_socket_id());
 	if (mem->decompressed_data == NULL) {
 		RTE_LOG(ERR, USER1, "Memory to hold the data from the input "
 				"file could not be allocated\n");
@@ -366,7 +344,6 @@ int
 prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 {
 	uint32_t remaining_data = test_data->input_data_sz;
-	uint32_t remaining_data_decomp = test_data->input_data_sz;
 	uint8_t *input_data_ptr = test_data->input_data;
 	size_t data_sz = 0;
 	uint8_t *data_addr;
@@ -374,7 +351,6 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 	uint16_t segs_per_mbuf = 0;
 	uint32_t cmz = 0;
 	uint32_t dmz = 0;
-	bool decompress_only = !!(test_data->test_op == DECOMPRESS);
 
 	for (i = 0; i < mem->total_bufs; i++) {
 		/* Allocate data in input mbuf and copy data from input file */
@@ -385,6 +361,8 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 			return -1;
 		}
 
+		data_sz = RTE_MIN(remaining_data, test_data->seg_sz);
+
 		if (test_data->use_external_mbufs != 0) {
 			rte_pktmbuf_attach_extbuf(mem->decomp_bufs[i],
 					mem->decomp_memzones[dmz]->addr,
@@ -394,23 +372,16 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 			dmz++;
 		}
 
-		if (!decompress_only)
-			data_sz = RTE_MIN(remaining_data, test_data->seg_sz);
-		else
-			data_sz = test_data->out_seg_sz;
-
 		data_addr = (uint8_t *) rte_pktmbuf_append(
 					mem->decomp_bufs[i], data_sz);
 		if (data_addr == NULL) {
 			RTE_LOG(ERR, USER1, "Could not append data\n");
 			return -1;
 		}
+		rte_memcpy(data_addr, input_data_ptr, data_sz);
 
-		if (!decompress_only) {
-			rte_memcpy(data_addr, input_data_ptr, data_sz);
-			input_data_ptr += data_sz;
-			remaining_data -= data_sz;
-		}
+		input_data_ptr += data_sz;
+		remaining_data -= data_sz;
 
 		/* Already one segment in the mbuf */
 		segs_per_mbuf = 1;
@@ -427,6 +398,8 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 				return -1;
 			}
 
+			data_sz = RTE_MIN(remaining_data, test_data->seg_sz);
+
 			if (test_data->use_external_mbufs != 0) {
 				rte_pktmbuf_attach_extbuf(
 					next_seg,
@@ -437,12 +410,6 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 				dmz++;
 			}
 
-			if (!decompress_only)
-				data_sz = RTE_MIN(remaining_data,
-						  test_data->seg_sz);
-			else
-				data_sz = test_data->out_seg_sz;
-
 			data_addr = (uint8_t *)rte_pktmbuf_append(next_seg,
 				data_sz);
 
@@ -451,11 +418,9 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 				return -1;
 			}
 
-			if (!decompress_only) {
-				rte_memcpy(data_addr, input_data_ptr, data_sz);
-				input_data_ptr += data_sz;
-				remaining_data -= data_sz;
-			}
+			rte_memcpy(data_addr, input_data_ptr, data_sz);
+			input_data_ptr += data_sz;
+			remaining_data -= data_sz;
 
 			if (rte_pktmbuf_chain(mem->decomp_bufs[i],
 					next_seg) < 0) {
@@ -482,26 +447,16 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 			cmz++;
 		}
 
-		if (decompress_only)
-			data_sz = RTE_MIN(remaining_data_decomp, test_data->seg_sz);
-		else
-			data_sz = test_data->out_seg_sz;
-
-		data_addr = (uint8_t *) rte_pktmbuf_append(mem->comp_bufs[i],
-							   data_sz);
+		data_addr = (uint8_t *) rte_pktmbuf_append(
+					mem->comp_bufs[i],
+					test_data->out_seg_sz);
 		if (data_addr == NULL) {
 			RTE_LOG(ERR, USER1, "Could not append data\n");
 			return -1;
 		}
 
-		if (decompress_only) {
-			rte_memcpy(data_addr, input_data_ptr, data_sz);
-			input_data_ptr += data_sz;
-			remaining_data_decomp -= data_sz;
-		}
-
 		/* Chain mbufs if needed for output mbufs */
-		for (j = 1; j < segs_per_mbuf && remaining_data_decomp > 0; j++) {
+		for (j = 1; j < segs_per_mbuf; j++) {
 			struct rte_mbuf *next_seg =
 				rte_pktmbuf_alloc(mem->comp_buf_pool);
 
@@ -521,23 +476,11 @@ prepare_bufs(struct comp_test_data *test_data, struct cperf_mem_resources *mem)
 				cmz++;
 			}
 
-			if (decompress_only)
-				data_sz = RTE_MIN(remaining_data_decomp,
-						  test_data->seg_sz);
-			else
-				data_sz = test_data->out_seg_sz;
-
 			data_addr = (uint8_t *)rte_pktmbuf_append(next_seg,
-								  data_sz);
+				test_data->out_seg_sz);
 			if (data_addr == NULL) {
 				RTE_LOG(ERR, USER1, "Could not append data\n");
 				return -1;
-			}
-
-			if (decompress_only) {
-				rte_memcpy(data_addr, input_data_ptr, data_sz);
-				input_data_ptr += data_sz;
-				remaining_data_decomp -= data_sz;
 			}
 
 			if (rte_pktmbuf_chain(mem->comp_bufs[i],

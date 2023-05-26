@@ -70,6 +70,10 @@ Installation
 The OCTEON TX2 crypto PMD may be compiled natively on an OCTEON TX2 platform or
 cross-compiled on an x86 platform.
 
+Enable OCTEON TX2 crypto PMD in your config file:
+
+* ``CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO=y``
+
 Refer to :doc:`../platform/octeontx2` for instructions to build your DPDK
 application.
 
@@ -144,7 +148,7 @@ application:
 
 .. code-block:: console
 
-    ./dpdk-test
+    ./test
     RTE>>cryptodev_octeontx2_autotest
 
 The asymmetric crypto operations on OCTEON TX2 crypto PMD may be verified by running the test
@@ -152,7 +156,7 @@ application:
 
 .. code-block:: console
 
-    ./dpdk-test
+    ./test
     RTE>>cryptodev_octeontx2_asym_autotest
 
 
@@ -172,7 +176,6 @@ Features supported
 ~~~~~~~~~~~~~~~~~~
 
 * IPv4
-* IPv6
 * ESP
 * Tunnel mode
 * AES-128/192/256-GCM

@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2014 Intel Corporation
 
 # The main logic behind running autotests in parallel
 
-import io
+from __future__ import print_function
+import StringIO
 import csv
 from multiprocessing import Pool, Queue
 import pexpect
@@ -50,7 +50,11 @@ def first_cpu_on_node(node_nr):
                 map(os.path.basename, cpu_path)
             )
     )
-    return int(next(cpu_name).group(1))
+    # for compatibility between python 3 and 2 we need to make interable out
+    # of filter return as it returns list in python 2 and a generator in 3
+    m = next(iter(cpu_name))
+    return int(m.group(1))
+
 
 pool_child = None  # per-process child
 
@@ -74,7 +78,7 @@ def pool_init(queue, result_queue):
     cmdline = "%s %s" % (cmdline, prefix_cmdline)
 
     # prepare logging of init
-    startuplog = io.StringIO()
+    startuplog = StringIO.StringIO()
 
     # run test app
     try:
@@ -82,7 +86,8 @@ def pool_init(queue, result_queue):
         print("\n%s %s\n" % ("=" * 20, prefix), file=startuplog)
         print("\ncmdline=%s" % cmdline, file=startuplog)
 
-        pool_child = pexpect.spawn(cmdline, logfile=startuplog, encoding='utf-8')
+        pool_child = pexpect.spawn(cmdline, logfile=startuplog)
+
         # wait for target to boot
         if not wait_prompt(pool_child):
             pool_child.close()
@@ -133,7 +138,7 @@ def run_test(target, test):
     # create log buffer for each test
     # in multiprocessing environment, the logging would be
     # interleaved and will create a mess, hence the buffering
-    logfile = io.StringIO()
+    logfile = StringIO.StringIO()
     pool_child.logfile = logfile
 
     # make a note when the test started
@@ -188,14 +193,14 @@ class AutotestRunner:
     n_tests = 0
     fails = 0
     log_buffers = []
-    blocklist = []
-    allowlist = []
+    blacklist = []
+    whitelist = []
 
-    def __init__(self, cmdline, target, blocklist, allowlist, n_processes):
+    def __init__(self, cmdline, target, blacklist, whitelist, n_processes):
         self.cmdline = cmdline
         self.target = target
-        self.blocklist = blocklist
-        self.allowlist = allowlist
+        self.blacklist = blacklist
+        self.whitelist = whitelist
         self.skipped = []
         self.parallel_tests = []
         self.non_parallel_tests = []
@@ -205,9 +210,9 @@ class AutotestRunner:
         # parse the binary for available test commands
         binary = cmdline.split()[0]
         stripped = 'not stripped' not in \
-                   subprocess.check_output(['file', binary]).decode()
+                   subprocess.check_output(['file', binary])
         if not stripped:
-            symbols = subprocess.check_output(['nm', binary]).decode()
+            symbols = subprocess.check_output(['nm', binary]).decode('utf-8')
             self.avail_cmds = re.findall('test_register_(\w+)', symbols)
         else:
             self.avail_cmds = None
@@ -269,7 +274,7 @@ class AutotestRunner:
         self.csvwriter.writerow([test_name, test_result, result_str])
 
     # this function checks individual test and decides if this test should be in
-    # the group by comparing it against allowlist/blocklist. it also checks if
+    # the group by comparing it against  whitelist/blacklist. it also checks if
     # the test is compiled into the binary, and marks it as skipped if necessary
     def __filter_test(self, test):
         test_cmd = test["Command"]
@@ -279,10 +284,10 @@ class AutotestRunner:
         if "_autotest" in test_id:
             test_id = test_id[:-len("_autotest")]
 
-        # filter out blocked/allowed tests
-        if self.blocklist and test_id in self.blocklist:
+        # filter out blacklisted/whitelisted tests
+        if self.blacklist and test_id in self.blacklist:
             return False
-        if self.allowlist and test_id not in self.allowlist:
+        if self.whitelist and test_id not in self.whitelist:
             return False
 
         # if test wasn't compiled in, remove it as well

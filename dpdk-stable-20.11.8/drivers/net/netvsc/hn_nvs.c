@@ -97,13 +97,8 @@ __hn_nvs_execute(struct hn_data *hv,
 	hdr = (struct hn_nvs_hdr *)buffer;
 
 	/* Silently drop received packets while waiting for response */
-	switch (hdr->type) {
-	case NVS_TYPE_RNDIS:
+	if (hdr->type == NVS_TYPE_RNDIS) {
 		hn_nvs_ack_rxbuf(chan, xactid);
-		/* fallthrough */
-
-	case NVS_TYPE_TXTBL_NOTE:
-		PMD_DRV_LOG(DEBUG, "discard packet type 0x%x", hdr->type);
 		goto retry;
 	}
 
@@ -193,11 +188,11 @@ hn_nvs_conn_rxbuf(struct hn_data *hv)
 	 * Connect RXBUF to NVS.
 	 */
 	conn.type = NVS_TYPE_RXBUF_CONN;
-	conn.gpadl = hv->rxbuf_res.phys_addr;
+	conn.gpadl = hv->rxbuf_res->phys_addr;
 	conn.sig = NVS_RXBUF_SIG;
 	PMD_DRV_LOG(DEBUG, "connect rxbuff va=%p gpad=%#" PRIx64,
-		    hv->rxbuf_res.addr,
-		    hv->rxbuf_res.phys_addr);
+		    hv->rxbuf_res->addr,
+		    hv->rxbuf_res->phys_addr);
 
 	error = hn_nvs_execute(hv, &conn, sizeof(conn),
 			       &resp, sizeof(resp),
@@ -228,15 +223,9 @@ hn_nvs_conn_rxbuf(struct hn_data *hv)
 		    resp.nvs_sect[0].slotcnt);
 	hv->rxbuf_section_cnt = resp.nvs_sect[0].slotcnt;
 
-	/*
-	 * Primary queue's rxbuf_info is not allocated at creation time.
-	 * Now we can allocate it after we figure out the slotcnt.
-	 */
-	hv->primary->rxbuf_info = rte_calloc("HN_RXBUF_INFO",
-			hv->rxbuf_section_cnt,
-			sizeof(*hv->primary->rxbuf_info),
-			RTE_CACHE_LINE_SIZE);
-	if (!hv->primary->rxbuf_info) {
+	hv->rxbuf_info = rte_calloc("HN_RXBUF_INFO", hv->rxbuf_section_cnt,
+				    sizeof(*hv->rxbuf_info), RTE_CACHE_LINE_SIZE);
+	if (!hv->rxbuf_info) {
 		PMD_DRV_LOG(ERR,
 			    "could not allocate rxbuf info");
 		return -ENOMEM;
@@ -266,6 +255,7 @@ hn_nvs_disconn_rxbuf(struct hn_data *hv)
 			    error);
 	}
 
+	rte_free(hv->rxbuf_info);
 	/*
 	 * Linger long enough for NVS to disconnect RXBUF.
 	 */
@@ -308,17 +298,17 @@ hn_nvs_conn_chim(struct hn_data *hv)
 	struct hn_nvs_chim_conn chim;
 	struct hn_nvs_chim_connresp resp;
 	uint32_t sectsz;
-	unsigned long len = hv->chim_res.len;
+	unsigned long len = hv->chim_res->len;
 	int error;
 
 	/* Connect chimney sending buffer to NVS */
 	memset(&chim, 0, sizeof(chim));
 	chim.type = NVS_TYPE_CHIM_CONN;
-	chim.gpadl = hv->chim_res.phys_addr;
+	chim.gpadl = hv->chim_res->phys_addr;
 	chim.sig = NVS_CHIM_SIG;
 	PMD_DRV_LOG(DEBUG, "connect send buf va=%p gpad=%#" PRIx64,
-		    hv->chim_res.addr,
-		    hv->chim_res.phys_addr);
+		    hv->chim_res->addr,
+		    hv->chim_res->phys_addr);
 
 	error = hn_nvs_execute(hv, &chim, sizeof(chim),
 			       &resp, sizeof(resp),

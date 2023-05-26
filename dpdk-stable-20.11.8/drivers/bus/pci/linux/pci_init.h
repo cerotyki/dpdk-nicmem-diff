@@ -7,8 +7,6 @@
 
 #include <rte_vfio.h>
 
-#include "private.h"
-
 /** IO resource type: */
 #define IORESOURCE_IO         0x00000100
 #define IORESOURCE_MEM        0x00000200

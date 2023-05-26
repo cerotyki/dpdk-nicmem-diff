@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <limits.h>
 
+#include <rte_atomic.h>
 #include <rte_memcpy.h>
 #include <rte_memory.h>
 #include <rte_string_fns.h>
@@ -85,7 +86,7 @@ struct rte_power_info {
 	FILE *f;                             /**< FD of scaling_setspeed */
 	char governor_ori[32];               /**< Original governor name */
 	uint32_t curr_idx;                   /**< Freq index in freqs array */
-	uint32_t state;                      /**< Power in use state */
+	volatile uint32_t state;             /**< Power in use state */
 	uint16_t turbo_available;            /**< Turbo Boost available */
 	uint16_t turbo_enable;               /**< Turbo Boost enable/disable */
 } __rte_cache_aligned;
@@ -152,9 +153,6 @@ power_set_governor_userspace(struct rte_power_info *pi)
 	/* Strip off terminating '\n' */
 	strtok(buf, "\n");
 
-	/* Save the original governor */
-	rte_strscpy(pi->governor_ori, buf, sizeof(pi->governor_ori));
-
 	/* Check if current governor is userspace */
 	if (strncmp(buf, POWER_GOVERNOR_USERSPACE,
 			sizeof(POWER_GOVERNOR_USERSPACE)) == 0) {
@@ -163,6 +161,8 @@ power_set_governor_userspace(struct rte_power_info *pi)
 				"already userspace\n", pi->lcore_id);
 		goto out;
 	}
+	/* Save the original governor */
+	strlcpy(pi->governor_ori, buf, sizeof(pi->governor_ori));
 
 	/* Write 'userspace' to the governor */
 	val = fseek(f, 0, SEEK_SET);
@@ -226,7 +226,7 @@ power_get_available_freqs(struct rte_power_info *pi)
 		goto out;
 	}
 
-	/* Store the available frequencies into power context */
+	/* Store the available frequncies into power context */
 	for (i = 0, pi->nb_freqs = 0; i < count; i++) {
 		POWER_DEBUG_TRACE("Lcore %u frequency[%d]: %s\n", pi->lcore_id,
 				i, freqs[i]);
@@ -300,7 +300,6 @@ int
 power_acpi_cpufreq_init(unsigned int lcore_id)
 {
 	struct rte_power_info *pi;
-	uint32_t exp_state;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Lcore id %u can not exceeds %u\n",
@@ -309,16 +308,8 @@ power_acpi_cpufreq_init(unsigned int lcore_id)
 	}
 
 	pi = &lcore_power_info[lcore_id];
-	exp_state = POWER_IDLE;
-	/* The power in use state works as a guard variable between
-	 * the CPU frequency control initialization and exit process.
-	 * The ACQUIRE memory ordering here pairs with the RELEASE
-	 * ordering below as lock to make sure the frequency operations
-	 * in the critical section are done under the correct state.
-	 */
-	if (!__atomic_compare_exchange_n(&(pi->state), &exp_state,
-					POWER_ONGOING, 0,
-					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+	if (rte_atomic32_cmpset(&(pi->state), POWER_IDLE, POWER_ONGOING)
+			== 0) {
 		RTE_LOG(INFO, POWER, "Power management of lcore %u is "
 				"in use\n", lcore_id);
 		return -1;
@@ -355,16 +346,12 @@ power_acpi_cpufreq_init(unsigned int lcore_id)
 
 	RTE_LOG(INFO, POWER, "Initialized successfully for lcore %u "
 			"power management\n", lcore_id);
-	exp_state = POWER_ONGOING;
-	__atomic_compare_exchange_n(&(pi->state), &exp_state, POWER_USED,
-				    0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	rte_atomic32_cmpset(&(pi->state), POWER_ONGOING, POWER_USED);
 
 	return 0;
 
 fail:
-	exp_state = POWER_ONGOING;
-	__atomic_compare_exchange_n(&(pi->state), &exp_state, POWER_UNKNOWN,
-				    0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	rte_atomic32_cmpset(&(pi->state), POWER_ONGOING, POWER_UNKNOWN);
 
 	return -1;
 }
@@ -421,7 +408,6 @@ int
 power_acpi_cpufreq_exit(unsigned int lcore_id)
 {
 	struct rte_power_info *pi;
-	uint32_t exp_state;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Lcore id %u can not exceeds %u\n",
@@ -429,16 +415,8 @@ power_acpi_cpufreq_exit(unsigned int lcore_id)
 		return -1;
 	}
 	pi = &lcore_power_info[lcore_id];
-	exp_state = POWER_USED;
-	/* The power in use state works as a guard variable between
-	 * the CPU frequency control initialization and exit process.
-	 * The ACQUIRE memory ordering here pairs with the RELEASE
-	 * ordering below as lock to make sure the frequency operations
-	 * in the critical section are done under the correct state.
-	 */
-	if (!__atomic_compare_exchange_n(&(pi->state), &exp_state,
-					POWER_ONGOING, 0,
-					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+	if (rte_atomic32_cmpset(&(pi->state), POWER_USED, POWER_ONGOING)
+			== 0) {
 		RTE_LOG(INFO, POWER, "Power management of lcore %u is "
 				"not used\n", lcore_id);
 		return -1;
@@ -458,16 +436,12 @@ power_acpi_cpufreq_exit(unsigned int lcore_id)
 	RTE_LOG(INFO, POWER, "Power management of lcore %u has exited from "
 			"'userspace' mode and been set back to the "
 			"original\n", lcore_id);
-	exp_state = POWER_ONGOING;
-	__atomic_compare_exchange_n(&(pi->state), &exp_state, POWER_IDLE,
-				    0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	rte_atomic32_cmpset(&(pi->state), POWER_ONGOING, POWER_IDLE);
 
 	return 0;
 
 fail:
-	exp_state = POWER_ONGOING;
-	__atomic_compare_exchange_n(&(pi->state), &exp_state, POWER_UNKNOWN,
-				    0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	rte_atomic32_cmpset(&(pi->state), POWER_ONGOING, POWER_UNKNOWN);
 
 	return -1;
 }

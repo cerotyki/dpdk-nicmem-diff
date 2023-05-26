@@ -459,7 +459,7 @@ static int test_member_multimatch(void)
 						MAX_MATCH, set_ids_cache);
 		/*
 		 * For cache mode, keys overwrite when signature same.
-		 * the multimatch should work like single match.
+		 * the mutimatch should work like single match.
 		 */
 		TEST_ASSERT(ret_ht == M_MATCH_CNT && ret_vbf == M_MATCH_CNT &&
 				ret_cache == 1,
@@ -545,6 +545,7 @@ setup_keys_and_data(void)
 		qsort(generated_keys, MAX_ENTRIES, KEY_SIZE, key_compare);
 
 		/* Sift through the list of keys and look for duplicates */
+		int num_duplicates = 0;
 		for (i = 0; i < MAX_ENTRIES - 1; i++) {
 			if (memcmp(generated_keys[i], generated_keys[i + 1],
 					KEY_SIZE) == 0) {

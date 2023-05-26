@@ -69,10 +69,8 @@ vmbus_uio_map_secondary(struct rte_vmbus_device *dev)
 					     fd, offset,
 					     uio_res->maps[i].size, 0);
 
-		if (mapaddr == uio_res->maps[i].addr) {
-			dev->resource[i].addr = mapaddr;
+		if (mapaddr == uio_res->maps[i].addr)
 			continue;	/* successful map */
-		}
 
 		if (mapaddr == MAP_FAILED)
 			VMBUS_LOG(ERR,
@@ -87,42 +85,22 @@ vmbus_uio_map_secondary(struct rte_vmbus_device *dev)
 		return -1;
 	}
 
-	/* fd is not needed in secondary process, close it */
+	/* fd is not needed in slave process, close it */
 	close(fd);
 
-	/* Create and map primary channel */
-	if (vmbus_chan_create(dev, dev->relid, 0,
-					dev->monitor_id, &dev->primary)) {
-		VMBUS_LOG(ERR, "cannot create primary channel");
-		goto failed_primary;
+	dev->primary = uio_res->primary;
+	if (!dev->primary) {
+		VMBUS_LOG(ERR, "missing primary channel");
+		return -1;
 	}
 
-	/* Create and map sub channels */
-	for (i = 0; i < uio_res->nb_subchannels; i++) {
-		if (rte_vmbus_subchan_open(dev->primary, &chan)) {
-			VMBUS_LOG(ERR,
-				"failed to create subchannel at index %d", i);
-			goto failed_secondary;
+	STAILQ_FOREACH(chan, &dev->primary->subchannel_list, next) {
+		if (vmbus_uio_map_secondary_subchan(dev, chan) != 0) {
+			VMBUS_LOG(ERR, "cannot map secondary subchan");
+			return -1;
 		}
 	}
-
 	return 0;
-
-failed_secondary:
-	while (!STAILQ_EMPTY(&dev->primary->subchannel_list)) {
-		chan = STAILQ_FIRST(&dev->primary->subchannel_list);
-		vmbus_unmap_resource(chan->txbr.vbr, chan->txbr.dsize * 2);
-		rte_vmbus_chan_close(chan);
-	}
-	rte_vmbus_chan_close(dev->primary);
-
-failed_primary:
-	for (i = 0; i != uio_res->nb_maps; i++) {
-		vmbus_unmap_resource(
-				uio_res->maps[i].addr, uio_res->maps[i].size);
-	}
-
-	return -1;
 }
 
 static int
@@ -210,11 +188,6 @@ vmbus_uio_unmap(struct mapped_vmbus_resource *uio_res)
 	if (uio_res == NULL)
 		return;
 
-	for (i = 0; i < uio_res->nb_subchannels; i++) {
-		vmbus_unmap_resource(uio_res->subchannel_maps[i].addr,
-				uio_res->subchannel_maps[i].size);
-	}
-
 	for (i = 0; i != uio_res->nb_maps; i++) {
 		vmbus_unmap_resource(uio_res->maps[i].addr,
 				     (size_t)uio_res->maps[i].size);
@@ -238,11 +211,8 @@ vmbus_uio_unmap_resource(struct rte_vmbus_device *dev)
 		return;
 
 	/* secondary processes - just free maps */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-		vmbus_uio_unmap(uio_res);
-		rte_free(dev->primary);
-		return;
-	}
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return vmbus_uio_unmap(uio_res);
 
 	TAILQ_REMOVE(uio_res_list, uio_res, next);
 

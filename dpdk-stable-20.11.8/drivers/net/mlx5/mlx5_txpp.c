@@ -19,36 +19,48 @@
 #include "mlx5_common_os.h"
 
 static const char * const mlx5_txpp_stat_names[] = {
-	"tx_pp_missed_interrupt_errors", /* Missed service interrupt. */
-	"tx_pp_rearm_queue_errors", /* Rearm Queue errors. */
-	"tx_pp_clock_queue_errors", /* Clock Queue errors. */
-	"tx_pp_timestamp_past_errors", /* Timestamp in the past. */
-	"tx_pp_timestamp_future_errors", /* Timestamp in the distant future. */
-	"tx_pp_jitter", /* Timestamp jitter (one Clock Queue completion). */
-	"tx_pp_wander", /* Timestamp wander (half of Clock Queue CQEs). */
-	"tx_pp_sync_lost", /* Scheduling synchronization lost. */
+	"txpp_err_miss_int", /* Missed service interrupt. */
+	"txpp_err_rearm_queue",	/* Rearm Queue errors. */
+	"txpp_err_clock_queue", /* Clock Queue errors. */
+	"txpp_err_ts_past", /* Timestamp in the past. */
+	"txpp_err_ts_future", /* Timestamp in the distant future. */
+	"txpp_jitter", /* Timestamp jitter (one Clock Queue completion). */
+	"txpp_wander", /* Timestamp jitter (half of Clock Queue completions). */
+	"txpp_sync_lost", /* Scheduling synchronization lost. */
 };
 
 /* Destroy Event Queue Notification Channel. */
 static void
-mlx5_txpp_destroy_event_channel(struct mlx5_dev_ctx_shared *sh)
+mlx5_txpp_destroy_eqn(struct mlx5_dev_ctx_shared *sh)
 {
 	if (sh->txpp.echan) {
 		mlx5_glue->devx_destroy_event_channel(sh->txpp.echan);
 		sh->txpp.echan = NULL;
 	}
+	sh->txpp.eqn = 0;
 }
 
 /* Create Event Queue Notification Channel. */
 static int
-mlx5_txpp_create_event_channel(struct mlx5_dev_ctx_shared *sh)
+mlx5_txpp_create_eqn(struct mlx5_dev_ctx_shared *sh)
 {
+	uint32_t lcore;
+
 	MLX5_ASSERT(!sh->txpp.echan);
+	lcore = (uint32_t)rte_lcore_to_cpu_id(-1);
+	if (mlx5_glue->devx_query_eqn(sh->ctx, lcore, &sh->txpp.eqn)) {
+		rte_errno = errno;
+		DRV_LOG(ERR, "Failed to query EQ number %d.", rte_errno);
+		sh->txpp.eqn = 0;
+		return -rte_errno;
+	}
 	sh->txpp.echan = mlx5_glue->devx_create_event_channel(sh->ctx,
 			MLX5DV_DEVX_CREATE_EVENT_CHANNEL_FLAGS_OMIT_EV_DATA);
 	if (!sh->txpp.echan) {
+		sh->txpp.eqn = 0;
 		rte_errno = errno;
-		DRV_LOG(ERR, "Failed to create event channel %d.", rte_errno);
+		DRV_LOG(ERR, "Failed to create event channel %d.",
+			rte_errno);
 		return -rte_errno;
 	}
 	return 0;
@@ -57,16 +69,11 @@ mlx5_txpp_create_event_channel(struct mlx5_dev_ctx_shared *sh)
 static void
 mlx5_txpp_free_pp_index(struct mlx5_dev_ctx_shared *sh)
 {
-#ifdef HAVE_MLX5DV_PP_ALLOC
 	if (sh->txpp.pp) {
 		mlx5_glue->dv_free_pp(sh->txpp.pp);
 		sh->txpp.pp = NULL;
 		sh->txpp.pp_id = 0;
 	}
-#else
-	RTE_SET_USED(sh);
-	DRV_LOG(ERR, "Freeing pacing index is not supported.");
-#endif
 }
 
 /* Allocate Packet Pacing index from kernel via mlx5dv call. */
@@ -106,13 +113,13 @@ mlx5_txpp_alloc_pp_index(struct mlx5_dev_ctx_shared *sh)
 		rte_errno = errno;
 		return -errno;
 	}
-	if (!((struct mlx5dv_pp *)sh->txpp.pp)->index) {
+	if (!sh->txpp.pp->index) {
 		DRV_LOG(ERR, "Zero packet pacing index allocated.");
 		mlx5_txpp_free_pp_index(sh);
 		rte_errno = ENOTSUP;
 		return -ENOTSUP;
 	}
-	sh->txpp.pp_id = ((struct mlx5dv_pp *)(sh->txpp.pp))->index;
+	sh->txpp.pp_id = sh->txpp.pp->index;
 	return 0;
 #else
 	RTE_SET_USED(sh);
@@ -168,7 +175,6 @@ mlx5_txpp_doorbell_rearm_queue(struct mlx5_dev_ctx_shared *sh, uint16_t ci)
 		uint32_t w32[2];
 		uint64_t w64;
 	} cs;
-	void *reg_addr;
 
 	wq->sq_ci = ci + 1;
 	cs.w32[0] = rte_cpu_to_be_32(rte_be_to_cpu_32
@@ -180,8 +186,7 @@ mlx5_txpp_doorbell_rearm_queue(struct mlx5_dev_ctx_shared *sh, uint16_t ci)
 	/* Make sure the doorbell record is updated. */
 	rte_wmb();
 	/* Write to doorbel register to start processing. */
-	reg_addr = mlx5_os_get_devx_uar_reg_addr(sh->tx_uar);
-	__mlx5_uar_write64_relaxed(cs.w64, reg_addr, NULL);
+	__mlx5_uar_write64_relaxed(cs.w64, sh->tx_uar->reg_addr, NULL);
 	rte_wmb();
 }
 
@@ -275,8 +280,10 @@ mlx5_txpp_create_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 		goto error;
 	}
 	/* Create completion queue object for Rearm Queue. */
-	cq_attr.uar_page_id = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
-	cq_attr.eqn = sh->eqn;
+	cq_attr.cqe_size = (sizeof(struct mlx5_cqe) == 128) ?
+			    MLX5_CQE_SIZE_128B : MLX5_CQE_SIZE_64B;
+	cq_attr.uar_page_id = sh->tx_uar->page_id;
+	cq_attr.eqn = sh->txpp.eqn;
 	cq_attr.q_umem_valid = 1;
 	cq_attr.q_umem_offset = 0;
 	cq_attr.q_umem_id = mlx5_os_get_umem_id(wq->cq_umem);
@@ -328,8 +335,7 @@ mlx5_txpp_create_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 	sq_attr.tis_num = sh->tis->id;
 	sq_attr.cqn = wq->cq->id;
 	sq_attr.cd_master = 1;
-	sq_attr.ts_format = mlx5_ts_format_conv(sh->sq_ts_format);
-	sq_attr.wq_attr.uar_page = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
+	sq_attr.wq_attr.uar_page = sh->tx_uar->page_id;
 	sq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC;
 	sq_attr.wq_attr.pd = sh->pdn;
 	sq_attr.wq_attr.log_wq_stride = rte_log2_u32(MLX5_WQE_SIZE);
@@ -512,16 +518,18 @@ mlx5_txpp_create_clock_queue(struct mlx5_dev_ctx_shared *sh)
 		goto error;
 	}
 	/* Create completion queue object for Clock Queue. */
+	cq_attr.cqe_size = (sizeof(struct mlx5_cqe) == 128) ?
+			    MLX5_CQE_SIZE_128B : MLX5_CQE_SIZE_64B;
 	cq_attr.use_first_only = 1;
 	cq_attr.overrun_ignore = 1;
-	cq_attr.uar_page_id = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
-	cq_attr.eqn = sh->eqn;
+	cq_attr.uar_page_id = sh->tx_uar->page_id;
+	cq_attr.eqn = sh->txpp.eqn;
 	cq_attr.q_umem_valid = 1;
 	cq_attr.q_umem_offset = 0;
-	cq_attr.q_umem_id = mlx5_os_get_umem_id(wq->cq_umem);
+	cq_attr.q_umem_id = wq->cq_umem->umem_id;
 	cq_attr.db_umem_valid = 1;
 	cq_attr.db_umem_offset = umem_dbrec;
-	cq_attr.db_umem_id = mlx5_os_get_umem_id(wq->cq_umem);
+	cq_attr.db_umem_id = wq->cq_umem->umem_id;
 	cq_attr.log_cq_size = rte_log2_u32(MLX5_TXPP_CLKQ_SIZE);
 	cq_attr.log_page_size = rte_log2_u32(page_size);
 	wq->cq = mlx5_devx_cmd_create_cq(sh->ctx, &cq_attr);
@@ -578,18 +586,17 @@ mlx5_txpp_create_clock_queue(struct mlx5_dev_ctx_shared *sh)
 	sq_attr.state = MLX5_SQC_STATE_RST;
 	sq_attr.cqn = wq->cq->id;
 	sq_attr.packet_pacing_rate_limit_index = sh->txpp.pp_id;
-	sq_attr.ts_format = mlx5_ts_format_conv(sh->sq_ts_format);
 	sq_attr.wq_attr.cd_slave = 1;
-	sq_attr.wq_attr.uar_page = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
+	sq_attr.wq_attr.uar_page = sh->tx_uar->page_id;
 	sq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC;
 	sq_attr.wq_attr.pd = sh->pdn;
 	sq_attr.wq_attr.log_wq_stride = rte_log2_u32(MLX5_WQE_SIZE);
 	sq_attr.wq_attr.log_wq_sz = rte_log2_u32(wq->sq_size);
 	sq_attr.wq_attr.dbr_umem_valid = 1;
 	sq_attr.wq_attr.dbr_addr = umem_dbrec;
-	sq_attr.wq_attr.dbr_umem_id = mlx5_os_get_umem_id(wq->sq_umem);
+	sq_attr.wq_attr.dbr_umem_id = wq->sq_umem->umem_id;
 	sq_attr.wq_attr.wq_umem_valid = 1;
-	sq_attr.wq_attr.wq_umem_id = mlx5_os_get_umem_id(wq->sq_umem);
+	sq_attr.wq_attr.wq_umem_id = wq->sq_umem->umem_id;
 	/* umem_offset must be zero for static_sq_wq queue. */
 	sq_attr.wq_attr.wq_umem_offset = 0;
 	wq->sq = mlx5_devx_cmd_create_sq(sh->ctx, &sq_attr);
@@ -623,14 +630,11 @@ error:
 static inline void
 mlx5_txpp_cq_arm(struct mlx5_dev_ctx_shared *sh)
 {
-	void *base_addr;
-
 	struct mlx5_txpp_wq *aq = &sh->txpp.rearm_queue;
 	uint32_t arm_sn = aq->arm_sn << MLX5_CQ_SQN_OFFSET;
 	uint32_t db_hi = arm_sn | MLX5_CQ_DBR_CMD_ALL | aq->cq_ci;
 	uint64_t db_be = rte_cpu_to_be_64(((uint64_t)db_hi << 32) | aq->cq->id);
-	base_addr = mlx5_os_get_devx_uar_base_addr(sh->tx_uar);
-	uint32_t *addr = RTE_PTR_ADD(base_addr, MLX5_CQ_DOORBELL);
+	uint32_t *addr = RTE_PTR_ADD(sh->tx_uar->base_addr, MLX5_CQ_DOORBELL);
 
 	rte_compiler_barrier();
 	aq->cq_dbrec[MLX5_CQ_ARM_DB] = rte_cpu_to_be_32(db_hi);
@@ -645,67 +649,39 @@ mlx5_txpp_cq_arm(struct mlx5_dev_ctx_shared *sh)
 	aq->arm_sn++;
 }
 
-#if defined(RTE_ARCH_X86_64)
-static inline int
-mlx5_atomic128_compare_exchange(rte_int128_t *dst,
-				rte_int128_t *exp,
-				const rte_int128_t *src)
-{
-	uint8_t res;
-
-	asm volatile (MPLOCKED
-		      "cmpxchg16b %[dst];"
-		      " sete %[res]"
-		      : [dst] "=m" (dst->val[0]),
-			"=a" (exp->val[0]),
-			"=d" (exp->val[1]),
-			[res] "=r" (res)
-		      : "b" (src->val[0]),
-			"c" (src->val[1]),
-			"a" (exp->val[0]),
-			"d" (exp->val[1]),
-			"m" (dst->val[0])
-		      : "memory");
-
-	return res;
-}
-#endif
-
 static inline void
 mlx5_atomic_read_cqe(rte_int128_t *from, rte_int128_t *ts)
 {
 	/*
 	 * The only CQE of Clock Queue is being continuously
-	 * updated by hardware with specified rate. We must
-	 * read timestamp and WQE completion index atomically.
+	 * update by hardware with soecified rate. We have to
+	 * read timestump and WQE completion index atomically.
 	 */
-#if defined(RTE_ARCH_X86_64)
+#if defined(RTE_ARCH_X86_64) || defined(RTE_ARCH_ARM64)
 	rte_int128_t src;
 
 	memset(&src, 0, sizeof(src));
 	*ts = src;
 	/* if (*from == *ts) *from = *src else *ts = *from; */
-	mlx5_atomic128_compare_exchange(from, ts, &src);
+	rte_atomic128_cmp_exchange(from, ts, &src, 0,
+				   __ATOMIC_RELAXED, __ATOMIC_RELAXED);
 #else
-	uint64_t *cqe = (uint64_t *)from;
+	rte_atomic64_t *cqe = (rte_atomic64_t *)from;
 
-	/*
-	 * Power architecture does not support 16B compare-and-swap.
-	 * ARM implements it in software, code below is more relevant.
-	 */
+	/* Power architecture does not support 16B compare-and-swap. */
 	for (;;) {
-		uint64_t tm, op;
-		uint64_t *ps;
+		int64_t tm, op;
+		int64_t *ps;
 
 		rte_compiler_barrier();
-		tm = __atomic_load_n(cqe + 0, __ATOMIC_RELAXED);
-		op = __atomic_load_n(cqe + 1, __ATOMIC_RELAXED);
+		tm = rte_atomic64_read(cqe + 0);
+		op = rte_atomic64_read(cqe + 1);
 		rte_compiler_barrier();
-		if (tm != __atomic_load_n(cqe + 0, __ATOMIC_RELAXED))
+		if (tm != rte_atomic64_read(cqe + 0))
 			continue;
-		if (op != __atomic_load_n(cqe + 1, __ATOMIC_RELAXED))
+		if (op != rte_atomic64_read(cqe + 1))
 			continue;
-		ps = (uint64_t *)ts;
+		ps = (int64_t *)ts;
 		ps[0] = tm;
 		ps[1] = op;
 		return;
@@ -721,8 +697,8 @@ mlx5_txpp_cache_timestamp(struct mlx5_dev_ctx_shared *sh,
 	ci = ci << (64 - MLX5_CQ_INDEX_WIDTH);
 	ci |= (ts << MLX5_CQ_INDEX_WIDTH) >> MLX5_CQ_INDEX_WIDTH;
 	rte_compiler_barrier();
-	__atomic_store_n(&sh->txpp.ts.ts, ts, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.ts.ci_ts, ci, __ATOMIC_RELAXED);
+	rte_atomic64_set(&sh->txpp.ts.ts, ts);
+	rte_atomic64_set(&sh->txpp.ts.ci_ts, ci);
 	rte_wmb();
 }
 
@@ -738,24 +714,14 @@ mlx5_txpp_update_timestamp(struct mlx5_dev_ctx_shared *sh)
 	} to;
 	uint64_t ts;
 	uint16_t ci;
-	uint8_t opcode;
 
 	static_assert(sizeof(struct mlx5_cqe_ts) == sizeof(rte_int128_t),
 		      "Wrong timestamp CQE part size");
 	mlx5_atomic_read_cqe((rte_int128_t *)&cqe->timestamp, &to.u128);
-	opcode = MLX5_CQE_OPCODE(to.cts.op_own);
-	if (opcode) {
-		if (opcode != MLX5_CQE_INVALID) {
-			/*
-			 * Commit the error state if and only if
-			 * we have got at least one actual completion.
-			 */
-			DRV_LOG(DEBUG,
-				"Clock Queue error sync lost (%X).", opcode);
-				__atomic_fetch_add(&sh->txpp.err_clock_queue,
-				   1, __ATOMIC_RELAXED);
-			sh->txpp.sync_lost = 1;
-		}
+	if (to.cts.op_own >> 4) {
+		DRV_LOG(DEBUG, "Clock Queue error sync lost.");
+		rte_atomic32_inc(&sh->txpp.err_clock_queue);
+		sh->txpp.sync_lost = 1;
 		return;
 	}
 	ci = rte_be_to_cpu_16(to.cts.wqe_counter);
@@ -799,10 +765,7 @@ mlx5_txpp_gather_timestamp(struct mlx5_dev_ctx_shared *sh)
 	if (!sh->txpp.clock_queue.sq_ci && !sh->txpp.ts_n)
 		return;
 	MLX5_ASSERT(sh->txpp.ts_p < MLX5_TXPP_REARM_SQ_SIZE);
-	__atomic_store_n(&sh->txpp.tsa[sh->txpp.ts_p].ts,
-			 sh->txpp.ts.ts, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.tsa[sh->txpp.ts_p].ci_ts,
-			 sh->txpp.ts.ci_ts, __ATOMIC_RELAXED);
+	sh->txpp.tsa[sh->txpp.ts_p] = sh->txpp.ts;
 	if (++sh->txpp.ts_p >= MLX5_TXPP_REARM_SQ_SIZE)
 		sh->txpp.ts_p = 0;
 	if (sh->txpp.ts_n < MLX5_TXPP_REARM_SQ_SIZE)
@@ -843,8 +806,7 @@ mlx5_txpp_handle_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 		/* Check whether we have missed interrupts. */
 		if (cq_ci - wq->cq_ci != 1) {
 			DRV_LOG(DEBUG, "Rearm Queue missed interrupt.");
-			__atomic_fetch_add(&sh->txpp.err_miss_int,
-					   1, __ATOMIC_RELAXED);
+			rte_atomic32_inc(&sh->txpp.err_miss_int);
 			/* Check sync lost on wqe index. */
 			if (cq_ci - wq->cq_ci >=
 				(((1UL << MLX5_WQ_INDEX_WIDTH) /
@@ -859,8 +821,7 @@ mlx5_txpp_handle_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 		/* Fire new requests to Rearm Queue. */
 		if (error) {
 			DRV_LOG(DEBUG, "Rearm Queue error sync lost.");
-			__atomic_fetch_add(&sh->txpp.err_rearm_queue,
-					   1, __ATOMIC_RELAXED);
+			rte_atomic32_inc(&sh->txpp.err_rearm_queue);
 			sh->txpp.sync_lost = 1;
 		}
 	}
@@ -920,25 +881,24 @@ static int
 mlx5_txpp_start_service(struct mlx5_dev_ctx_shared *sh)
 {
 	uint16_t event_nums[1] = {0};
+	int flags;
 	int ret;
-	int fd;
 
-	sh->txpp.err_miss_int = 0;
-	sh->txpp.err_rearm_queue = 0;
-	sh->txpp.err_clock_queue = 0;
-	sh->txpp.err_ts_past = 0;
-	sh->txpp.err_ts_future = 0;
+	rte_atomic32_set(&sh->txpp.err_miss_int, 0);
+	rte_atomic32_set(&sh->txpp.err_rearm_queue, 0);
+	rte_atomic32_set(&sh->txpp.err_clock_queue, 0);
+	rte_atomic32_set(&sh->txpp.err_ts_past, 0);
+	rte_atomic32_set(&sh->txpp.err_ts_future, 0);
 	/* Attach interrupt handler to process Rearm Queue completions. */
-	fd = mlx5_os_get_devx_channel_fd(sh->txpp.echan);
-	ret = mlx5_os_set_nonblock_channel_fd(fd);
+	flags = fcntl(sh->txpp.echan->fd, F_GETFL);
+	ret = fcntl(sh->txpp.echan->fd, F_SETFL, flags | O_NONBLOCK);
 	if (ret) {
 		DRV_LOG(ERR, "Failed to change event channel FD.");
 		rte_errno = errno;
 		return -rte_errno;
 	}
 	memset(&sh->txpp.intr_handle, 0, sizeof(sh->txpp.intr_handle));
-	fd = mlx5_os_get_devx_channel_fd(sh->txpp.echan);
-	sh->txpp.intr_handle.fd = fd;
+	sh->txpp.intr_handle.fd = sh->txpp.echan->fd;
 	sh->txpp.intr_handle.type = RTE_INTR_HANDLE_EXT;
 	if (rte_intr_callback_register(&sh->txpp.intr_handle,
 				       mlx5_txpp_interrupt_handler, sh)) {
@@ -985,7 +945,7 @@ mlx5_txpp_create(struct mlx5_dev_ctx_shared *sh, struct mlx5_priv *priv)
 	sh->txpp.test = !!(tx_pp < 0);
 	sh->txpp.skew = priv->config.tx_skew;
 	sh->txpp.freq = priv->config.hca_attr.dev_freq_khz;
-	ret = mlx5_txpp_create_event_channel(sh);
+	ret = mlx5_txpp_create_eqn(sh);
 	if (ret)
 		goto exit;
 	ret = mlx5_txpp_alloc_pp_index(sh);
@@ -1006,7 +966,7 @@ exit:
 		mlx5_txpp_destroy_rearm_queue(sh);
 		mlx5_txpp_destroy_clock_queue(sh);
 		mlx5_txpp_free_pp_index(sh);
-		mlx5_txpp_destroy_event_channel(sh);
+		mlx5_txpp_destroy_eqn(sh);
 		sh->txpp.tick = 0;
 		sh->txpp.test = 0;
 		sh->txpp.skew = 0;
@@ -1028,7 +988,7 @@ mlx5_txpp_destroy(struct mlx5_dev_ctx_shared *sh)
 	mlx5_txpp_destroy_rearm_queue(sh);
 	mlx5_txpp_destroy_clock_queue(sh);
 	mlx5_txpp_free_pp_index(sh);
-	mlx5_txpp_destroy_event_channel(sh);
+	mlx5_txpp_destroy_eqn(sh);
 	sh->txpp.tick = 0;
 	sh->txpp.test = 0;
 	sh->txpp.skew = 0;
@@ -1049,6 +1009,7 @@ mlx5_txpp_start(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
 	int err = 0;
+	int ret;
 
 	if (!priv->config.tx_pp) {
 		/* Packet pacing is not requested for the device. */
@@ -1061,14 +1022,14 @@ mlx5_txpp_start(struct rte_eth_dev *dev)
 		return 0;
 	}
 	if (priv->config.tx_pp > 0) {
-		err = rte_mbuf_dynflag_lookup
-			(RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME, NULL);
-		/* No flag registered means no service needed. */
-		if (err < 0)
+		ret = rte_mbuf_dynflag_lookup
+				(RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME, NULL);
+		if (ret < 0)
 			return 0;
-		err = 0;
 	}
-	claim_zero(pthread_mutex_lock(&sh->txpp.mutex));
+	ret = pthread_mutex_lock(&sh->txpp.mutex);
+	MLX5_ASSERT(!ret);
+	RTE_SET_USED(ret);
 	if (sh->txpp.refcnt) {
 		priv->txpp_en = 1;
 		++sh->txpp.refcnt;
@@ -1082,7 +1043,9 @@ mlx5_txpp_start(struct rte_eth_dev *dev)
 			rte_errno = -err;
 		}
 	}
-	claim_zero(pthread_mutex_unlock(&sh->txpp.mutex));
+	ret = pthread_mutex_unlock(&sh->txpp.mutex);
+	MLX5_ASSERT(!ret);
+	RTE_SET_USED(ret);
 	return err;
 }
 
@@ -1100,21 +1063,24 @@ mlx5_txpp_stop(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
+	int ret;
 
 	if (!priv->txpp_en) {
 		/* Packet pacing is already disabled for the device. */
 		return;
 	}
 	priv->txpp_en = 0;
-	claim_zero(pthread_mutex_lock(&sh->txpp.mutex));
+	ret = pthread_mutex_lock(&sh->txpp.mutex);
+	MLX5_ASSERT(!ret);
+	RTE_SET_USED(ret);
 	MLX5_ASSERT(sh->txpp.refcnt);
-	if (!sh->txpp.refcnt || --sh->txpp.refcnt) {
-		claim_zero(pthread_mutex_unlock(&sh->txpp.mutex));
+	if (!sh->txpp.refcnt || --sh->txpp.refcnt)
 		return;
-	}
 	/* No references any more, do actual destroy. */
 	mlx5_txpp_destroy(sh);
-	claim_zero(pthread_mutex_unlock(&sh->txpp.mutex));
+	ret = pthread_mutex_unlock(&sh->txpp.mutex);
+	MLX5_ASSERT(!ret);
+	RTE_SET_USED(ret);
 }
 
 /*
@@ -1156,8 +1122,7 @@ mlx5_txpp_read_clock(struct rte_eth_dev *dev, uint64_t *timestamp)
 		mlx5_atomic_read_cqe((rte_int128_t *)&cqe->timestamp, &to.u128);
 		if (to.cts.op_own >> 4) {
 			DRV_LOG(DEBUG, "Clock Queue error sync lost.");
-			__atomic_fetch_add(&sh->txpp.err_clock_queue,
-					   1, __ATOMIC_RELAXED);
+			rte_atomic32_inc(&sh->txpp.err_clock_queue);
 			sh->txpp.sync_lost = 1;
 			return -EIO;
 		}
@@ -1188,11 +1153,11 @@ int mlx5_txpp_xstats_reset(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
 
-	__atomic_store_n(&sh->txpp.err_miss_int, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.err_rearm_queue, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.err_clock_queue, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.err_ts_past, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&sh->txpp.err_ts_future, 0, __ATOMIC_RELAXED);
+	rte_atomic32_set(&sh->txpp.err_miss_int, 0);
+	rte_atomic32_set(&sh->txpp.err_rearm_queue, 0);
+	rte_atomic32_set(&sh->txpp.err_clock_queue, 0);
+	rte_atomic32_set(&sh->txpp.err_ts_past, 0);
+	rte_atomic32_set(&sh->txpp.err_ts_future, 0);
 	return 0;
 }
 
@@ -1222,9 +1187,11 @@ int mlx5_txpp_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
 
 	if (n >= n_used + n_txpp && xstats_names) {
 		for (i = 0; i < n_txpp; ++i) {
-			strlcpy(xstats_names[i + n_used].name,
+			strncpy(xstats_names[i + n_used].name,
 				mlx5_txpp_stat_names[i],
 				RTE_ETH_XSTATS_NAME_SIZE);
+			xstats_names[i + n_used].name
+					[RTE_ETH_XSTATS_NAME_SIZE - 1] = 0;
 		}
 	}
 	return n_used + n_txpp;
@@ -1235,21 +1202,19 @@ mlx5_txpp_read_tsa(struct mlx5_dev_txpp *txpp,
 		   struct mlx5_txpp_ts *tsa, uint16_t idx)
 {
 	do {
-		uint64_t ts, ci;
+		int64_t ts, ci;
 
-		ts = __atomic_load_n(&txpp->tsa[idx].ts, __ATOMIC_RELAXED);
-		ci = __atomic_load_n(&txpp->tsa[idx].ci_ts, __ATOMIC_RELAXED);
+		ts = rte_atomic64_read(&txpp->tsa[idx].ts);
+		ci = rte_atomic64_read(&txpp->tsa[idx].ci_ts);
 		rte_compiler_barrier();
 		if ((ci ^ ts) << MLX5_CQ_INDEX_WIDTH != 0)
 			continue;
-		if (__atomic_load_n(&txpp->tsa[idx].ts,
-				    __ATOMIC_RELAXED) != ts)
+		if (rte_atomic64_read(&txpp->tsa[idx].ts) != ts)
 			continue;
-		if (__atomic_load_n(&txpp->tsa[idx].ci_ts,
-				    __ATOMIC_RELAXED) != ci)
+		if (rte_atomic64_read(&txpp->tsa[idx].ci_ts) != ci)
 			continue;
-		tsa->ts = ts;
-		tsa->ci_ts = ci;
+		rte_atomic64_set(&tsa->ts, ts);
+		rte_atomic64_set(&tsa->ci_ts, ci);
 		return;
 	} while (true);
 }
@@ -1285,9 +1250,9 @@ mlx5_txpp_xstats_jitter(struct mlx5_dev_txpp *txpp)
 		rte_compiler_barrier();
 	} while (ts_p != txpp->ts_p);
 	/* We have two neighbor reports, calculate the jitter. */
-	dts = tsa1.ts - tsa0.ts;
-	dci = (tsa1.ci_ts >> (64 - MLX5_CQ_INDEX_WIDTH)) -
-	      (tsa0.ci_ts >> (64 - MLX5_CQ_INDEX_WIDTH));
+	dts = rte_atomic64_read(&tsa1.ts) - rte_atomic64_read(&tsa0.ts);
+	dci = (rte_atomic64_read(&tsa1.ci_ts) >> (64 - MLX5_CQ_INDEX_WIDTH)) -
+	      (rte_atomic64_read(&tsa0.ci_ts) >> (64 - MLX5_CQ_INDEX_WIDTH));
 	if (dci < 0)
 		dci += 1 << MLX5_CQ_INDEX_WIDTH;
 	dci *= txpp->tick;
@@ -1325,9 +1290,9 @@ mlx5_txpp_xstats_wander(struct mlx5_dev_txpp *txpp)
 		rte_compiler_barrier();
 	} while (ts_p != txpp->ts_p);
 	/* We have two neighbor reports, calculate the jitter. */
-	dts = tsa1.ts - tsa0.ts;
-	dci = (tsa1.ci_ts >> (64 - MLX5_CQ_INDEX_WIDTH)) -
-	      (tsa0.ci_ts >> (64 - MLX5_CQ_INDEX_WIDTH));
+	dts = rte_atomic64_read(&tsa1.ts) - rte_atomic64_read(&tsa0.ts);
+	dci = (rte_atomic64_read(&tsa1.ci_ts) >> (64 - MLX5_CQ_INDEX_WIDTH)) -
+	      (rte_atomic64_read(&tsa0.ci_ts) >> (64 - MLX5_CQ_INDEX_WIDTH));
 	dci += 1 << MLX5_CQ_INDEX_WIDTH;
 	dci *= txpp->tick;
 	return (dts > dci) ? dts - dci : dci - dts;
@@ -1366,20 +1331,15 @@ mlx5_txpp_xstats_get(struct rte_eth_dev *dev,
 		for (i = 0; i < n_txpp; ++i)
 			stats[n_used + i].id = n_used + i;
 		stats[n_used + 0].value =
-				__atomic_load_n(&sh->txpp.err_miss_int,
-						__ATOMIC_RELAXED);
+				rte_atomic32_read(&sh->txpp.err_miss_int);
 		stats[n_used + 1].value =
-				__atomic_load_n(&sh->txpp.err_rearm_queue,
-						__ATOMIC_RELAXED);
+				rte_atomic32_read(&sh->txpp.err_rearm_queue);
 		stats[n_used + 2].value =
-				__atomic_load_n(&sh->txpp.err_clock_queue,
-						__ATOMIC_RELAXED);
+				rte_atomic32_read(&sh->txpp.err_clock_queue);
 		stats[n_used + 3].value =
-				__atomic_load_n(&sh->txpp.err_ts_past,
-						__ATOMIC_RELAXED);
+				rte_atomic32_read(&sh->txpp.err_ts_past);
 		stats[n_used + 4].value =
-				__atomic_load_n(&sh->txpp.err_ts_future,
-						__ATOMIC_RELAXED);
+				rte_atomic32_read(&sh->txpp.err_ts_future);
 		stats[n_used + 5].value = mlx5_txpp_xstats_jitter(&sh->txpp);
 		stats[n_used + 6].value = mlx5_txpp_xstats_wander(&sh->txpp);
 		stats[n_used + 7].value = sh->txpp.sync_lost;

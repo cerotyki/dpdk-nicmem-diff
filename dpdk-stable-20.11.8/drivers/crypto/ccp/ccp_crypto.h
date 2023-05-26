@@ -70,7 +70,7 @@
 /* Maximum length for digest */
 #define DIGEST_LENGTH_MAX	64
 
-/* SHA LSB initialization values */
+/* SHA LSB intialiazation values */
 
 #define SHA1_H0		0x67452301UL
 #define SHA1_H1		0xefcdab89UL

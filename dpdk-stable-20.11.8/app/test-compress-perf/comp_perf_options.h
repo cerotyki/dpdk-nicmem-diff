@@ -30,9 +30,9 @@ enum cperf_test_type {
 };
 
 enum comp_operation {
-	COMPRESS = (1 << 0),
-	DECOMPRESS = (1 << 1),
-	COMPRESS_DECOMPRESS = (COMPRESS | DECOMPRESS),
+	COMPRESS_ONLY,
+	DECOMPRESS_ONLY,
+	COMPRESS_DECOMPRESS
 };
 
 struct range_list {

@@ -706,8 +706,6 @@ tf_rm_allocate(struct tf_rm_allocate_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by RM */
@@ -774,8 +772,6 @@ tf_rm_free(struct tf_rm_free_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by RM */
@@ -821,8 +817,6 @@ tf_rm_is_allocated(struct tf_rm_is_allocated_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by RM */
@@ -866,8 +860,6 @@ tf_rm_get_info(struct tf_rm_get_alloc_info_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by HCAPI */
@@ -891,8 +883,6 @@ tf_rm_get_hcapi_type(struct tf_rm_get_hcapi_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by HCAPI */
@@ -915,8 +905,6 @@ tf_rm_get_inuse_count(struct tf_rm_get_inuse_count_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by RM */
@@ -949,8 +937,6 @@ tf_rm_check_indexes_in_range(struct tf_rm_check_indexes_in_range_parms *parms)
 	TF_CHECK_PARMS2(parms, parms->rm_db);
 
 	rm_db = (struct tf_rm_new_db *)parms->rm_db;
-	if (!rm_db->db)
-		return -EINVAL;
 	cfg_type = rm_db->db[parms->db_index].cfg_type;
 
 	/* Bail out if not controlled by RM */

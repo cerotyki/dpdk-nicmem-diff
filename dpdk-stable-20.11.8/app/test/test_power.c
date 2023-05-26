@@ -11,7 +11,7 @@
 
 #include "test.h"
 
-#ifndef RTE_LIB_POWER
+#ifndef RTE_LIBRTE_POWER
 
 static int
 test_power(void)

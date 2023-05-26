@@ -104,15 +104,13 @@ trace_session_name_generate(char *trace_dir)
 	rc = rte_strscpy(trace_dir, eal_get_hugefile_prefix(),
 			TRACE_PREFIX_LEN);
 	if (rc == -E2BIG)
-		rc = TRACE_PREFIX_LEN - 1;
+		rc = TRACE_PREFIX_LEN;
 	trace_dir[rc++] = '-';
 
 	rc = strftime(trace_dir + rc, TRACE_DIR_STR_LEN - rc,
 			"%Y-%m-%d-%p-%I-%M-%S", tm_result);
-	if (rc == 0) {
-		errno = ENOSPC;
+	if (rc == 0)
 		goto fail;
-	}
 
 	return rc;
 fail:
@@ -314,17 +312,13 @@ trace_dir_default_path_get(char *dir_path)
 	return 0;
 }
 
-static int
+int
 trace_mkdir(void)
 {
 	struct trace *trace = trace_obj_get();
 	char session[TRACE_DIR_STR_LEN];
-	static bool already_done;
 	char *dir_path;
 	int rc;
-
-	if (already_done)
-		return 0;
 
 	if (!trace->dir_offset) {
 		dir_path = calloc(1, sizeof(trace->dir));
@@ -369,7 +363,6 @@ trace_mkdir(void)
 	}
 
 	RTE_LOG(INFO, EAL, "Trace dir: %s\n", trace->dir);
-	already_done = true;
 	return 0;
 }
 
@@ -437,10 +430,6 @@ rte_trace_save(void)
 	int rc = 0;
 
 	if (trace->nb_trace_mem_list == 0)
-		return rc;
-
-	rc = trace_mkdir();
-	if (rc < 0)
 		return rc;
 
 	rc = trace_meta_save(trace);

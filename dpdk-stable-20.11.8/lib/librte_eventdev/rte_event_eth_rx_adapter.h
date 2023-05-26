@@ -21,7 +21,11 @@
  *
  * The adapter uses a EAL service core function for SW based packet transfer
  * and uses the eventdev PMD functions to configure HW based packet transfer
- * between the ethernet device and the event device.
+ * between the ethernet device and the event device. For SW based packet
+ * transfer, if the mbuf does not have a timestamp set, the adapter adds a
+ * timestamp to the mbuf using rte_get_tsc_cycles(), this provides a more
+ * accurate timestamp as compared to if the application were to set the time
+ * stamp since it avoids event device schedule latency.
  *
  * The ethernet Rx event adapter's functions are:
  *  - rte_event_eth_rx_adapter_create_ext()
@@ -332,7 +336,7 @@ int rte_event_eth_rx_adapter_free(uint8_t id);
  * @see RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ
  *
  * @param conf
- *  Additional configuration structure of type *rte_event_eth_rx_adapter_queue_conf*
+ *  Additional configuration structure of type *rte_event_eth_rx_adapter_conf*
  *
  * @return
  *  - 0: Success, Receive queue added correctly.

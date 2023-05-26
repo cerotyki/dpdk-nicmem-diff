@@ -7,7 +7,6 @@
 #include <rte_pci.h>
 #include <rte_malloc.h>
 
-#include "rte_ethdev_driver.h"
 #include "base/i40e_type.h"
 #include "base/virtchnl.h"
 #include "i40e_ethdev.h"
@@ -19,10 +18,9 @@ i40e_vf_representor_link_update(struct rte_eth_dev *ethdev,
 	int wait_to_complete)
 {
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
-	struct rte_eth_dev *dev =
-		&rte_eth_devices[representor->adapter->pf.dev_data->port_id];
 
-	return i40e_dev_link_update(dev, wait_to_complete);
+	return i40e_dev_link_update(representor->adapter->eth_dev,
+		wait_to_complete);
 }
 static int
 i40e_vf_representor_dev_infos_get(struct rte_eth_dev *ethdev,
@@ -100,7 +98,7 @@ i40e_vf_representor_dev_infos_get(struct rte_eth_dev *ethdev,
 	};
 
 	dev_info->switch_info.name =
-		rte_eth_devices[ethdev->data->port_id].device->name;
+		representor->adapter->eth_dev->device->name;
 	dev_info->switch_info.domain_id = representor->switch_domain_id;
 	dev_info->switch_info.port_id = representor->vf_id;
 
@@ -119,10 +117,9 @@ i40e_vf_representor_dev_start(__rte_unused struct rte_eth_dev *dev)
 	return 0;
 }
 
-static int
+static void
 i40e_vf_representor_dev_stop(__rte_unused struct rte_eth_dev *dev)
 {
-	return 0;
 }
 
 static int
@@ -214,7 +211,7 @@ i40e_vf_representor_stats_get(struct rte_eth_dev *ethdev,
 	int ret;
 
 	ret = rte_pmd_i40e_get_vf_native_stats(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, &native_stats);
 	if (ret == 0) {
 		i40evf_stat_update_48(
@@ -274,7 +271,7 @@ i40e_vf_representor_stats_reset(struct rte_eth_dev *ethdev)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_get_vf_native_stats(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, &representor->stats_offset);
 }
 
@@ -284,7 +281,7 @@ i40e_vf_representor_promiscuous_enable(struct rte_eth_dev *ethdev)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_unicast_promisc(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, 1);
 }
 
@@ -294,7 +291,7 @@ i40e_vf_representor_promiscuous_disable(struct rte_eth_dev *ethdev)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_unicast_promisc(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, 0);
 }
 
@@ -304,7 +301,7 @@ i40e_vf_representor_allmulticast_enable(struct rte_eth_dev *ethdev)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_multicast_promisc(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id,  1);
 }
 
@@ -314,7 +311,7 @@ i40e_vf_representor_allmulticast_disable(struct rte_eth_dev *ethdev)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_multicast_promisc(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id,  0);
 }
 
@@ -324,7 +321,7 @@ i40e_vf_representor_mac_addr_remove(struct rte_eth_dev *ethdev, uint32_t index)
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	rte_pmd_i40e_remove_vf_mac_addr(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, &ethdev->data->mac_addrs[index]);
 }
 
@@ -335,7 +332,7 @@ i40e_vf_representor_mac_addr_set(struct rte_eth_dev *ethdev,
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_mac_addr(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, mac_addr);
 }
 
@@ -347,7 +344,7 @@ i40e_vf_representor_vlan_filter_set(struct rte_eth_dev *ethdev,
 	uint64_t vf_mask = 1ULL << representor->vf_id;
 
 	return rte_pmd_i40e_set_vf_vlan_filter(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		vlan_id, vf_mask, on);
 }
 
@@ -361,7 +358,7 @@ i40e_vf_representor_vlan_offload_set(struct rte_eth_dev *ethdev, int mask)
 	struct i40e_pf *pf;
 	uint32_t vfid;
 
-	pdev = &rte_eth_devices[representor->adapter->pf.dev_data->port_id];
+	pdev = representor->adapter->eth_dev;
 	vfid = representor->vf_id;
 
 	if (!is_i40e_supported(pdev)) {
@@ -411,7 +408,7 @@ i40e_vf_representor_vlan_strip_queue_set(struct rte_eth_dev *ethdev,
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	rte_pmd_i40e_set_vf_vlan_stripq(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, on);
 }
 
@@ -422,7 +419,7 @@ i40e_vf_representor_vlan_pvid_set(struct rte_eth_dev *ethdev, uint16_t vlan_id,
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
 
 	return rte_pmd_i40e_set_vf_vlan_insert(
-		representor->adapter->pf.dev_data->port_id,
+		representor->adapter->eth_dev->data->port_id,
 		representor->vf_id, vlan_id);
 }
 
@@ -488,7 +485,7 @@ i40e_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params)
 		((struct i40e_vf_representor *)init_params)->adapter;
 
 	pf = I40E_DEV_PRIVATE_TO_PF(
-		representor->adapter->pf.dev_data->dev_private);
+		representor->adapter->eth_dev->data->dev_private);
 
 	if (representor->vf_id >= pf->vf_num)
 		return -ENODEV;
@@ -519,7 +516,7 @@ i40e_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params)
 	ethdev->data->mac_addrs = &vf->mac_addr;
 
 	/* Link state. Inherited from PF */
-	link = &representor->adapter->pf.dev_data->dev_link;
+	link = &representor->adapter->eth_dev->data->dev_link;
 
 	ethdev->data->dev_link.link_speed = link->link_speed;
 	ethdev->data->dev_link.link_duplex = link->link_duplex;

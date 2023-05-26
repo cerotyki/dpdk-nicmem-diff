@@ -41,18 +41,17 @@ struct queue_buffers {
 static struct queue_buffers queue_buf[SKELETON_MAX_QUEUES] = {};
 static void clear_queue_bufs(int queue_id);
 
-static int skeleton_rawdev_info_get(struct rte_rawdev *dev,
-				     rte_rawdev_obj_t dev_info,
-				     size_t dev_info_size)
+static void skeleton_rawdev_info_get(struct rte_rawdev *dev,
+				     rte_rawdev_obj_t dev_info)
 {
 	struct skeleton_rawdev *skeldev;
 	struct skeleton_rawdev_conf *skeldev_conf;
 
 	SKELETON_PMD_FUNC_TRACE();
 
-	if (!dev_info || dev_info_size != sizeof(*skeldev_conf)) {
+	if (!dev_info) {
 		SKELETON_PMD_ERR("Invalid request");
-		return -EINVAL;
+		return;
 	}
 
 	skeldev = skeleton_rawdev_get_priv(dev);
@@ -63,13 +62,10 @@ static int skeleton_rawdev_info_get(struct rte_rawdev *dev,
 	skeldev_conf->capabilities = skeldev->capabilities;
 	skeldev_conf->device_state = skeldev->device_state;
 	skeldev_conf->firmware_state = skeldev->fw.firmware_state;
-
-	return 0;
 }
 
 static int skeleton_rawdev_configure(const struct rte_rawdev *dev,
-				     rte_rawdev_obj_t config,
-				     size_t config_size)
+				     rte_rawdev_obj_t config)
 {
 	struct skeleton_rawdev *skeldev;
 	struct skeleton_rawdev_conf *skeldev_conf;
@@ -78,7 +74,7 @@ static int skeleton_rawdev_configure(const struct rte_rawdev *dev,
 
 	RTE_FUNC_PTR_OR_ERR_RET(dev, -EINVAL);
 
-	if (config == NULL || config_size != sizeof(*skeldev_conf)) {
+	if (!config) {
 		SKELETON_PMD_ERR("Invalid configuration");
 		return -EINVAL;
 	}
@@ -190,11 +186,9 @@ static int skeleton_rawdev_close(struct rte_rawdev *dev)
 		}
 		break;
 	case SKELETON_FW_READY:
-		SKELETON_PMD_DEBUG("Device already in stopped state");
-		break;
 	case SKELETON_FW_ERROR:
 	default:
-		SKELETON_PMD_DEBUG("Device in impossible state");
+		SKELETON_PMD_DEBUG("Device already in stopped state");
 		ret = -EINVAL;
 		break;
 	}
@@ -222,19 +216,17 @@ static int skeleton_rawdev_reset(struct rte_rawdev *dev)
 	return 0;
 }
 
-static int skeleton_rawdev_queue_def_conf(struct rte_rawdev *dev,
-					  uint16_t queue_id,
-					  rte_rawdev_obj_t queue_conf,
-					  size_t conf_size)
+static void skeleton_rawdev_queue_def_conf(struct rte_rawdev *dev,
+					   uint16_t queue_id,
+					   rte_rawdev_obj_t queue_conf)
 {
 	struct skeleton_rawdev *skeldev;
 	struct skeleton_rawdev_queue *skelq;
 
 	SKELETON_PMD_FUNC_TRACE();
 
-	if (!dev || !queue_conf ||
-			conf_size != sizeof(struct skeleton_rawdev_queue))
-		return -EINVAL;
+	if (!dev || !queue_conf)
+		return;
 
 	skeldev = skeleton_rawdev_get_priv(dev);
 	skelq = &skeldev->queues[queue_id];
@@ -242,8 +234,6 @@ static int skeleton_rawdev_queue_def_conf(struct rte_rawdev *dev,
 	if (queue_id < SKELETON_MAX_QUEUES)
 		rte_memcpy(queue_conf, skelq,
 			sizeof(struct skeleton_rawdev_queue));
-
-	return 0;
 }
 
 static void
@@ -258,8 +248,7 @@ clear_queue_bufs(int queue_id)
 
 static int skeleton_rawdev_queue_setup(struct rte_rawdev *dev,
 				       uint16_t queue_id,
-				       rte_rawdev_obj_t queue_conf,
-				       size_t conf_size)
+				       rte_rawdev_obj_t queue_conf)
 {
 	int ret = 0;
 	struct skeleton_rawdev *skeldev;
@@ -267,8 +256,7 @@ static int skeleton_rawdev_queue_setup(struct rte_rawdev *dev,
 
 	SKELETON_PMD_FUNC_TRACE();
 
-	if (!dev || !queue_conf ||
-			conf_size != sizeof(struct skeleton_rawdev_queue))
+	if (!dev || !queue_conf)
 		return -EINVAL;
 
 	skeldev = skeleton_rawdev_get_priv(dev);
@@ -421,7 +409,7 @@ static int skeleton_rawdev_enqueue_bufs(struct rte_rawdev *dev,
 	 * help in complex implementation which require more information than
 	 * just an integer - for example, a queue-pair.
 	 */
-	q_id = *((uint16_t *)context);
+	q_id = *((int *)context);
 
 	for (i = 0; i < count; i++)
 		queue_buf[q_id].bufs[i] = buffers[i]->buf_addr;
@@ -443,7 +431,7 @@ static int skeleton_rawdev_dequeue_bufs(struct rte_rawdev *dev,
 	 * help in complex implementation which require more information than
 	 * just an integer - for example, a queue-pair.
 	 */
-	q_id = *((uint16_t *)context);
+	q_id = *((int *)context);
 
 	for (i = 0; i < count; i++)
 		buffers[i]->buf_addr = queue_buf[q_id].bufs[i];
@@ -659,8 +647,6 @@ skeldev_get_selftest(const char *key __rte_unused,
 		     void *opaque)
 {
 	int *flag = opaque;
-	if (value == NULL || opaque == NULL)
-		return -EINVAL;
 	*flag = atoi(value);
 	return 0;
 }

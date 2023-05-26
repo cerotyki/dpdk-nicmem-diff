@@ -2,7 +2,7 @@
  * Copyright(c) 2019 Ericsson AB
  */
 
-#ifdef __RDSEED__
+#ifdef RTE_MACHINE_CPUFLAG_RDSEED
 #include <x86intrin.h>
 #endif
 #include <stdlib.h>
@@ -122,7 +122,7 @@ struct rte_rand_state *__rte_rand_get_state(void)
 	lcore_id = rte_lcore_id();
 
 	if (unlikely(lcore_id == LCORE_ID_ANY))
-		lcore_id = rte_get_main_lcore();
+		lcore_id = rte_get_master_lcore();
 
 	return &rand_states[lcore_id];
 }
@@ -188,7 +188,7 @@ __rte_random_initial_seed(void)
 	if (ge_rc == 0)
 		return ge_seed;
 #endif
-#ifdef __RDSEED__
+#ifdef RTE_MACHINE_CPUFLAG_RDSEED
 	unsigned int rdseed_low;
 	unsigned int rdseed_high;
 

@@ -321,15 +321,14 @@ static inline void
 bnx2x_upd_rx_prod_fast(struct bnx2x_softc *sc, struct bnx2x_fastpath *fp,
 		uint16_t rx_bd_prod, uint16_t rx_cq_prod)
 {
-	union {
-		struct ustorm_eth_rx_producers rx_prods;
-		uint32_t val;
-	} val = { {0} };
+	struct ustorm_eth_rx_producers rx_prods = { 0 };
+	uint32_t *val = NULL;
 
-	val.rx_prods.bd_prod  = rx_bd_prod;
-	val.rx_prods.cqe_prod = rx_cq_prod;
+	rx_prods.bd_prod  = rx_bd_prod;
+	rx_prods.cqe_prod = rx_cq_prod;
 
-	REG_WR(sc, fp->ustorm_rx_prods_offset, val.val);
+	val = (uint32_t *)&rx_prods;
+	REG_WR(sc, fp->ustorm_rx_prods_offset, val[0]);
 }
 
 static uint16_t

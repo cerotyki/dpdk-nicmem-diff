@@ -27,6 +27,8 @@ extern "C" {
 *		This is the buffer address to print out.
 * @param len
 *		The number of bytes to dump out
+* @return
+*		None.
 */
 
 extern void
@@ -43,6 +45,8 @@ rte_hexdump(FILE *f, const char * title, const void * buf, unsigned int len);
 *		This is the buffer address to print out.
 * @param len
 *		The number of bytes to dump out
+* @return
+*		None.
 */
 
 void

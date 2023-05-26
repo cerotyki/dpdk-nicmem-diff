@@ -17,7 +17,6 @@
 #include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
-#include "mlx5_malloc.h"
 
 /**
  * DPDK callback to get extended device statistics.
@@ -113,23 +112,18 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		idx = rxq->idx;
 		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 #ifdef MLX5_PMD_SOFT_COUNTERS
-			tmp.q_ipackets[idx] += rxq->stats.ipackets -
-				rxq->stats_reset.ipackets;
-			tmp.q_ibytes[idx] += rxq->stats.ibytes -
-				rxq->stats_reset.ibytes;
+			tmp.q_ipackets[idx] += rxq->stats.ipackets;
+			tmp.q_ibytes[idx] += rxq->stats.ibytes;
 #endif
 			tmp.q_errors[idx] += (rxq->stats.idropped +
-					      rxq->stats.rx_nombuf) -
-					      (rxq->stats_reset.idropped +
-					      rxq->stats_reset.rx_nombuf);
+					      rxq->stats.rx_nombuf);
 		}
 #ifdef MLX5_PMD_SOFT_COUNTERS
-		tmp.ipackets += rxq->stats.ipackets - rxq->stats_reset.ipackets;
-		tmp.ibytes += rxq->stats.ibytes - rxq->stats_reset.ibytes;
+		tmp.ipackets += rxq->stats.ipackets;
+		tmp.ibytes += rxq->stats.ibytes;
 #endif
-		tmp.ierrors += rxq->stats.idropped - rxq->stats_reset.idropped;
-		tmp.rx_nombuf += rxq->stats.rx_nombuf -
-					rxq->stats_reset.rx_nombuf;
+		tmp.ierrors += rxq->stats.idropped;
+		tmp.rx_nombuf += rxq->stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
 		struct mlx5_txq_data *txq = (*priv->txqs)[i];
@@ -139,17 +133,15 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		idx = txq->idx;
 		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 #ifdef MLX5_PMD_SOFT_COUNTERS
-			tmp.q_opackets[idx] += txq->stats.opackets -
-						txq->stats_reset.opackets;
-			tmp.q_obytes[idx] += txq->stats.obytes -
-						txq->stats_reset.obytes;
+			tmp.q_opackets[idx] += txq->stats.opackets;
+			tmp.q_obytes[idx] += txq->stats.obytes;
 #endif
 		}
 #ifdef MLX5_PMD_SOFT_COUNTERS
-		tmp.opackets += txq->stats.opackets - txq->stats_reset.opackets;
-		tmp.obytes += txq->stats.obytes - txq->stats_reset.obytes;
+		tmp.opackets += txq->stats.opackets;
+		tmp.obytes += txq->stats.obytes;
 #endif
-		tmp.oerrors += txq->stats.oerrors - txq->stats_reset.oerrors;
+		tmp.oerrors += txq->stats.oerrors;
 	}
 	ret = mlx5_os_read_dev_stat(priv, "out_of_buffer", &tmp.imissed);
 	if (ret == 0) {
@@ -189,14 +181,14 @@ mlx5_stats_reset(struct rte_eth_dev *dev)
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		if ((*priv->rxqs)[i] == NULL)
 			continue;
-		(*priv->rxqs)[i]->stats_reset = (*priv->rxqs)[i]->stats;
+		memset(&(*priv->rxqs)[i]->stats, 0,
+		       sizeof(struct mlx5_rxq_stats));
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
-		struct mlx5_txq_data *txq_data = (*priv->txqs)[i];
-
-		if (txq_data == NULL)
+		if ((*priv->txqs)[i] == NULL)
 			continue;
-		txq_data->stats_reset = txq_data->stats;
+		memset(&(*priv->txqs)[i]->stats, 0,
+		       sizeof(struct mlx5_txq_stats));
 	}
 	mlx5_os_read_dev_stat(priv, "out_of_buffer", &stats_ctrl->imissed_base);
 	stats_ctrl->imissed = 0;
@@ -224,7 +216,8 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	int stats_n;
 	unsigned int i;
-	uint64_t *counters;
+	unsigned int n = xstats_ctrl->mlx5_stats_n;
+	uint64_t counters[n];
 	int ret;
 
 	stats_n = mlx5_os_get_stats_n(dev);
@@ -235,29 +228,17 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 	}
 	if (xstats_ctrl->stats_n != stats_n)
 		mlx5_os_stats_init(dev);
-	counters =  mlx5_malloc(MLX5_MEM_SYS, sizeof(*counters) *
-			xstats_ctrl->mlx5_stats_n, 0,
-			SOCKET_ID_ANY);
-	if (!counters) {
-		DRV_LOG(WARNING, "port %u unable to allocate memory for xstats "
-				"counters",
-		     dev->data->port_id);
-		rte_errno = ENOMEM;
-		return -rte_errno;
-	}
 	ret = mlx5_os_read_dev_counters(dev, counters);
 	if (ret) {
 		DRV_LOG(ERR, "port %u cannot read device counters: %s",
 			dev->data->port_id, strerror(rte_errno));
-		mlx5_free(counters);
 		return ret;
 	}
-	for (i = 0; i != xstats_ctrl->mlx5_stats_n; ++i) {
+	for (i = 0; i != n; ++i) {
 		xstats_ctrl->base[i] = counters[i];
 		xstats_ctrl->hw_stats[i] = 0;
 	}
 	mlx5_txpp_xstats_reset(dev);
-	mlx5_free(counters);
 	return 0;
 }
 
@@ -285,9 +266,10 @@ mlx5_xstats_get_names(struct rte_eth_dev *dev,
 
 	if (n >= mlx5_xstats_n && xstats_names) {
 		for (i = 0; i != mlx5_xstats_n; ++i) {
-			strlcpy(xstats_names[i].name,
+			strncpy(xstats_names[i].name,
 				xstats_ctrl->info[i].dpdk_name,
 				RTE_ETH_XSTATS_NAME_SIZE);
+			xstats_names[i].name[RTE_ETH_XSTATS_NAME_SIZE - 1] = 0;
 		}
 	}
 	mlx5_xstats_n = mlx5_txpp_xstats_get_names(dev, xstats_names,

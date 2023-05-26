@@ -15,6 +15,8 @@ extern struct rte_pci_bus rte_pci_bus;
 struct rte_pci_driver;
 struct rte_pci_device;
 
+extern struct rte_pci_bus rte_pci_bus;
+
 /**
  * Scan the content of the PCI bus, and the devices in the devices
  * list
@@ -67,69 +69,17 @@ void rte_pci_insert_device(struct rte_pci_device *exist_pci_dev,
 		struct rte_pci_device *new_pci_dev);
 
 /**
- * A structure describing a PCI mapping.
- */
-struct pci_map {
-	void *addr;
-	char *path;
-	uint64_t offset;
-	uint64_t size;
-	uint64_t phaddr;
-};
-
-struct pci_msix_table {
-	int bar_index;
-	uint32_t offset;
-	uint32_t size;
-};
-
-/**
- * A structure describing a mapped PCI resource.
- * For multi-process we need to reproduce all PCI mappings in secondary
- * processes, so save them in a tailq.
- */
-struct mapped_pci_resource {
-	TAILQ_ENTRY(mapped_pci_resource) next;
-
-	struct rte_pci_addr pci_addr;
-	char path[PATH_MAX];
-	int nb_maps;
-	struct pci_map maps[PCI_MAX_RESOURCE];
-	struct pci_msix_table msix_table;
-};
-
-/** mapped pci device list */
-TAILQ_HEAD(mapped_pci_res_list, mapped_pci_resource);
-
-/**
- * Map a particular resource from a file.
+ * Update a pci device object by asking the kernel for the latest information.
  *
- * @param requested_addr
- *      The starting address for the new mapping range.
- * @param fd
- *      The file descriptor.
- * @param offset
- *      The offset for the mapping range.
- * @param size
- *      The size for the mapping range.
- * @param additional_flags
- *      The additional rte_mem_map() flags for the mapping range.
+ * This function is private to EAL.
+ *
+ * @param addr
+ *	The PCI Bus-Device-Function address to look for
  * @return
- *   - On success, the function returns a pointer to the mapped area.
- *   - On error, NULL is returned.
+ *   - 0 on success.
+ *   - negative on error.
  */
-void *pci_map_resource(void *requested_addr, int fd, off_t offset,
-		size_t size, int additional_flags);
-
-/**
- * Unmap a particular resource.
- *
- * @param requested_addr
- *      The address for the unmapping range.
- * @param size
- *      The size for the unmapping range.
- */
-void pci_unmap_resource(void *requested_addr, size_t size);
+int pci_update_device(const struct rte_pci_addr *addr);
 
 /**
  * Map the PCI resource of a PCI device in virtual memory

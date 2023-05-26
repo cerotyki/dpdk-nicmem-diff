@@ -81,7 +81,7 @@ const char *pmd_mlx4_init_params[] = {
 	NULL,
 };
 
-static int mlx4_dev_stop(struct rte_eth_dev *dev);
+static void mlx4_dev_stop(struct rte_eth_dev *dev);
 
 /**
  * Initialize shared data between primary and secondary process.
@@ -195,26 +195,25 @@ mlx4_free_verbs_buf(void *ptr, void *data __rte_unused)
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
-int
+static int
 mlx4_proc_priv_init(struct rte_eth_dev *dev)
 {
 	struct mlx4_proc_priv *ppriv;
 	size_t ppriv_size;
 
-	mlx4_proc_priv_uninit(dev);
 	/*
 	 * UAR register table follows the process private structure. BlueFlame
 	 * registers for Tx queues are stored in the table.
 	 */
 	ppriv_size = sizeof(struct mlx4_proc_priv) +
 		     dev->data->nb_tx_queues * sizeof(void *);
-	ppriv = rte_zmalloc_socket("mlx4_proc_priv", ppriv_size,
-				   RTE_CACHE_LINE_SIZE, dev->device->numa_node);
+	ppriv = rte_malloc_socket("mlx4_proc_priv", ppriv_size,
+				  RTE_CACHE_LINE_SIZE, dev->device->numa_node);
 	if (!ppriv) {
 		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
-	ppriv->uar_table_sz = dev->data->nb_tx_queues;
+	ppriv->uar_table_sz = ppriv_size;
 	dev->process_private = ppriv;
 	return 0;
 }
@@ -225,7 +224,7 @@ mlx4_proc_priv_init(struct rte_eth_dev *dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-void
+static void
 mlx4_proc_priv_uninit(struct rte_eth_dev *dev)
 {
 	if (!dev->process_private)
@@ -249,6 +248,9 @@ mlx4_dev_configure(struct rte_eth_dev *dev)
 	struct mlx4_priv *priv = dev->data->dev_private;
 	struct rte_flow_error error;
 	int ret;
+
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	/* Prepare internal flow rules. */
 	ret = mlx4_flow_sync(priv, &error);
@@ -341,13 +343,13 @@ err:
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static int
+static void
 mlx4_dev_stop(struct rte_eth_dev *dev)
 {
 	struct mlx4_priv *priv = dev->data->dev_private;
 
 	if (!priv->started)
-		return 0;
+		return;
 	DEBUG("%p: detaching flows from all RX queues", (void *)dev);
 	priv->started = 0;
 	dev->tx_pkt_burst = mlx4_tx_burst_removed;
@@ -358,8 +360,6 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 	mlx4_flow_sync(priv, NULL);
 	mlx4_rxq_intr_disable(priv);
 	mlx4_rss_deinit(priv);
-
-	return 0;
 }
 
 /**
@@ -370,16 +370,12 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static int
+static void
 mlx4_dev_close(struct rte_eth_dev *dev)
 {
 	struct mlx4_priv *priv = dev->data->dev_private;
 	unsigned int i;
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-		rte_eth_dev_release_port(dev);
-		return 0;
-	}
 	DEBUG("%p: closing device \"%s\"",
 	      (void *)dev,
 	      ((priv->ctx != NULL) ? priv->ctx->device->name : ""));
@@ -404,9 +400,6 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		MLX4_ASSERT(priv->ctx == NULL);
 	mlx4_intr_uninstall(priv);
 	memset(priv, 0, sizeof(*priv));
-	/* mac_addrs must not be freed because part of dev_private */
-	dev->data->mac_addrs = NULL;
-	return 0;
 }
 
 static const struct eth_dev_ops mlx4_dev_ops = {
@@ -767,7 +760,6 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
 	struct ibv_device_attr_ex device_attr_ex;
-	struct rte_eth_dev *prev_dev = NULL;
 	struct mlx4_conf conf = {
 		.ports.present = 0,
 		.mr_ext_memseg_en = 1,
@@ -877,14 +869,12 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		snprintf(name, sizeof(name), "%s port %u",
 			 mlx4_glue->get_device_name(ibv_dev), port);
 		if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-			int fd;
-
 			eth_dev = rte_eth_dev_attach_secondary(name);
 			if (eth_dev == NULL) {
 				ERROR("can not attach rte ethdev");
 				rte_errno = ENOMEM;
 				err = rte_errno;
-				goto err_secondary;
+				goto error;
 			}
 			priv = eth_dev->data->dev_private;
 			if (!priv->verbs_alloc_ctx.enabled) {
@@ -893,25 +883,24 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 				      " from Verbs");
 				rte_errno = ENOTSUP;
 				err = rte_errno;
-				goto err_secondary;
+				goto error;
 			}
 			eth_dev->device = &pci_dev->device;
 			eth_dev->dev_ops = &mlx4_dev_sec_ops;
 			err = mlx4_proc_priv_init(eth_dev);
 			if (err)
-				goto err_secondary;
+				goto error;
 			/* Receive command fd from primary process. */
-			fd = mlx4_mp_req_verbs_cmd_fd(eth_dev);
-			if (fd < 0) {
+			err = mlx4_mp_req_verbs_cmd_fd(eth_dev);
+			if (err < 0) {
 				err = rte_errno;
-				goto err_secondary;
+				goto error;
 			}
 			/* Remap UAR for Tx queues. */
-			err = mlx4_tx_uar_init_secondary(eth_dev, fd);
-			close(fd);
+			err = mlx4_tx_uar_init_secondary(eth_dev, err);
 			if (err) {
 				err = rte_errno;
-				goto err_secondary;
+				goto error;
 			}
 			/*
 			 * Ethdev pointer is still required as input since
@@ -923,14 +912,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			claim_zero(mlx4_glue->close_device(ctx));
 			rte_eth_copy_pci_info(eth_dev, pci_dev);
 			rte_eth_dev_probing_finish(eth_dev);
-			prev_dev = eth_dev;
 			continue;
-err_secondary:
-			claim_zero(mlx4_glue->close_device(ctx));
-			rte_eth_dev_release_port(eth_dev);
-			if (prev_dev)
-				rte_eth_dev_release_port(prev_dev);
-			break;
 		}
 		/* Check port status. */
 		err = mlx4_glue->query_port(ctx, port, &port_attr);
@@ -1046,7 +1028,6 @@ err_secondary:
 		eth_dev->data->mac_addrs = priv->mac;
 		eth_dev->device = &pci_dev->device;
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
-		eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 		/* Initialize local interrupt handle for current port. */
 		memset(&priv->intr_handle, 0, sizeof(struct rte_intr_handle));
 		priv->intr_handle.fd = -1;
@@ -1105,7 +1086,6 @@ err_secondary:
 				 priv, mem_event_cb);
 		rte_rwlock_write_unlock(&mlx4_shared_data->mem_event_rwlock);
 		rte_eth_dev_probing_finish(eth_dev);
-		prev_dev = eth_dev;
 		continue;
 port_error:
 		rte_free(priv);
@@ -1120,10 +1100,14 @@ port_error:
 			eth_dev->data->mac_addrs = NULL;
 			rte_eth_dev_release_port(eth_dev);
 		}
-		if (prev_dev)
-			mlx4_dev_close(prev_dev);
 		break;
 	}
+	/*
+	 * XXX if something went wrong in the loop above, there is a resource
+	 * leak (ctx, pd, priv, dpdk ethdev) but we can do nothing about it as
+	 * long as the dpdk does not provide a way to deallocate a ethdev and a
+	 * way to enumerate the registered ethdevs to free the previous ones.
+	 */
 error:
 	if (attr_ctx)
 		claim_zero(mlx4_glue->close_device(attr_ctx));
@@ -1132,36 +1116,6 @@ error:
 	if (err)
 		rte_errno = err;
 	return -err;
-}
-
-/**
- * DPDK callback to remove a PCI device.
- *
- * This function removes all Ethernet devices belong to a given PCI device.
- *
- * @param[in] pci_dev
- *   Pointer to the PCI device.
- *
- * @return
- *   0 on success, the function cannot fail.
- */
-static int
-mlx4_pci_remove(struct rte_pci_device *pci_dev)
-{
-	uint16_t port_id;
-	int ret = 0;
-
-	RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device) {
-		/*
-		 * mlx4_dev_close() is not registered to secondary process,
-		 * call the close function explicitly for secondary process.
-		 */
-		if (rte_eal_process_type() == RTE_PROC_SECONDARY)
-			ret |= mlx4_dev_close(&rte_eth_devices[port_id]);
-		else
-			ret |= rte_eth_dev_close(port_id);
-	}
-	return ret == 0 ? 0 : -EIO;
 }
 
 static const struct rte_pci_id mlx4_pci_id_map[] = {
@@ -1188,7 +1142,6 @@ static struct rte_pci_driver mlx4_driver = {
 	},
 	.id_table = mlx4_pci_id_map,
 	.probe = mlx4_pci_probe,
-	.remove = mlx4_pci_remove,
 	.drv_flags = RTE_PCI_DRV_INTR_LSC | RTE_PCI_DRV_INTR_RMV,
 };
 

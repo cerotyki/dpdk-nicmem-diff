@@ -182,12 +182,9 @@ tf_session_create(struct tf *tfp,
 	return 0;
 
  cleanup:
-	if (tfp->session) {
-		tfp_free(tfp->session->core_data);
-		tfp_free(tfp->session);
-		tfp->session = NULL;
-	}
-
+	tfp_free(tfp->session->core_data);
+	tfp_free(tfp->session);
+	tfp->session = NULL;
 	return rc;
 }
 

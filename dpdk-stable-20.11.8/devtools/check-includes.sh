@@ -17,7 +17,8 @@
 #
 # SUMMARY=1 is the same as -s.
 #
-# CC, CPPFLAGS, CFLAGS, CXX, CXXFLAGS are taken into account.
+# CC, CPPFLAGS, CFLAGS, EXTRA_CPPFLAGS, EXTRA_CFLAGS, CXX, CXXFLAGS and
+# EXTRA_CXXFLAGS are taken into account.
 #
 # PEDANTIC_CFLAGS, PEDANTIC_CXXFLAGS and PEDANTIC_CPPFLAGS provide strict
 # C/C++ compilation flags.
@@ -129,16 +130,16 @@ trap 'rm -f "$temp_cc" "$temp_cxx"' EXIT
 compile_cc ()
 {
 	${CC} -I"$include_dir" \
-		${PEDANTIC_CPPFLAGS} ${CPPFLAGS} \
-		${PEDANTIC_CFLAGS} ${CFLAGS} \
+		${PEDANTIC_CPPFLAGS} ${CPPFLAGS} ${EXTRA_CPPFLAGS} \
+		${PEDANTIC_CFLAGS} ${CFLAGS} ${EXTRA_CFLAGS} \
 		-c -o /dev/null "${temp_cc}"
 }
 
 compile_cxx ()
 {
 	${CXX} -I"$include_dir" \
-		${PEDANTIC_CPPFLAGS} ${CPPFLAGS} \
-		${PEDANTIC_CXXFLAGS} ${CXXFLAGS} \
+		${PEDANTIC_CPPFLAGS} ${CPPFLAGS} ${EXTRA_CPPFLAGS} \
+		${PEDANTIC_CXXFLAGS} ${CXXFLAGS} ${EXTRA_CXXFLAGS} \
 		-c -o /dev/null "${temp_cxx}"
 }
 

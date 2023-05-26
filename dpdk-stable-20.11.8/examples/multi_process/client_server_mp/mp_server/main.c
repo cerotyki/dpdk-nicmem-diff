@@ -59,17 +59,12 @@ static struct client_rx_buf *cl_rx_buf;
 static const char *
 get_printable_mac_addr(uint16_t port)
 {
-	static const struct rte_ether_addr null_mac; /* static defaults to 0 */
-	static char err_address[32];
-	static char addresses[RTE_MAX_ETHPORTS][32];
+	static const char err_address[] = "00:00:00:00:00:00";
+	static char addresses[RTE_MAX_ETHPORTS][sizeof(err_address)];
 	int ret;
 
-	if (unlikely(port >= RTE_MAX_ETHPORTS)) {
-		if (err_address[0] == '\0')
-			rte_ether_format_addr(err_address,
-					sizeof(err_address), &null_mac);
+	if (unlikely(port >= RTE_MAX_ETHPORTS))
 		return err_address;
-	}
 	if (unlikely(addresses[port][0]=='\0')){
 		struct rte_ether_addr mac;
 		ret = rte_eth_macaddr_get(port, &mac);
@@ -78,8 +73,10 @@ get_printable_mac_addr(uint16_t port)
 			       port, rte_strerror(-ret));
 			return err_address;
 		}
-		rte_ether_format_addr(addresses[port],
-				sizeof(addresses[port]), &mac);
+		snprintf(addresses[port], sizeof(addresses[port]),
+				"%02x:%02x:%02x:%02x:%02x:%02x\n",
+				mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
+				mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
 	}
 	return addresses[port];
 }
@@ -87,7 +84,7 @@ get_printable_mac_addr(uint16_t port)
 /*
  * This function displays the recorded statistics for each port
  * and for each client. It uses ANSI terminal codes to clear
- * screen when called. It is called from a single worker
+ * screen when called. It is called from a single non-master
  * thread in the server process, when the process is run with more
  * than one lcore enabled.
  */
@@ -149,7 +146,7 @@ do_stats_display(void)
 }
 
 /*
- * The function called from each worker lcore used by the process.
+ * The function called from each non-master lcore used by the process.
  * The test_and_set function is used to randomly pick a single lcore on which
  * the code to display the statistics will run. Otherwise, the code just
  * repeatedly sleeps.
@@ -233,7 +230,7 @@ process_packets(uint32_t port_num __rte_unused,
 		struct rte_mbuf *pkts[], uint16_t rx_count)
 {
 	uint16_t i;
-	static uint8_t client;
+	uint8_t client = 0;
 
 	for (i = 0; i < rx_count; i++) {
 		enqueue_rx_packet(client, pkts[i]);
@@ -247,7 +244,7 @@ process_packets(uint32_t port_num __rte_unused,
 }
 
 /*
- * Function called by the main lcore of the DPDK process.
+ * Function called by the master lcore of the DPDK process.
  */
 static void
 do_packet_forwarding(void)
@@ -300,13 +297,9 @@ main(int argc, char *argv[])
 	/* clear statistics */
 	clear_stats();
 
-	/* put all other cores to sleep except main */
-	rte_eal_mp_remote_launch(sleep_lcore, NULL, SKIP_MAIN);
+	/* put all other cores to sleep bar master */
+	rte_eal_mp_remote_launch(sleep_lcore, NULL, SKIP_MASTER);
 
 	do_packet_forwarding();
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
-
 	return 0;
 }

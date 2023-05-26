@@ -169,22 +169,22 @@ flow_item_is_proto(enum rte_flow_item_type type,
 
 	case RTE_FLOW_ITEM_TYPE_ETH:
 		*mask = &rte_flow_item_eth_mask;
-		*size = sizeof(struct rte_ether_hdr);
+		*size = sizeof(struct rte_flow_item_eth);
 		return 1; /* TRUE */
 
 	case RTE_FLOW_ITEM_TYPE_VLAN:
 		*mask = &rte_flow_item_vlan_mask;
-		*size = sizeof(struct rte_vlan_hdr);
+		*size = sizeof(struct rte_flow_item_vlan);
 		return 1;
 
 	case RTE_FLOW_ITEM_TYPE_IPV4:
 		*mask = &rte_flow_item_ipv4_mask;
-		*size = sizeof(struct rte_ipv4_hdr);
+		*size = sizeof(struct rte_flow_item_ipv4);
 		return 1;
 
 	case RTE_FLOW_ITEM_TYPE_IPV6:
 		*mask = &rte_flow_item_ipv6_mask;
-		*size = sizeof(struct rte_ipv6_hdr);
+		*size = sizeof(struct rte_flow_item_ipv6);
 		return 1;
 
 	case RTE_FLOW_ITEM_TYPE_ICMP:
@@ -930,7 +930,7 @@ flow_rule_match_acl_get(struct pmd_internals *softnic __rte_unused,
  * Both *tmask* and *fmask* are byte arrays of size *tsize* and *fsize*
  * respectively.
  * They are located within a larger buffer at offsets *toffset* and *foffset*
- * respectively. Both *tmask* and *fmask* represent bitmasks for the larger
+ * respectivelly. Both *tmask* and *fmask* represent bitmasks for the larger
  * buffer.
  * Question: are the two masks equivalent?
  *

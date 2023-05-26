@@ -224,14 +224,13 @@ sdp_rawdev_close(struct rte_rawdev *dev)
 }
 
 static int
-sdp_rawdev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config,
-		size_t config_size)
+sdp_rawdev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config)
 {
 	struct sdp_rawdev_info *app_info = (struct sdp_rawdev_info *)config;
 	struct sdp_device *sdpvf;
 
-	if (app_info == NULL || config_size != sizeof(*app_info)) {
-		otx2_err("Application config info [NULL] or incorrect size");
+	if (app_info == NULL) {
+		otx2_err("Application config info [NULL]");
 		return -EINVAL;
 	}
 

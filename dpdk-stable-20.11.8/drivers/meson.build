@@ -6,7 +6,6 @@ subdirs = [
 	'common',
 	'bus',
 	'common/mlx5', # depends on bus.
-	'common/qat', # depends on bus.
 	'mempool', # depends on common and bus.
 	'net',     # depends on common, bus, mempool
 	'raw',     # depends on common, bus and net.
@@ -19,7 +18,7 @@ subdirs = [
 ]
 
 disabled_drivers = run_command(list_dir_globs, get_option('disable_drivers'),
-		check: true).stdout().split()
+		).stdout().split()
 
 default_cflags = machine_args
 default_cflags += ['-DALLOW_EXPERIMENTAL_API']
@@ -33,6 +32,9 @@ foreach subpath:subdirs
 	drivers = []
 	std_deps = []
 	config_flag_fmt = '' # format string used to set the value in dpdk_conf
+	driver_name_fmt = '' # format string for driver name, used to name
+	                     # the library, the dependency and to find the
+	                     # version file for linking
 
 	# subpath can be either "class" or "class/driver"
 	if subpath.contains('/')
@@ -60,7 +62,6 @@ foreach subpath:subdirs
 		name = drv
 		fmt_name = ''
 		sources = []
-		headers = []
 		objs = []
 		cflags = default_cflags
 		includes = [include_directories(drv_path)]
@@ -77,7 +78,7 @@ foreach subpath:subdirs
 
 		if disabled_drivers.contains(drv_path)
 			build = false
-			reason = 'explicitly disabled via build config'
+			reason = 'Explicitly disabled via build config'
 		else
 			# pull in driver directory which should update all the local variables
 			subdir(drv_path)
@@ -90,7 +91,7 @@ foreach subpath:subdirs
 			foreach d:deps
 				if not is_variable('shared_rte_' + d)
 					build = false
-					reason = 'missing internal dependency, "@0@"'.format(d)
+					reason = 'Missing internal dependency, "@0@"'.format(d)
 					message('Disabling @1@ [@2@]: missing internal dependency "@0@"'
 							.format(d, name, 'drivers/' + drv_path))
 				else
@@ -111,33 +112,14 @@ foreach subpath:subdirs
 			endif
 		else
 			enabled_drivers += name
-			lib_name = '_'.join(['rte', class, name])
-			dpdk_conf.set(lib_name.to_upper(), 1)
 
 			if fmt_name == ''
 				fmt_name = name
 			endif
-
-			dpdk_conf.set(config_flag_fmt.format(fmt_name.to_upper()),1) #old-style macro
-			# for driver compatibility, since we changed the
-			# default to match that of make. Remove in future release
-			# after following deprecation process
-			if config_flag_fmt.contains('_PMD_@0@') and (class == 'crypto'
-					or class == 'compress'
-					or class == 'event')
-				alt_flag_fmt = '_@0@_PMD'.join(
-						config_flag_fmt.split('_PMD_@0@'))
-				if config_flag_fmt.contains('EVENTDEV')
-					alt_flag_fmt = '_@0@_EVENTDEV_PMD'.join(
-						config_flag_fmt.split('_PMD_@0@_EVENTDEV'))
-				endif
-				dpdk_conf.set(alt_flag_fmt.format(
-						fmt_name.to_upper()), 1)
-			endif
+			dpdk_conf.set(config_flag_fmt.format(fmt_name.to_upper()),1)
+			lib_name = driver_name_fmt.format(fmt_name)
 
 			dpdk_extra_ldflags += pkgconfig_extra_libs
-
-			install_headers(headers)
 
 			# generate pmdinfo sources by building a temporary
 			# lib and then running pmdinfogen on the contents of
@@ -168,9 +150,9 @@ foreach subpath:subdirs
 				install: true)
 
 			# now build the shared driver
-			version_map = '@0@/@1@/version.map'.format(
+			version_map = '@0@/@1@/@2@_version.map'.format(
 					meson.current_source_dir(),
-					drv_path)
+					drv_path, lib_name)
 			implib = 'lib' + lib_name + '.dll.a'
 
 			def_file = custom_target(lib_name + '_def',
@@ -186,10 +168,8 @@ foreach subpath:subdirs
 			lk_deps = [version_map, def_file, mingw_map]
 			if is_windows
 				if is_ms_linker
-					lk_args = ['-Wl,/def:' + def_file.full_path()]
-					if meson.version().version_compare('<0.54.0')
-						lk_args += ['-Wl,/implib:drivers\\' + implib]
-					endif
+					lk_args = ['-Wl,/def:' + def_file.full_path(),
+						'-Wl,/implib:drivers\\' + implib]
 				else
 					lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
 				endif

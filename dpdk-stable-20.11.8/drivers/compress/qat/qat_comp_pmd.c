@@ -30,7 +30,7 @@ static const struct rte_compressdev_capabilities qat_comp_gen_capabilities[] = {
 				RTE_COMP_FF_OOP_LB_IN_SGL_OUT |
 				RTE_COMP_FF_STATEFUL_DECOMPRESSION,
 	 .window_size = {.min = 15, .max = 15, .increment = 0} },
-	 RTE_COMP_END_OF_CAPABILITIES_LIST() };
+	{RTE_COMP_ALGO_LIST_END, 0, {0, 0, 0} } };
 
 static void
 qat_comp_stats_get(struct rte_compressdev *dev,
@@ -82,13 +82,13 @@ qat_comp_qp_release(struct rte_compressdev *dev, uint16_t queue_pair_id)
 	qat_private->qat_dev->qps_in_use[QAT_SERVICE_COMPRESSION][queue_pair_id]
 						= NULL;
 
-	if (qp != NULL)
-		for (i = 0; i < qp->nb_descriptors; i++) {
-			struct qat_comp_op_cookie *cookie = qp->op_cookies[i];
+	for (i = 0; i < qp->nb_descriptors; i++) {
 
-			rte_free(cookie->qat_sgl_src_d);
-			rte_free(cookie->qat_sgl_dst_d);
-		}
+		struct qat_comp_op_cookie *cookie = qp->op_cookies[i];
+
+		rte_free(cookie->qat_sgl_src_d);
+		rte_free(cookie->qat_sgl_dst_d);
+	}
 
 	return qat_qp_release((struct qat_qp **)
 			&(dev->data->queue_pairs[queue_pair_id]));
@@ -198,7 +198,7 @@ qat_comp_setup_inter_buffers(struct qat_comp_dev_private *comp_dev,
 	struct array_of_ptrs *array_of_pointers;
 	int size_of_ptr_array;
 	uint32_t full_size;
-	uint32_t offset_of_flat_buffs;
+	uint32_t offset_of_sgls, offset_of_flat_buffs = 0;
 	int i;
 	int num_im_sgls = qat_gen_config[
 		comp_dev->qat_dev->qat_dev_gen].comp_num_im_bufs_required;
@@ -213,83 +213,50 @@ qat_comp_setup_inter_buffers(struct qat_comp_dev_private *comp_dev,
 		return memzone;
 	}
 
-	/* Create multiple memzones to hold intermediate buffers and associated
-	 * meta-data needed by the firmware.
-	 * The first memzone contains:
+	/* Create a memzone to hold intermediate buffers and associated
+	 * meta-data needed by the firmware. The memzone contains 3 parts:
 	 *  - a list of num_im_sgls physical pointers to sgls
-	 * All other memzones contain:
-	 *  - the sgl structure, pointing to QAT_NUM_BUFS_IN_IM_SGL flat buffers
-	 *  - the flat buffers: QAT_NUM_BUFS_IN_IM_SGL buffers,
-	 *    each of buff_size
+	 *  - the num_im_sgl sgl structures, each pointing to
+	 *    QAT_NUM_BUFS_IN_IM_SGL flat buffers
+	 *  - the flat buffers: num_im_sgl * QAT_NUM_BUFS_IN_IM_SGL
+	 *    buffers, each of buff_size
 	 * num_im_sgls depends on the hardware generation of the device
 	 * buff_size comes from the user via the config file
 	 */
 
 	size_of_ptr_array = num_im_sgls * sizeof(phys_addr_t);
-	offset_of_flat_buffs = sizeof(struct qat_inter_sgl);
+	offset_of_sgls = (size_of_ptr_array + (~QAT_64_BYTE_ALIGN_MASK))
+			& QAT_64_BYTE_ALIGN_MASK;
+	offset_of_flat_buffs =
+	    offset_of_sgls + num_im_sgls * sizeof(struct qat_inter_sgl);
 	full_size = offset_of_flat_buffs +
-			buff_size * QAT_NUM_BUFS_IN_IM_SGL;
+			num_im_sgls * buff_size * QAT_NUM_BUFS_IN_IM_SGL;
 
-	memzone = rte_memzone_reserve_aligned(inter_buff_mz_name,
-			size_of_ptr_array,
+	memzone = rte_memzone_reserve_aligned(inter_buff_mz_name, full_size,
 			comp_dev->compressdev->data->socket_id,
 			RTE_MEMZONE_IOVA_CONTIG, QAT_64_BYTE_ALIGN);
 	if (memzone == NULL) {
-		QAT_LOG(ERR,
-				"Can't allocate intermediate buffers for device %s",
-				comp_dev->qat_dev->name);
+		QAT_LOG(ERR, "Can't allocate intermediate buffers"
+				" for device %s", comp_dev->qat_dev->name);
 		return NULL;
 	}
 
 	mz_start = (uint8_t *)memzone->addr;
-	mz_start_phys = memzone->iova;
+	mz_start_phys = memzone->phys_addr;
 	QAT_LOG(DEBUG, "Memzone %s: addr = %p, phys = 0x%"PRIx64
 			", size required %d, size created %zu",
 			inter_buff_mz_name, mz_start, mz_start_phys,
-			size_of_ptr_array, memzone->len);
+			full_size, memzone->len);
 
 	array_of_pointers = (struct array_of_ptrs *)mz_start;
 	for (i = 0; i < num_im_sgls; i++) {
-		const struct rte_memzone *mz;
-		struct qat_inter_sgl *sgl;
+		uint32_t curr_sgl_offset =
+		    offset_of_sgls + i * sizeof(struct qat_inter_sgl);
+		struct qat_inter_sgl *sgl =
+		    (struct qat_inter_sgl *)(mz_start +	curr_sgl_offset);
 		int lb;
+		array_of_pointers->pointer[i] = mz_start_phys + curr_sgl_offset;
 
-		snprintf(inter_buff_mz_name, RTE_MEMZONE_NAMESIZE,
-				"%s_inter_buff_%d", comp_dev->qat_dev->name, i);
-		mz = rte_memzone_lookup(inter_buff_mz_name);
-		if (mz == NULL) {
-			mz = rte_memzone_reserve_aligned(inter_buff_mz_name,
-					full_size,
-					comp_dev->compressdev->data->socket_id,
-					RTE_MEMZONE_IOVA_CONTIG,
-					QAT_64_BYTE_ALIGN);
-			if (mz == NULL) {
-				QAT_LOG(ERR,
-						"Can't allocate intermediate buffers for device %s",
-						comp_dev->qat_dev->name);
-				while (--i >= 0) {
-					snprintf(inter_buff_mz_name,
-							RTE_MEMZONE_NAMESIZE,
-							"%s_inter_buff_%d",
-							comp_dev->qat_dev->name,
-							i);
-					rte_memzone_free(
-							rte_memzone_lookup(
-							inter_buff_mz_name));
-				}
-				rte_memzone_free(memzone);
-				return NULL;
-			}
-		}
-
-		QAT_LOG(DEBUG, "Memzone %s: addr = %p, phys = 0x%"PRIx64
-				", size required %d, size created %zu",
-				inter_buff_mz_name, mz->addr, mz->iova,
-				full_size, mz->len);
-
-		array_of_pointers->pointer[i] = mz->iova;
-
-		sgl = (struct qat_inter_sgl *) mz->addr;
 		sgl->num_bufs = QAT_NUM_BUFS_IN_IM_SGL;
 		sgl->num_mapped_bufs = 0;
 		sgl->resrvd = 0;
@@ -301,8 +268,8 @@ qat_comp_setup_inter_buffers(struct qat_comp_dev_private *comp_dev,
 #endif
 		for (lb = 0; lb < QAT_NUM_BUFS_IN_IM_SGL; lb++) {
 			sgl->buffers[lb].addr =
-					mz->iova + offset_of_flat_buffs +
-					lb * buff_size;
+			  mz_start_phys + offset_of_flat_buffs +
+			  (((i * QAT_NUM_BUFS_IN_IM_SGL) + lb) * buff_size);
 			sgl->buffers[lb].len = buff_size;
 			sgl->buffers[lb].resrvd = 0;
 #if QAT_IM_BUFFER_DEBUG
@@ -314,7 +281,7 @@ qat_comp_setup_inter_buffers(struct qat_comp_dev_private *comp_dev,
 	}
 #if QAT_IM_BUFFER_DEBUG
 	QAT_DP_HEXDUMP_LOG(DEBUG,  "IM buffer memzone start:",
-			memzone->addr, size_of_ptr_array);
+			mz_start, offset_of_flat_buffs + 32);
 #endif
 	return memzone;
 }
@@ -462,7 +429,7 @@ qat_comp_create_stream_pool(struct qat_comp_dev_private *comp_dev,
 		} else if (info.error) {
 			rte_mempool_obj_iter(mp, qat_comp_stream_destroy, NULL);
 			QAT_LOG(ERR,
-			     "Destroying mempool %s as at least one element failed initialisation",
+			     "Destoying mempool %s as at least one element failed initialisation",
 			     stream_pool_name);
 			rte_mempool_free(mp);
 			mp = NULL;
@@ -477,16 +444,6 @@ _qat_comp_dev_config_clear(struct qat_comp_dev_private *comp_dev)
 {
 	/* Free intermediate buffers */
 	if (comp_dev->interm_buff_mz) {
-		char mz_name[RTE_MEMZONE_NAMESIZE];
-		int i = qat_gen_config[
-		      comp_dev->qat_dev->qat_dev_gen].comp_num_im_bufs_required;
-
-		while (--i >= 0) {
-			snprintf(mz_name, RTE_MEMZONE_NAMESIZE,
-					"%s_inter_buff_%d",
-					comp_dev->qat_dev->name, i);
-			rte_memzone_free(rte_memzone_lookup(mz_name));
-		}
 		rte_memzone_free(comp_dev->interm_buff_mz);
 		comp_dev->interm_buff_mz = NULL;
 	}
@@ -650,8 +607,7 @@ qat_comp_pmd_dequeue_first_op_burst(void *qp, struct rte_comp_op **ops,
 
 			tmp_qp->qat_dev->comp_dev->compressdev->dev_ops =
 					&compress_qat_dummy_ops;
-			QAT_LOG(ERR,
-					"This QAT hardware doesn't support compression operation");
+			QAT_LOG(ERR, "QAT PMD detected wrong FW version !");
 
 		} else {
 			tmp_qp->qat_dev->comp_dev->compressdev->dequeue_burst =
@@ -700,6 +656,11 @@ qat_comp_dev_create(struct qat_pci_device *qat_pci_dev,
 	int i = 0;
 	struct qat_device_info *qat_dev_instance =
 			&qat_pci_devs[qat_pci_dev->qat_dev_id];
+	if (qat_pci_dev->qat_dev_gen == QAT_GEN3) {
+		QAT_LOG(ERR, "Compression PMD not supported on QAT c4xxx");
+		return 0;
+	}
+
 	struct rte_compressdev_pmd_init_params init_params = {
 		.name = "",
 		.socket_id = qat_dev_instance->pci_dev->device.numa_node,

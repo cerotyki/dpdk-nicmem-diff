@@ -149,7 +149,7 @@ test_reorder_insert(void)
 	for (i = 0; i < num_bufs; i++) {
 		bufs[i] = rte_pktmbuf_alloc(p);
 		TEST_ASSERT_NOT_NULL(bufs[i], "Packet allocation failed\n");
-		*rte_reorder_seqn(bufs[i]) = i;
+		bufs[i]->seqn = i;
 	}
 
 	/* This should fill up order buffer:
@@ -183,7 +183,7 @@ test_reorder_insert(void)
 	bufs[4] = NULL;
 
 	/* early packet from current sequence window - full ready buffer */
-	*rte_reorder_seqn(bufs[5]) = 2 * size;
+	bufs[5]->seqn = 2 * size;
 	ret = rte_reorder_insert(b, bufs[5]);
 	if (!((ret == -1) && (rte_errno == ENOSPC))) {
 		printf("%s:%d: No error inserting early packet with full ready buffer\n",
@@ -194,7 +194,7 @@ test_reorder_insert(void)
 	bufs[5] = NULL;
 
 	/* late packet */
-	*rte_reorder_seqn(bufs[6]) = 3 * size;
+	bufs[6]->seqn = 3 * size;
 	ret = rte_reorder_insert(b, bufs[6]);
 	if (!((ret == -1) && (rte_errno == ERANGE))) {
 		printf("%s:%d: No error inserting late packet with seqn:"
@@ -250,7 +250,7 @@ test_reorder_drain(void)
 	for (i = 0; i < num_bufs; i++) {
 		bufs[i] = rte_pktmbuf_alloc(p);
 		TEST_ASSERT_NOT_NULL(bufs[i], "Packet allocation failed\n");
-		*rte_reorder_seqn(bufs[i]) = i;
+		bufs[i]->seqn = i;
 	}
 
 	/* Insert packet with seqn 1:
@@ -270,7 +270,6 @@ test_reorder_drain(void)
 	}
 	if (robufs[0] != NULL)
 		rte_pktmbuf_free(robufs[0]);
-	memset(robufs, 0, sizeof(robufs));
 
 	/* Insert more packets
 	 * RB[] = {NULL, NULL, NULL, NULL}
@@ -307,7 +306,6 @@ test_reorder_drain(void)
 		if (robufs[i] != NULL)
 			rte_pktmbuf_free(robufs[i]);
 	}
-	memset(robufs, 0, sizeof(robufs));
 
 	/*
 	 * RB[] = {NULL, NULL, NULL, NULL}

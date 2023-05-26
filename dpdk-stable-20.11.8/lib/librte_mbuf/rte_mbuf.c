@@ -104,7 +104,7 @@ rte_pktmbuf_init(struct rte_mempool *mp,
 	/* init some constant fields */
 	m->pool = mp;
 	m->nb_segs = 1;
-	m->port = RTE_MBUF_PORT_INVALID;
+	m->port = MBUF_INVALID_PORT;
 	rte_mbuf_refcnt_set(m, 1);
 	m->next = NULL;
 }
@@ -129,10 +129,10 @@ rte_pktmbuf_free_pinned_extmem(void *addr, void *opaque)
 
 	rte_mbuf_ext_refcnt_set(m->shinfo, 1);
 	m->ol_flags = EXT_ATTACHED_MBUF;
-	if (m->next != NULL)
+	if (m->next != NULL) {
 		m->next = NULL;
-	if (m->nb_segs != 1)
 		m->nb_segs = 1;
+	}
 	rte_mbuf_raw_free(m);
 }
 
@@ -207,7 +207,7 @@ __rte_pktmbuf_init_extmem(struct rte_mempool *mp,
 	/* init some constant fields */
 	m->pool = mp;
 	m->nb_segs = 1;
-	m->port = RTE_MBUF_PORT_INVALID;
+	m->port = MBUF_INVALID_PORT;
 	m->ol_flags = EXT_ATTACHED_MBUF;
 	rte_mbuf_refcnt_set(m, 1);
 	m->next = NULL;
@@ -680,9 +680,6 @@ rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len)
 	fprintf(f, "  pkt_len=%u, ol_flags=%#"PRIx64", nb_segs=%u, port=%u",
 		m->pkt_len, m->ol_flags, m->nb_segs, m->port);
 
-	if (m->ol_flags & (PKT_RX_QINQ | PKT_TX_QINQ))
-		fprintf(f, ", vlan_tci_outer=%u", m->vlan_tci_outer);
-
 	if (m->ol_flags & (PKT_RX_VLAN | PKT_TX_VLAN))
 		fprintf(f, ", vlan_tci=%u", m->vlan_tci);
 
@@ -767,6 +764,7 @@ const char *rte_get_rx_ol_flag_name(uint64_t mask)
 	case PKT_RX_QINQ_STRIPPED: return "PKT_RX_QINQ_STRIPPED";
 	case PKT_RX_QINQ: return "PKT_RX_QINQ";
 	case PKT_RX_LRO: return "PKT_RX_LRO";
+	case PKT_RX_TIMESTAMP: return "PKT_RX_TIMESTAMP";
 	case PKT_RX_SEC_OFFLOAD: return "PKT_RX_SEC_OFFLOAD";
 	case PKT_RX_SEC_OFFLOAD_FAILED: return "PKT_RX_SEC_OFFLOAD_FAILED";
 	case PKT_RX_OUTER_L4_CKSUM_BAD: return "PKT_RX_OUTER_L4_CKSUM_BAD";
@@ -810,6 +808,7 @@ rte_get_rx_ol_flag_list(uint64_t mask, char *buf, size_t buflen)
 		{ PKT_RX_FDIR_FLX, PKT_RX_FDIR_FLX, NULL },
 		{ PKT_RX_QINQ_STRIPPED, PKT_RX_QINQ_STRIPPED, NULL },
 		{ PKT_RX_LRO, PKT_RX_LRO, NULL },
+		{ PKT_RX_TIMESTAMP, PKT_RX_TIMESTAMP, NULL },
 		{ PKT_RX_SEC_OFFLOAD, PKT_RX_SEC_OFFLOAD, NULL },
 		{ PKT_RX_SEC_OFFLOAD_FAILED, PKT_RX_SEC_OFFLOAD_FAILED, NULL },
 		{ PKT_RX_QINQ, PKT_RX_QINQ, NULL },

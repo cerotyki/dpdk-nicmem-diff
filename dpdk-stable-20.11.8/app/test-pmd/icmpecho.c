@@ -54,7 +54,7 @@ arp_op_name(uint16_t arp_op)
 	default:
 		break;
 	}
-	return "Unknown ARP op";
+	return "Unkwown ARP op";
 }
 
 static const char *
@@ -293,16 +293,24 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 	uint32_t cksum;
 	uint8_t  i;
 	int l2_len;
-	uint64_t start_tsc = 0;
+#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
+	uint64_t start_tsc;
+	uint64_t end_tsc;
+	uint64_t core_cycles;
+#endif
 
-	get_start_cycles(&start_tsc);
+#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
+	start_tsc = rte_rdtsc();
+#endif
 
 	/*
 	 * First, receive a burst of packets.
 	 */
 	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst,
 				 nb_pkt_per_burst);
-	inc_rx_burst_stats(fs, nb_rx);
+#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
+	fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
+#endif
 	if (unlikely(nb_rx == 0))
 		return;
 
@@ -501,7 +509,9 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 			}
 		}
 		fs->tx_packets += nb_tx;
-		inc_tx_burst_stats(fs, nb_tx);
+#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
+		fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
+#endif
 		if (unlikely(nb_tx < nb_replies)) {
 			fs->fwd_dropped += (nb_replies - nb_tx);
 			do {
@@ -510,25 +520,16 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 		}
 	}
 
-	get_end_cycles(fs, start_tsc);
-}
-
-static void
-icmpecho_stream_init(struct fwd_stream *fs)
-{
-	bool rx_stopped, tx_stopped;
-
-	rx_stopped = ports[fs->rx_port].rxq[fs->rx_queue].state ==
-						RTE_ETH_QUEUE_STATE_STOPPED;
-	tx_stopped = ports[fs->tx_port].txq[fs->tx_queue].state ==
-						RTE_ETH_QUEUE_STATE_STOPPED;
-	fs->disabled = rx_stopped || tx_stopped;
+#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
+	end_tsc = rte_rdtsc();
+	core_cycles = (end_tsc - start_tsc);
+	fs->core_cycles = (uint64_t) (fs->core_cycles + core_cycles);
+#endif
 }
 
 struct fwd_engine icmp_echo_engine = {
 	.fwd_mode_name  = "icmpecho",
 	.port_fwd_begin = NULL,
 	.port_fwd_end   = NULL,
-	.stream_init    = icmpecho_stream_init,
 	.packet_fwd     = reply_to_icmp_echo_rqsts,
 };

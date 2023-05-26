@@ -180,7 +180,7 @@ test_table(void)
 		}
 	}
 
-#ifdef RTE_LIB_ACL
+#ifdef RTE_LIBRTE_ACL
 	printf("\n\n\n\n************ACL tests************\n");
 	if (test_table_acl() < 0) {
 		ret = TEST_FAILED;

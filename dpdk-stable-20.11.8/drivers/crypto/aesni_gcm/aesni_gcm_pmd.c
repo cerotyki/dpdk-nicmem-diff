@@ -350,76 +350,6 @@ process_gcm_crypto_op(struct aesni_gcm_qp *qp, struct rte_crypto_op *op,
 				&qp->gdata_ctx,
 				tag,
 				session->gen_digest_length);
-#if IMB_VERSION(0, 54, 0) < IMB_VERSION_NUM
-	} else if (session->op == AESNI_GMAC_OP_GENERATE) {
-		qp->ops[session->key].gmac_init(&session->gdata_key,
-				&qp->gdata_ctx,
-				iv_ptr,
-				session->iv.length);
-
-		qp->ops[session->key].gmac_update(&session->gdata_key,
-				&qp->gdata_ctx, src,
-				(uint64_t)part_len);
-		total_len = data_length - part_len;
-
-		while (total_len) {
-			m_src = m_src->next;
-
-			RTE_ASSERT(m_src != NULL);
-
-			src = rte_pktmbuf_mtod(m_src, uint8_t *);
-			part_len = (m_src->data_len < total_len) ?
-					m_src->data_len : total_len;
-
-			qp->ops[session->key].gmac_update(&session->gdata_key,
-					&qp->gdata_ctx, src,
-					(uint64_t)part_len);
-			total_len -= part_len;
-		}
-
-		if (session->req_digest_length != session->gen_digest_length)
-			tag = qp->temp_digest;
-		else
-			tag = sym_op->auth.digest.data;
-
-		qp->ops[session->key].gmac_finalize(&session->gdata_key,
-				&qp->gdata_ctx,
-				tag,
-				session->gen_digest_length);
-	} else { /* AESNI_GMAC_OP_VERIFY */
-		qp->ops[session->key].gmac_init(&session->gdata_key,
-				&qp->gdata_ctx,
-				iv_ptr,
-				session->iv.length);
-
-		qp->ops[session->key].gmac_update(&session->gdata_key,
-				&qp->gdata_ctx, src,
-				(uint64_t)part_len);
-		total_len = data_length - part_len;
-
-		while (total_len) {
-			m_src = m_src->next;
-
-			RTE_ASSERT(m_src != NULL);
-
-			src = rte_pktmbuf_mtod(m_src, uint8_t *);
-			part_len = (m_src->data_len < total_len) ?
-					m_src->data_len : total_len;
-
-			qp->ops[session->key].gmac_update(&session->gdata_key,
-					&qp->gdata_ctx, src,
-					(uint64_t)part_len);
-			total_len -= part_len;
-		}
-
-		tag = qp->temp_digest;
-
-		qp->ops[session->key].gmac_finalize(&session->gdata_key,
-				&qp->gdata_ctx,
-				tag,
-				session->gen_digest_length);
-	}
-#else
 	} else if (session->op == AESNI_GMAC_OP_GENERATE) {
 		qp->ops[session->key].init(&session->gdata_key,
 				&qp->gdata_ctx,
@@ -451,7 +381,6 @@ process_gcm_crypto_op(struct aesni_gcm_qp *qp, struct rte_crypto_op *op,
 				tag,
 				session->gen_digest_length);
 	}
-#endif
 
 	return 0;
 }
@@ -535,10 +464,9 @@ aesni_gcm_sgl_encrypt(struct aesni_gcm_session *s,
 	processed = 0;
 	for (i = 0; i < vec->num; ++i) {
 		aesni_gcm_process_gcm_sgl_op(s, gdata_ctx,
-			&vec->sgl[i], vec->iv[i].va,
-			vec->aad[i].va);
+			&vec->sgl[i], vec->iv[i], vec->aad[i]);
 		vec->status[i] = aesni_gcm_sgl_op_finalize_encryption(s,
-			gdata_ctx, vec->digest[i].va);
+			gdata_ctx, vec->digest[i]);
 		processed += (vec->status[i] == 0);
 	}
 
@@ -554,10 +482,9 @@ aesni_gcm_sgl_decrypt(struct aesni_gcm_session *s,
 	processed = 0;
 	for (i = 0; i < vec->num; ++i) {
 		aesni_gcm_process_gcm_sgl_op(s, gdata_ctx,
-			&vec->sgl[i], vec->iv[i].va,
-			vec->aad[i].va);
+			&vec->sgl[i], vec->iv[i], vec->aad[i]);
 		 vec->status[i] = aesni_gcm_sgl_op_finalize_decryption(s,
-			gdata_ctx, vec->digest[i].va);
+			gdata_ctx, vec->digest[i]);
 		processed += (vec->status[i] == 0);
 	}
 
@@ -578,9 +505,9 @@ aesni_gmac_sgl_generate(struct aesni_gcm_session *s,
 		}
 
 		aesni_gcm_process_gmac_sgl_op(s, gdata_ctx,
-			&vec->sgl[i], vec->iv[i].va);
+			&vec->sgl[i], vec->iv[i]);
 		vec->status[i] = aesni_gcm_sgl_op_finalize_encryption(s,
-			gdata_ctx, vec->digest[i].va);
+			gdata_ctx, vec->digest[i]);
 		processed += (vec->status[i] == 0);
 	}
 
@@ -601,9 +528,9 @@ aesni_gmac_sgl_verify(struct aesni_gcm_session *s,
 		}
 
 		aesni_gcm_process_gmac_sgl_op(s, gdata_ctx,
-			&vec->sgl[i], vec->iv[i].va);
+			&vec->sgl[i], vec->iv[i]);
 		vec->status[i] = aesni_gcm_sgl_op_finalize_decryption(s,
-			gdata_ctx, vec->digest[i].va);
+			gdata_ctx, vec->digest[i]);
 		processed += (vec->status[i] == 0);
 	}
 
@@ -842,14 +769,8 @@ aesni_gcm_create(const char *name,
 		init_mb_mgr_avx2(mb_mgr);
 		break;
 	case RTE_AESNI_GCM_AVX512:
-		if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_VAES)) {
-			dev->feature_flags |= RTE_CRYPTODEV_FF_CPU_AVX512;
-			init_mb_mgr_avx512(mb_mgr);
-		} else {
-			dev->feature_flags |= RTE_CRYPTODEV_FF_CPU_AVX2;
-			init_mb_mgr_avx2(mb_mgr);
-			vector_mode = RTE_AESNI_GCM_AVX2;
-		}
+		dev->feature_flags |= RTE_CRYPTODEV_FF_CPU_AVX2;
+		init_mb_mgr_avx512(mb_mgr);
 		break;
 	default:
 		AESNI_GCM_LOG(ERR, "Unsupported vector mode %u\n", vector_mode);
@@ -870,11 +791,6 @@ aesni_gcm_create(const char *name,
 	internals->ops[GCM_KEY_128].update_dec = mb_mgr->gcm128_dec_update;
 	internals->ops[GCM_KEY_128].finalize_enc = mb_mgr->gcm128_enc_finalize;
 	internals->ops[GCM_KEY_128].finalize_dec = mb_mgr->gcm128_dec_finalize;
-#if IMB_VERSION(0, 54, 0) < IMB_VERSION_NUM
-	internals->ops[GCM_KEY_128].gmac_init = mb_mgr->gmac128_init;
-	internals->ops[GCM_KEY_128].gmac_update = mb_mgr->gmac128_update;
-	internals->ops[GCM_KEY_128].gmac_finalize = mb_mgr->gmac128_finalize;
-#endif
 
 	internals->ops[GCM_KEY_192].enc = mb_mgr->gcm192_enc;
 	internals->ops[GCM_KEY_192].dec = mb_mgr->gcm192_dec;
@@ -884,11 +800,6 @@ aesni_gcm_create(const char *name,
 	internals->ops[GCM_KEY_192].update_dec = mb_mgr->gcm192_dec_update;
 	internals->ops[GCM_KEY_192].finalize_enc = mb_mgr->gcm192_enc_finalize;
 	internals->ops[GCM_KEY_192].finalize_dec = mb_mgr->gcm192_dec_finalize;
-#if IMB_VERSION(0, 54, 0) < IMB_VERSION_NUM
-	internals->ops[GCM_KEY_192].gmac_init = mb_mgr->gmac192_init;
-	internals->ops[GCM_KEY_192].gmac_update = mb_mgr->gmac192_update;
-	internals->ops[GCM_KEY_192].gmac_finalize = mb_mgr->gmac192_finalize;
-#endif
 
 	internals->ops[GCM_KEY_256].enc = mb_mgr->gcm256_enc;
 	internals->ops[GCM_KEY_256].dec = mb_mgr->gcm256_dec;
@@ -898,11 +809,6 @@ aesni_gcm_create(const char *name,
 	internals->ops[GCM_KEY_256].update_dec = mb_mgr->gcm256_dec_update;
 	internals->ops[GCM_KEY_256].finalize_enc = mb_mgr->gcm256_enc_finalize;
 	internals->ops[GCM_KEY_256].finalize_dec = mb_mgr->gcm256_dec_finalize;
-#if IMB_VERSION(0, 54, 0) < IMB_VERSION_NUM
-	internals->ops[GCM_KEY_256].gmac_init = mb_mgr->gmac256_init;
-	internals->ops[GCM_KEY_256].gmac_update = mb_mgr->gmac256_update;
-	internals->ops[GCM_KEY_256].gmac_finalize = mb_mgr->gmac256_finalize;
-#endif
 
 	internals->max_nb_queue_pairs = init_params->max_nb_queue_pairs;
 

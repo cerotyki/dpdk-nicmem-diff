@@ -17,7 +17,6 @@
 #include <linux/skbuff.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
-#include <linux/rtnetlink.h>
 
 #include <rte_kni_common.h>
 #include <kni_fifo.h>
@@ -48,7 +47,7 @@ iova2kva(struct kni_dev *kni, void *iova)
 static inline void *
 iova2data_kva(struct kni_dev *kni, struct rte_kni_mbuf *m)
 {
-	return phys_to_virt(iova_to_phys(kni->usr_tsk, m->buf_iova) +
+	return phys_to_virt(iova_to_phys(kni->usr_tsk, m->buf_physaddr) +
 			    m->data_off);
 }
 #endif
@@ -68,7 +67,7 @@ pa2va(void *pa, struct rte_kni_mbuf *m)
 
 	va = (void *)((unsigned long)pa +
 			(unsigned long)m->buf_addr -
-			(unsigned long)m->buf_iova);
+			(unsigned long)m->buf_physaddr);
 	return va;
 }
 
@@ -76,7 +75,7 @@ pa2va(void *pa, struct rte_kni_mbuf *m)
 static void *
 kva2data_kva(struct rte_kni_mbuf *m)
 {
-	return phys_to_virt(m->buf_iova + m->data_off);
+	return phys_to_virt(m->buf_physaddr + m->data_off);
 }
 
 static inline void *
@@ -103,24 +102,16 @@ get_data_kva(struct kni_dev *kni, void *pkt_kva)
  * It can be called to process the request.
  */
 static int
-kni_net_process_request(struct net_device *dev, struct rte_kni_request *req)
+kni_net_process_request(struct kni_dev *kni, struct rte_kni_request *req)
 {
-	struct kni_dev *kni = netdev_priv(dev);
 	int ret = -1;
 	void *resp_va;
 	uint32_t num;
 	int ret_val;
 
-	ASSERT_RTNL();
-
-	if (bifurcated_support) {
-		/* If we need to wait and RTNL mutex is held
-		 * drop the mutex and hold reference to keep device
-		 */
-		if (req->async == 0) {
-			dev_hold(dev);
-			rtnl_unlock();
-		}
+	if (!kni || !req) {
+		pr_err("No kni instance or request\n");
+		return -EINVAL;
 	}
 
 	mutex_lock(&kni->sync_lock);
@@ -132,16 +123,6 @@ kni_net_process_request(struct net_device *dev, struct rte_kni_request *req)
 		pr_err("Cannot send to req_q\n");
 		ret = -EBUSY;
 		goto fail;
-	}
-
-	if (bifurcated_support) {
-		/* No result available since request is handled
-		 * asynchronously. set response to success.
-		 */
-		if (req->async != 0) {
-			req->result = 0;
-			goto async;
-		}
 	}
 
 	ret_val = wait_event_interruptible_timeout(kni->wq,
@@ -159,17 +140,10 @@ kni_net_process_request(struct net_device *dev, struct rte_kni_request *req)
 	}
 
 	memcpy(req, kni->sync_kva, sizeof(struct rte_kni_request));
-async:
 	ret = 0;
 
 fail:
 	mutex_unlock(&kni->sync_lock);
-	if (bifurcated_support) {
-		if (req->async == 0) {
-			rtnl_lock();
-			dev_put(dev);
-		}
-	}
 	return ret;
 }
 
@@ -181,6 +155,7 @@ kni_net_open(struct net_device *dev)
 {
 	int ret;
 	struct rte_kni_request req;
+	struct kni_dev *kni = netdev_priv(dev);
 
 	netif_start_queue(dev);
 	if (kni_dflt_carrier == 1)
@@ -193,7 +168,7 @@ kni_net_open(struct net_device *dev)
 
 	/* Setting if_up to non-zero means up */
 	req.if_up = 1;
-	ret = kni_net_process_request(dev, &req);
+	ret = kni_net_process_request(kni, &req);
 
 	return (ret == 0) ? req.result : ret;
 }
@@ -203,6 +178,7 @@ kni_net_release(struct net_device *dev)
 {
 	int ret;
 	struct rte_kni_request req;
+	struct kni_dev *kni = netdev_priv(dev);
 
 	netif_stop_queue(dev); /* can't transmit any more */
 	netif_carrier_off(dev);
@@ -212,13 +188,7 @@ kni_net_release(struct net_device *dev)
 
 	/* Setting if_up to 0 means down */
 	req.if_up = 0;
-
-	if (bifurcated_support) {
-		/* request async because of the deadlock problem */
-		req.async = 1;
-	}
-
-	ret = kni_net_process_request(dev, &req);
+	ret = kni_net_process_request(kni, &req);
 
 	return (ret == 0) ? req.result : ret;
 }
@@ -253,7 +223,7 @@ kni_fifo_trans_pa2va(struct kni_dev *kni,
 					break;
 
 				prev_kva = kva;
-				kva = get_kva(kni, kva->next);
+				kva = pa2kva(kva->next);
 				/* Convert physical address to virtual address */
 				prev_kva->next = pa2va(prev_kva->next, kva);
 			}
@@ -430,7 +400,7 @@ kni_net_rx_normal(struct kni_dev *kni)
 					break;
 
 				prev_kva = kva;
-				kva = get_kva(kni, kva->next);
+				kva = pa2kva(kva->next);
 				data_kva = kva2data_kva(kva);
 				/* Convert physical address to virtual address */
 				prev_kva->next = pa2va(prev_kva->next, kva);
@@ -441,11 +411,7 @@ kni_net_rx_normal(struct kni_dev *kni)
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		/* Call netif interface */
-#ifdef HAVE_NETIF_RX_NI
 		netif_rx_ni(skb);
-#else
-		netif_rx(skb);
-#endif
 
 		/* Update statistics */
 		dev->stats.rx_bytes += len;
@@ -513,7 +479,7 @@ kni_net_rx_lo_fifo(struct kni_dev *kni)
 			kni->va[i] = pa2va(kni->pa[i], kva);
 
 			while (kva->next) {
-				next_kva = get_kva(kni, kva->next);
+				next_kva = pa2kva(kva->next);
 				/* Convert physical address to virtual address */
 				kva->next = pa2va(kva->next, next_kva);
 				kva = next_kva;
@@ -677,13 +643,14 @@ kni_net_change_mtu(struct net_device *dev, int new_mtu)
 {
 	int ret;
 	struct rte_kni_request req;
+	struct kni_dev *kni = netdev_priv(dev);
 
 	pr_debug("kni_net_change_mtu new mtu %d to be set\n", new_mtu);
 
 	memset(&req, 0, sizeof(req));
 	req.req_id = RTE_KNI_REQ_CHANGE_MTU;
 	req.new_mtu = new_mtu;
-	ret = kni_net_process_request(dev, &req);
+	ret = kni_net_process_request(kni, &req);
 	if (ret == 0 && req.result == 0)
 		dev->mtu = new_mtu;
 
@@ -694,6 +661,7 @@ static void
 kni_net_change_rx_flags(struct net_device *netdev, int flags)
 {
 	struct rte_kni_request req;
+	struct kni_dev *kni = netdev_priv(netdev);
 
 	memset(&req, 0, sizeof(req));
 
@@ -715,7 +683,7 @@ kni_net_change_rx_flags(struct net_device *netdev, int flags)
 			req.promiscusity = 0;
 	}
 
-	kni_net_process_request(netdev, &req);
+	kni_net_process_request(kni, &req);
 }
 
 /*
@@ -774,6 +742,7 @@ kni_net_set_mac(struct net_device *netdev, void *p)
 {
 	int ret;
 	struct rte_kni_request req;
+	struct kni_dev *kni;
 	struct sockaddr *addr = p;
 
 	memset(&req, 0, sizeof(req));
@@ -783,13 +752,10 @@ kni_net_set_mac(struct net_device *netdev, void *p)
 		return -EADDRNOTAVAIL;
 
 	memcpy(req.mac_addr, addr->sa_data, netdev->addr_len);
-#ifdef HAVE_ETH_HW_ADDR_SET
-	eth_hw_addr_set(netdev, addr->sa_data);
-#else
 	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
-#endif
 
-	ret = kni_net_process_request(netdev, &req);
+	kni = netdev_priv(netdev);
+	ret = kni_net_process_request(kni, &req);
 
 	return (ret == 0 ? req.result : ret);
 }

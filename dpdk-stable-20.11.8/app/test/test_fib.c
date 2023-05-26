@@ -61,7 +61,7 @@ test_create_invalid(void)
 		"Call succeeded with invalid parameters\n");
 	config.max_routes = MAX_ROUTES;
 
-	config.type = RTE_FIB_DIR24_8 + 1;
+	config.type = RTE_FIB_TYPE_MAX;
 	fib = rte_fib_create(__func__, SOCKET_ID_ANY, &config);
 	RTE_TEST_ASSERT(fib == NULL,
 		"Call succeeded with invalid parameters\n");

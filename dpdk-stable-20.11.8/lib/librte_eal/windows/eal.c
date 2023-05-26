@@ -17,7 +17,6 @@
 #include <eal_filesystem.h>
 #include <eal_options.h>
 #include <eal_private.h>
-#include <rte_service_component.h>
 #include <rte_vfio.h>
 
 #include "eal_hugepages.h"
@@ -149,10 +148,6 @@ eal_parse_args(int argc, char **argv)
 			return -1;
 		}
 
-		/* eal_log_level_parse() already handled this option */
-		if (opt == OPT_LOG_LEVEL_NUM)
-			continue;
-
 		ret = eal_parse_common_option(opt, optarg, internal_conf);
 		/* common parser is not happy */
 		if (ret < 0) {
@@ -256,7 +251,6 @@ rte_eal_cleanup(void)
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
-	eal_mem_virt2iova_cleanup();
 	eal_cleanup_config(internal_conf);
 	return 0;
 }
@@ -269,9 +263,6 @@ rte_eal_init(int argc, char **argv)
 	const struct rte_config *config = rte_eal_get_configuration();
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
-	bool has_phys_addr;
-	enum rte_iova_mode iova_mode;
-	int ret;
 
 	rte_eal_log_init(NULL, 0);
 
@@ -293,17 +284,11 @@ rte_eal_init(int argc, char **argv)
 	if (fctret < 0)
 		exit(1);
 
-	if (eal_option_device_parse()) {
-		rte_errno = ENODEV;
-		return -1;
-	}
-
 	/* Prevent creation of shared memory files. */
 	if (internal_conf->in_memory == 0) {
 		RTE_LOG(WARNING, EAL, "Multi-process support is requested, "
 			"but not available.\n");
 		internal_conf->in_memory = 1;
-		internal_conf->no_shconf = 1;
 	}
 
 	if (!internal_conf->no_hugetlbfs && (eal_hugepage_info_init() < 0)) {
@@ -317,58 +302,17 @@ rte_eal_init(int argc, char **argv)
 			internal_conf->memory = MEMSIZE_IF_NO_HUGE_PAGE;
 	}
 
-	if (rte_eal_intr_init() < 0) {
-		rte_eal_init_alert("Cannot init interrupt-handling thread");
-		return -1;
-	}
-
-	if (rte_eal_timer_init() < 0) {
-		rte_eal_init_alert("Cannot init TSC timer");
-		rte_errno = EFAULT;
-		return -1;
-	}
-
-	bscan = rte_bus_scan();
-	if (bscan < 0) {
-		rte_eal_init_alert("Cannot scan the buses");
-		rte_errno = ENODEV;
-		return -1;
-	}
-
 	if (eal_mem_win32api_init() < 0) {
 		rte_eal_init_alert("Cannot access Win32 memory management");
 		rte_errno = ENOTSUP;
 		return -1;
 	}
 
-	has_phys_addr = true;
 	if (eal_mem_virt2iova_init() < 0) {
 		/* Non-fatal error if physical addresses are not required. */
-		RTE_LOG(DEBUG, EAL, "Cannot access virt2phys driver, "
+		RTE_LOG(WARNING, EAL, "Cannot access virt2phys driver, "
 			"PA will not be available\n");
-		has_phys_addr = false;
 	}
-
-	iova_mode = internal_conf->iova_mode;
-	if (iova_mode == RTE_IOVA_PA && !has_phys_addr) {
-		rte_eal_init_alert("Cannot use IOVA as 'PA' since physical addresses are not available");
-		rte_errno = EINVAL;
-		return -1;
-	}
-	if (iova_mode == RTE_IOVA_DC) {
-		RTE_LOG(DEBUG, EAL, "Specific IOVA mode is not requested, autodetecting\n");
-		if (has_phys_addr) {
-			RTE_LOG(DEBUG, EAL, "Selecting IOVA mode according to bus requests\n");
-			iova_mode = rte_bus_get_iommu_class();
-			if (iova_mode == RTE_IOVA_DC)
-				iova_mode = RTE_IOVA_PA;
-		} else {
-			iova_mode = RTE_IOVA_VA;
-		}
-	}
-	RTE_LOG(DEBUG, EAL, "Selected IOVA mode '%s'\n",
-		iova_mode == RTE_IOVA_PA ? "PA" : "VA");
-	rte_eal_get_configuration()->iova_mode = iova_mode;
 
 	if (rte_eal_memzone_init() < 0) {
 		rte_eal_init_alert("Cannot init memzone");
@@ -394,19 +338,32 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	__rte_thread_init(config->main_lcore,
-		&lcore_config[config->main_lcore].cpuset);
+	if (rte_eal_timer_init() < 0) {
+		rte_eal_init_alert("Cannot init TSC timer");
+		rte_errno = EFAULT;
+		return -1;
+	}
 
-	RTE_LCORE_FOREACH_WORKER(i) {
+	__rte_thread_init(config->master_lcore,
+		&lcore_config[config->master_lcore].cpuset);
+
+	bscan = rte_bus_scan();
+	if (bscan < 0) {
+		rte_eal_init_alert("Cannot init PCI");
+		rte_errno = ENODEV;
+		return -1;
+	}
+
+	RTE_LCORE_FOREACH_SLAVE(i) {
 
 		/*
-		 * create communication pipes between main thread
+		 * create communication pipes between master thread
 		 * and children
 		 */
-		if (_pipe(lcore_config[i].pipe_main2worker,
+		if (_pipe(lcore_config[i].pipe_master2slave,
 			sizeof(char), _O_BINARY) < 0)
 			rte_panic("Cannot create pipe\n");
-		if (_pipe(lcore_config[i].pipe_worker2main,
+		if (_pipe(lcore_config[i].pipe_slave2master,
 			sizeof(char), _O_BINARY) < 0)
 			rte_panic("Cannot create pipe\n");
 
@@ -417,29 +374,12 @@ rte_eal_init(int argc, char **argv)
 			rte_panic("Cannot create thread\n");
 	}
 
-	/* Initialize services so drivers can register services during probe. */
-	ret = rte_service_init();
-	if (ret) {
-		rte_eal_init_alert("rte_service_init() failed");
-		rte_errno = -ret;
-		return -1;
-	}
-
-	if (rte_bus_probe()) {
-		rte_eal_init_alert("Cannot probe devices");
-		rte_errno = ENOTSUP;
-		return -1;
-	}
-
 	/*
-	 * Launch a dummy function on all worker lcores, so that main lcore
+	 * Launch a dummy function on all slave lcores, so that master lcore
 	 * knows they are all ready when this function returns.
 	 */
-	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MAIN);
+	rte_eal_mp_remote_launch(sync_func, NULL, SKIP_MASTER);
 	rte_eal_mp_wait_lcore();
-
-	eal_mcfg_complete();
-
 	return fctret;
 }
 
@@ -449,7 +389,6 @@ rte_vfio_container_dma_map(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
-	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -459,6 +398,5 @@ rte_vfio_container_dma_unmap(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
-	rte_errno = ENOTSUP;
 	return -1;
 }

@@ -6,14 +6,12 @@
 
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
-#ifdef RTE_LIB_TELEMETRY
+#ifdef RTE_LIBRTE_TELEMETRY
 #include <rte_telemetry_legacy.h>
 #endif
 
 #include "rte_metrics.h"
 #include "rte_metrics_telemetry.h"
-
-struct telemetry_metrics_data tel_met_data;
 
 int metrics_log_level;
 
@@ -172,8 +170,7 @@ rte_metrics_tel_format_port(uint32_t pid, json_t *ports,
 	names = malloc(sizeof(struct rte_metric_name) * num_metrics);
 	if (metrics == NULL || names == NULL) {
 		METRICS_LOG_ERR("Cannot allocate memory");
-		ret = -ENOMEM;
-		goto fail;
+		return -ENOMEM;
 	}
 
 	if (rte_metrics_get_names(names, num_metrics) != num_metrics ||
@@ -532,7 +529,7 @@ RTE_LOG_REGISTER(metrics_log_level, lib.metrics, ERR);
 
 RTE_INIT(metrics_ctor)
 {
-#ifdef RTE_LIB_TELEMETRY
+#ifdef RTE_LIBRTE_TELEMETRY
 	rte_telemetry_legacy_register("ports_all_stat_values", DATA_NOT_REQ,
 			handle_ports_all_stats_values);
 	rte_telemetry_legacy_register("global_stat_values", DATA_NOT_REQ,

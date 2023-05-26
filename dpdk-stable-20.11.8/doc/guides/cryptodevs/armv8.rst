@@ -26,29 +26,22 @@ Supported authentication algorithms:
 Installation
 ------------
 
-To build DPDK with this virtual crypto PMD, the user is required to:
+In order to enable this virtual crypto PMD, user must:
 
 * Download AArch64 crypto library source code from
-  `here <https://github.com/ARM-software/AArch64cryptolib>`_.
+  `here <https://github.com/ARM-software/AArch64cryptolib>`_
 
-* Build the ``AArch64cryptolib`` library:
+* Export the environmental variable ARMV8_CRYPTO_LIB_PATH with
+  the path to ``AArch64cryptolib`` library.
 
-.. code-block:: console
-
-   make
-
-* Add path to `libAArch64crypto.pc` in `PKG_CONFIG_PATH` environment variable:
+* Build the library by invoking:
 
 .. code-block:: console
 
-   export PKG_CONFIG_PATH=<path_to_AArch64cryptolib>/pkgconfig/:$PKG_CONFIG_PATH
+	make -C $ARMV8_CRYPTO_LIB_PATH/
 
-* Build DPDK:
-
-.. code-block:: console
-
-   meson setup build
-   ninja -C build
+* Set CONFIG_RTE_LIBRTE_PMD_ARMV8_CRYPTO=y in
+  config/defconfig_arm64-armv8a-linux-gcc
 
 The corresponding device can be created only if the following features
 are supported by the CPU:
@@ -60,8 +53,6 @@ are supported by the CPU:
 
 Initialization
 --------------
-
-Use ``--vdev "crypto_armv8"`` in the EAL options to create virtual crypto device.
 
 User can use app/test application to check how to use this PMD and to verify
 crypto processing.

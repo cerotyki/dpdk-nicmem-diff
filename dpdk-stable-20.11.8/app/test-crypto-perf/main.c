@@ -9,7 +9,7 @@
 #include <rte_random.h>
 #include <rte_eal.h>
 #include <rte_cryptodev.h>
-#ifdef RTE_CRYPTO_SCHEDULER
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
 #include <rte_cryptodev_scheduler.h>
 #endif
 
@@ -156,14 +156,7 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		if (sess_size > max_sess_size)
 			max_sess_size = sess_size;
 	}
-#ifdef RTE_LIB_SECURITY
-	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
-		sess_size = rte_security_session_get_size(
-				rte_cryptodev_get_sec_ctx(cdev_id));
-		if (sess_size > max_sess_size)
-			max_sess_size = sess_size;
-	}
-#endif
+
 	/*
 	 * Calculate number of needed queue pairs, based on the amount
 	 * of available number of logical cores and crypto devices.
@@ -177,7 +170,7 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 	for (i = 0; i < enabled_cdev_count &&
 			i < RTE_CRYPTO_MAX_DEVS; i++) {
 		cdev_id = enabled_cdevs[i];
-#ifdef RTE_CRYPTO_SCHEDULER
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
 		/*
 		 * If multi-core scheduler is used, limit the number
 		 * of queue pairs to 1, as there is no way to know
@@ -245,16 +238,17 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		 */
 		if (!strcmp((const char *)opts->device_type,
 					"crypto_scheduler")) {
-#ifdef RTE_CRYPTO_SCHEDULER
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
 			uint32_t nb_slaves =
-				rte_cryptodev_scheduler_workers_get(cdev_id,
+				rte_cryptodev_scheduler_slaves_get(cdev_id,
 								NULL);
 
 			sessions_needed = enabled_cdev_count *
 				opts->nb_qps * nb_slaves;
 #endif
 		} else
-			sessions_needed = enabled_cdev_count * opts->nb_qps;
+			sessions_needed = enabled_cdev_count *
+						opts->nb_qps * 2;
 
 		/*
 		 * A single session is required per queue pair
@@ -390,7 +384,7 @@ cperf_check_test_vector(struct cperf_options *opts,
 		if (opts->cipher_algo == RTE_CRYPTO_CIPHER_NULL) {
 			if (test_vec->plaintext.data == NULL)
 				return -1;
-		} else {
+		} else if (opts->cipher_algo != RTE_CRYPTO_CIPHER_NULL) {
 			if (test_vec->plaintext.data == NULL)
 				return -1;
 			if (test_vec->plaintext.length < opts->max_buffer_size)
@@ -440,7 +434,7 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->plaintext.length < opts->max_buffer_size)
 				return -1;
-		} else {
+		} else if (opts->cipher_algo != RTE_CRYPTO_CIPHER_NULL) {
 			if (test_vec->plaintext.data == NULL)
 				return -1;
 			if (test_vec->plaintext.length < opts->max_buffer_size)
@@ -530,14 +524,14 @@ main(int argc, char **argv)
 
 	ret = cperf_options_parse(&opts, argc, argv);
 	if (ret) {
-		RTE_LOG(ERR, USER1, "Parsing one or more user options failed\n");
+		RTE_LOG(ERR, USER1, "Parsing on or more user options failed\n");
 		goto err;
 	}
 
 	ret = cperf_options_check(&opts);
 	if (ret) {
 		RTE_LOG(ERR, USER1,
-				"Checking one or more user options failed\n");
+				"Checking on or more user options failed\n");
 		goto err;
 	}
 
@@ -600,7 +594,7 @@ main(int argc, char **argv)
 
 	i = 0;
 	uint8_t qp_id = 0, cdev_index = 0;
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 		if (i == total_nb_qps)
 			break;
@@ -664,7 +658,7 @@ main(int argc, char **argv)
 				distribution_total[buffer_size_count - 1];
 
 		i = 0;
-		RTE_LCORE_FOREACH_WORKER(lcore_id) {
+		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 			if (i == total_nb_qps)
 				break;
@@ -674,7 +668,7 @@ main(int argc, char **argv)
 			i++;
 		}
 		i = 0;
-		RTE_LCORE_FOREACH_WORKER(lcore_id) {
+		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 			if (i == total_nb_qps)
 				break;
@@ -694,7 +688,7 @@ main(int argc, char **argv)
 
 		while (opts.test_buffer_size <= opts.max_buffer_size) {
 			i = 0;
-			RTE_LCORE_FOREACH_WORKER(lcore_id) {
+			RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 				if (i == total_nb_qps)
 					break;
@@ -704,7 +698,7 @@ main(int argc, char **argv)
 				i++;
 			}
 			i = 0;
-			RTE_LCORE_FOREACH_WORKER(lcore_id) {
+			RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 				if (i == total_nb_qps)
 					break;
@@ -728,7 +722,7 @@ main(int argc, char **argv)
 	}
 
 	i = 0;
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
 		if (i == total_nb_qps)
 			break;
@@ -748,7 +742,7 @@ main(int argc, char **argv)
 
 err:
 	i = 0;
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (i == total_nb_qps)
 			break;
 

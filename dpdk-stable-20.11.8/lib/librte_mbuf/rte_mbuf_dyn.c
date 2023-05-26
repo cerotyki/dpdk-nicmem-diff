@@ -13,7 +13,6 @@
 #include <rte_errno.h>
 #include <rte_malloc.h>
 #include <rte_string_fns.h>
-#include <rte_bitops.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
 
@@ -115,10 +114,8 @@ init_shared_mem(void)
 	} else {
 		mz = rte_memzone_lookup(RTE_MBUF_DYN_MZNAME);
 	}
-	if (mz == NULL) {
-		RTE_LOG(ERR, MBUF, "Failed to get mbuf dyn shared memory\n");
+	if (mz == NULL)
 		return -1;
-	}
 
 	shm = mz->addr;
 
@@ -175,7 +172,7 @@ __mbuf_dynfield_lookup(const char *name)
 			break;
 	}
 
-	if (te == NULL || mbuf_dynfield == NULL) {
+	if (te == NULL) {
 		rte_errno = ENOENT;
 		return NULL;
 	}
@@ -188,15 +185,19 @@ rte_mbuf_dynfield_lookup(const char *name, struct rte_mbuf_dynfield *params)
 {
 	struct mbuf_dynfield_elt *mbuf_dynfield;
 
+	if (shm == NULL) {
+		rte_errno = ENOENT;
+		return -1;
+	}
+
 	rte_mcfg_tailq_read_lock();
-	if (shm == NULL && init_shared_mem() < 0)
-		mbuf_dynfield = NULL;
-	else
-		mbuf_dynfield = __mbuf_dynfield_lookup(name);
+	mbuf_dynfield = __mbuf_dynfield_lookup(name);
 	rte_mcfg_tailq_read_unlock();
 
-	if (mbuf_dynfield == NULL)
+	if (mbuf_dynfield == NULL) {
+		rte_errno = ENOENT;
 		return -1;
+	}
 
 	if (params != NULL)
 		memcpy(params, &mbuf_dynfield->params, sizeof(*params));
@@ -383,15 +384,19 @@ rte_mbuf_dynflag_lookup(const char *name,
 {
 	struct mbuf_dynflag_elt *mbuf_dynflag;
 
+	if (shm == NULL) {
+		rte_errno = ENOENT;
+		return -1;
+	}
+
 	rte_mcfg_tailq_read_lock();
-	if (shm == NULL && init_shared_mem() < 0)
-		mbuf_dynflag = NULL;
-	else
-		mbuf_dynflag = __mbuf_dynflag_lookup(name);
+	mbuf_dynflag = __mbuf_dynflag_lookup(name);
 	rte_mcfg_tailq_read_unlock();
 
-	if (mbuf_dynflag == NULL)
+	if (mbuf_dynflag == NULL) {
+		rte_errno = ENOENT;
 		return -1;
+	}
 
 	if (params != NULL)
 		memcpy(params, &mbuf_dynflag->params, sizeof(*params));
@@ -498,10 +503,6 @@ rte_mbuf_dynflag_register_bitnum(const struct rte_mbuf_dynflag *params,
 {
 	int ret;
 
-	if (params->flags != 0) {
-		rte_errno = EINVAL;
-		return -1;
-	}
 	if (req >= RTE_SIZEOF_FIELD(struct rte_mbuf, ol_flags) * CHAR_BIT &&
 			req != UINT_MAX) {
 		rte_errno = EINVAL;
@@ -531,11 +532,7 @@ void rte_mbuf_dyn_dump(FILE *out)
 	size_t i;
 
 	rte_mcfg_tailq_write_lock();
-	if (shm == NULL && init_shared_mem() < 0) {
-		rte_mcfg_tailq_write_unlock();
-		return;
-	}
-
+	init_shared_mem();
 	fprintf(out, "Reserved fields:\n");
 	mbuf_dynfield_list = RTE_TAILQ_CAST(
 		mbuf_dynfield_tailq.head, mbuf_dynfield_list);
@@ -571,53 +568,4 @@ void rte_mbuf_dyn_dump(FILE *out)
 	}
 
 	rte_mcfg_tailq_write_unlock();
-}
-
-static int
-rte_mbuf_dyn_timestamp_register(int *field_offset, uint64_t *flag,
-		const char *direction, const char *flag_name)
-{
-	static const struct rte_mbuf_dynfield field_desc = {
-		.name = RTE_MBUF_DYNFIELD_TIMESTAMP_NAME,
-		.size = sizeof(rte_mbuf_timestamp_t),
-		.align = __alignof__(rte_mbuf_timestamp_t),
-	};
-	struct rte_mbuf_dynflag flag_desc = {};
-	int offset;
-
-	offset = rte_mbuf_dynfield_register(&field_desc);
-	if (offset < 0) {
-		RTE_LOG(ERR, MBUF,
-			"Failed to register mbuf field for timestamp\n");
-		return -1;
-	}
-	if (field_offset != NULL)
-		*field_offset = offset;
-
-	strlcpy(flag_desc.name, flag_name, sizeof(flag_desc.name));
-	offset = rte_mbuf_dynflag_register(&flag_desc);
-	if (offset < 0) {
-		RTE_LOG(ERR, MBUF,
-			"Failed to register mbuf flag for %s timestamp\n",
-			direction);
-		return -1;
-	}
-	if (flag != NULL)
-		*flag = RTE_BIT64(offset);
-
-	return 0;
-}
-
-int
-rte_mbuf_dyn_rx_timestamp_register(int *field_offset, uint64_t *rx_flag)
-{
-	return rte_mbuf_dyn_timestamp_register(field_offset, rx_flag,
-			"Rx", RTE_MBUF_DYNFLAG_RX_TIMESTAMP_NAME);
-}
-
-int
-rte_mbuf_dyn_tx_timestamp_register(int *field_offset, uint64_t *tx_flag)
-{
-	return rte_mbuf_dyn_timestamp_register(field_offset, tx_flag,
-			"Tx", RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME);
 }

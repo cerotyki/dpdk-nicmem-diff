@@ -207,26 +207,19 @@ virtqueue_enqueue_single_packed_vec(struct virtnet_tx *txvq,
 	struct virtqueue *vq = txvq->vq;
 	struct virtio_hw *hw = vq->hw;
 	uint16_t hdr_size = hw->vtnet_hdr_size;
-	uint16_t slots, can_push = 0, use_indirect = 0;
+	uint16_t slots, can_push;
 	int16_t need;
 
-	/* optimize ring usage */
-	if ((vtpci_with_feature(hw, VIRTIO_F_ANY_LAYOUT) ||
-	      vtpci_with_feature(hw, VIRTIO_F_VERSION_1)) &&
-	    rte_mbuf_refcnt_read(txm) == 1 &&
-	    RTE_MBUF_DIRECT(txm) &&
-	    txm->nb_segs == 1 &&
-	    rte_pktmbuf_headroom(txm) >= hdr_size)
-		can_push = 1;
-	else if (vtpci_with_feature(hw, VIRTIO_RING_F_INDIRECT_DESC) &&
-		 txm->nb_segs < VIRTIO_MAX_TX_INDIRECT)
-		use_indirect = 1;
 	/* How many main ring entries are needed to this Tx?
-	 * indirect   => 1
 	 * any_layout => number of segments
 	 * default    => number of segments + 1
 	 */
-	slots = use_indirect ? 1 : (txm->nb_segs + !can_push);
+	can_push = rte_mbuf_refcnt_read(txm) == 1 &&
+		   RTE_MBUF_DIRECT(txm) &&
+		   txm->nb_segs == 1 &&
+		   rte_pktmbuf_headroom(txm) >= hdr_size;
+
+	slots = txm->nb_segs + !can_push;
 	need = slots - vq->vq_free_cnt;
 
 	/* Positive value indicates it need free vring descriptors */
@@ -241,8 +234,7 @@ virtqueue_enqueue_single_packed_vec(struct virtnet_tx *txvq,
 	}
 
 	/* Enqueue Packet buffers */
-	virtqueue_enqueue_xmit_packed(txvq, txm, slots, use_indirect,
-				can_push, 1);
+	virtqueue_enqueue_xmit_packed(txvq, txm, slots, can_push, 1);
 
 	txvq->stats.bytes += txm->pkt_len;
 	return 0;
@@ -336,10 +328,9 @@ virtio_vec_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 			 */
 			uint16_t csum = 0, off;
 
-			if (rte_raw_cksum_mbuf(m, hdr->csum_start,
+			rte_raw_cksum_mbuf(m, hdr->csum_start,
 				rte_pktmbuf_pkt_len(m) - hdr->csum_start,
-				&csum) < 0)
-				return -1;
+				&csum);
 			if (likely(csum != 0xffff))
 				csum = ~csum;
 			off = hdr->csum_offset + hdr->csum_start;

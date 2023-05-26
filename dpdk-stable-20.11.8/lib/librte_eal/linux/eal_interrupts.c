@@ -563,7 +563,7 @@ rte_intr_callback_unregister_pending(const struct rte_intr_handle *intr_handle,
 
 	rte_spinlock_lock(&intr_lock);
 
-	/* check if the interrupt source for the fd is existent */
+	/* check if the insterrupt source for the fd is existent */
 	TAILQ_FOREACH(src, &intr_sources, next)
 		if (src->intr_handle.fd == intr_handle->fd)
 			break;
@@ -613,7 +613,7 @@ rte_intr_callback_unregister(const struct rte_intr_handle *intr_handle,
 
 	rte_spinlock_lock(&intr_lock);
 
-	/* check if the interrupt source for the fd is existent */
+	/* check if the insterrupt source for the fd is existent */
 	TAILQ_FOREACH(src, &intr_sources, next)
 		if (src->intr_handle.fd == intr_handle->fd)
 			break;
@@ -667,15 +667,13 @@ rte_intr_enable(const struct rte_intr_handle *intr_handle)
 {
 	int rc = 0;
 
-	if (intr_handle == NULL)
-		return -1;
-
-	if (intr_handle->type == RTE_INTR_HANDLE_VDEV) {
+	if (intr_handle && intr_handle->type == RTE_INTR_HANDLE_VDEV) {
 		rc = 0;
 		goto out;
 	}
 
-	if (intr_handle->fd < 0 || intr_handle->uio_cfg_fd < 0) {
+	if (!intr_handle || intr_handle->fd < 0 ||
+			intr_handle->uio_cfg_fd < 0) {
 		rc = -1;
 		goto out;
 	}
@@ -796,15 +794,13 @@ rte_intr_disable(const struct rte_intr_handle *intr_handle)
 {
 	int rc = 0;
 
-	if (intr_handle == NULL)
-		return -1;
-
-	if (intr_handle->type == RTE_INTR_HANDLE_VDEV) {
+	if (intr_handle && intr_handle->type == RTE_INTR_HANDLE_VDEV) {
 		rc = 0;
 		goto out;
 	}
 
-	if (intr_handle->fd < 0 || intr_handle->uio_cfg_fd < 0) {
+	if (!intr_handle || intr_handle->fd < 0 ||
+					intr_handle->uio_cfg_fd < 0) {
 		rc = -1;
 		goto out;
 	}
@@ -906,14 +902,17 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 			bytes_read = sizeof(buf.timerfd_num);
 			break;
 #ifdef VFIO_PRESENT
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
-		case RTE_INTR_HANDLE_VFIO_REQ:
-#endif
 		case RTE_INTR_HANDLE_VFIO_MSIX:
 		case RTE_INTR_HANDLE_VFIO_MSI:
 		case RTE_INTR_HANDLE_VFIO_LEGACY:
 			bytes_read = sizeof(buf.vfio_intr_count);
 			break;
+#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
+		case RTE_INTR_HANDLE_VFIO_REQ:
+			bytes_read = 0;
+			call = true;
+			break;
+#endif
 #endif
 		case RTE_INTR_HANDLE_VDEV:
 		case RTE_INTR_HANDLE_EXT:
@@ -1238,7 +1237,7 @@ eal_epoll_process_event(struct epoll_event *evs, unsigned int n,
 		events[count].status        = RTE_EPOLL_VALID;
 		events[count].fd            = rev->fd;
 		events[count].epfd          = rev->epfd;
-		events[count].epdata.event  = evs[i].events;
+		events[count].epdata.event  = rev->epdata.event;
 		events[count].epdata.data   = rev->epdata.data;
 		if (rev->epdata.cb_fun)
 			rev->epdata.cb_fun(rev->fd,
@@ -1276,9 +1275,9 @@ rte_intr_tls_epfd(void)
 	return RTE_PER_LCORE(_epfd);
 }
 
-static int
-eal_epoll_wait(int epfd, struct rte_epoll_event *events,
-	       int maxevents, int timeout, bool interruptible)
+int
+rte_epoll_wait(int epfd, struct rte_epoll_event *events,
+	       int maxevents, int timeout)
 {
 	struct epoll_event evs[maxevents];
 	int rc;
@@ -1299,12 +1298,8 @@ eal_epoll_wait(int epfd, struct rte_epoll_event *events,
 			rc = eal_epoll_process_event(evs, rc, events);
 			break;
 		} else if (rc < 0) {
-			if (errno == EINTR) {
-				if (interruptible)
-					return -1;
-				else
-					continue;
-			}
+			if (errno == EINTR)
+				continue;
 			/* epoll_wait fail */
 			RTE_LOG(ERR, EAL, "epoll_wait returns with fail %s\n",
 				strerror(errno));
@@ -1317,20 +1312,6 @@ eal_epoll_wait(int epfd, struct rte_epoll_event *events,
 	}
 
 	return rc;
-}
-
-int
-rte_epoll_wait(int epfd, struct rte_epoll_event *events,
-	       int maxevents, int timeout)
-{
-	return eal_epoll_wait(epfd, events, maxevents, timeout, false);
-}
-
-int
-rte_epoll_wait_interruptible(int epfd, struct rte_epoll_event *events,
-			     int maxevents, int timeout)
-{
-	return eal_epoll_wait(epfd, events, maxevents, timeout, true);
 }
 
 static inline void

@@ -208,7 +208,7 @@ mlx5_flow_meter_xbs_man_exp_calc(uint64_t xbs, uint8_t *man, uint8_t *exp)
 	int _exp;
 	double _man;
 
-	/* Special case xbs == 0 ? both exp and mantissa are 0. */
+	/* Special case xbs == 0 ? both exp and matissa are 0. */
 	if (xbs == 0) {
 		*man = 0;
 		*exp = 0;
@@ -216,10 +216,8 @@ mlx5_flow_meter_xbs_man_exp_calc(uint64_t xbs, uint8_t *man, uint8_t *exp)
 	}
 	/* xbs = xbs_mantissa * 2^xbs_exponent */
 	_man = frexp(xbs, &_exp);
-	if (_exp >= MLX5_MAN_WIDTH) {
-		_man = _man * pow(2, MLX5_MAN_WIDTH);
-		_exp = _exp - MLX5_MAN_WIDTH;
-	}
+	_man = _man * pow(2, MLX5_MAN_WIDTH);
+	_exp = _exp - MLX5_MAN_WIDTH;
 	*man = (uint8_t)ceil(_man);
 	*exp = _exp;
 }
@@ -228,7 +226,7 @@ mlx5_flow_meter_xbs_man_exp_calc(uint64_t xbs, uint8_t *man, uint8_t *exp)
  * Fill the prm meter parameter.
  *
  * @param[in,out] fmp
- *   Pointer to meter profile to be converted.
+ *   Pointer to meter profie to be converted.
  * @param[out] error
  *   Pointer to the error structure.
  *
@@ -681,7 +679,6 @@ mlx5_flow_meter_create(struct rte_eth_dev *dev, uint32_t meter_id,
 	fm->shared = !!shared;
 	fm->policer_stats.stats_mask = params->stats_mask;
 	fm->profile->ref_cnt++;
-	rte_spinlock_init(&fm->sl);
 	return 0;
 error:
 	mlx5_flow_destroy_policer_rules(dev, fm, &attr);
@@ -942,7 +939,7 @@ mlx5_flow_meter_profile_update(struct rte_eth_dev *dev,
 	fm->profile = fmp;
 	/* Update meter params in HW (if not disabled). */
 	if (fm->active_state == MLX5_FLOW_METER_DISABLE)
-		goto dec_ref_cnt;
+		return 0;
 	ret = mlx5_flow_meter_action_modify(priv, fm, &fm->profile->srtcm_prm,
 					      modify_bits, fm->active_state);
 	if (ret) {
@@ -950,9 +947,8 @@ mlx5_flow_meter_profile_update(struct rte_eth_dev *dev,
 		return -rte_mtr_error_set(error, -ret,
 					  RTE_MTR_ERROR_TYPE_MTR_PARAMS,
 					  NULL, "Failed to update meter"
-					  " parameters in hardware.");
+					  " parmeters in hardware.");
 	}
-dec_ref_cnt:
 	old_fmp->ref_cnt--;
 	fmp->ref_cnt++;
 	return 0;
@@ -1171,49 +1167,49 @@ mlx5_flow_meter_attach(struct mlx5_priv *priv, uint32_t meter_id,
 		       struct rte_flow_error *error)
 {
 	struct mlx5_flow_meter *fm;
-	int ret = 0;
 
 	fm = mlx5_flow_meter_find(priv, meter_id);
 	if (fm == NULL) {
 		rte_flow_error_set(error, ENOENT,
 				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 				   "Meter object id not valid");
-		return fm;
+		goto error;
 	}
-	rte_spinlock_lock(&fm->sl);
-	if (fm->mfts->meter_action) {
-		if (fm->shared &&
-		    attr->transfer == fm->transfer &&
-		    attr->ingress == fm->ingress &&
-		    attr->egress == fm->egress)
-			fm->ref_cnt++;
-		else
-			ret = -1;
-	} else {
+	if (!fm->shared && fm->ref_cnt) {
+		DRV_LOG(ERR, "Cannot share a non-shared meter.");
+		rte_flow_error_set(error, EINVAL,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+				  "Meter can't be shared");
+		goto error;
+	}
+	if (!fm->ref_cnt++) {
+		MLX5_ASSERT(!fm->mfts->meter_action);
 		fm->ingress = attr->ingress;
 		fm->egress = attr->egress;
 		fm->transfer = attr->transfer;
-		 fm->ref_cnt = 1;
 		/* This also creates the meter object. */
 		fm->mfts->meter_action = mlx5_flow_meter_action_create(priv,
 								       fm);
-		if (!fm->mfts->meter_action) {
-			fm->ref_cnt = 0;
-			fm->ingress = 0;
-			fm->egress = 0;
-			fm->transfer = 0;
-			ret = -1;
-			DRV_LOG(ERR, "Meter action create failed.");
+		if (!fm->mfts->meter_action)
+			goto error_detach;
+	} else {
+		MLX5_ASSERT(fm->mfts->meter_action);
+		if (attr->transfer != fm->transfer ||
+		    attr->ingress != fm->ingress ||
+		    attr->egress != fm->egress) {
+			DRV_LOG(ERR, "meter I/O attributes do not "
+				"match flow I/O attributes.");
+			goto error_detach;
 		}
 	}
-	rte_spinlock_unlock(&fm->sl);
-	if (ret)
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-				   fm->mfts->meter_action ?
-				   "Meter attr not match" :
-				   "Meter action create failed");
-	return ret ? NULL : fm;
+	return fm;
+error_detach:
+	mlx5_flow_meter_detach(fm);
+	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+			  fm->mfts->meter_action ? "Meter attr not match" :
+			  "Meter action create failed");
+error:
+	return NULL;
 }
 
 /**
@@ -1225,20 +1221,15 @@ mlx5_flow_meter_attach(struct mlx5_priv *priv, uint32_t meter_id,
 void
 mlx5_flow_meter_detach(struct mlx5_flow_meter *fm)
 {
-#ifdef HAVE_MLX5_DR_CREATE_ACTION_FLOW_METER
-	rte_spinlock_lock(&fm->sl);
 	MLX5_ASSERT(fm->ref_cnt);
-	if (--fm->ref_cnt == 0) {
+	if (--fm->ref_cnt)
+		return;
+	if (fm->mfts->meter_action)
 		mlx5_glue->destroy_flow_action(fm->mfts->meter_action);
-		fm->mfts->meter_action = NULL;
-		fm->ingress = 0;
-		fm->egress = 0;
-		fm->transfer = 0;
-	}
-	rte_spinlock_unlock(&fm->sl);
-#else
-	(void)fm;
-#endif
+	fm->mfts->meter_action = NULL;
+	fm->ingress = 0;
+	fm->egress = 0;
+	fm->transfer = 0;
 }
 
 /**

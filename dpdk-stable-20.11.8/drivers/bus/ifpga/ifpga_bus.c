@@ -64,7 +64,8 @@ ifpga_find_afu_dev(const struct rte_rawdev *rdev,
 	struct rte_afu_device *afu_dev = NULL;
 
 	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (afu_dev->rawdev == rdev &&
+		if (afu_dev &&
+			afu_dev->rawdev == rdev &&
 			!ifpga_afu_id_cmp(&afu_dev->id, afu_id))
 			return afu_dev;
 	}
@@ -77,7 +78,8 @@ rte_ifpga_find_afu_by_name(const char *name)
 	struct rte_afu_device *afu_dev = NULL;
 
 	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (!strcmp(afu_dev->device.name, name))
+		if (afu_dev &&
+			!strcmp(afu_dev->device.name, name))
 			return afu_dev;
 	}
 	return NULL;
@@ -136,8 +138,6 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 			goto end;
 		}
 		afu_pr_conf.pr_enable = 1;
-		strlcpy(afu_pr_conf.bs_path, path,
-			sizeof(afu_pr_conf.bs_path));
 	} else {
 		afu_pr_conf.pr_enable = 0;
 	}
@@ -162,13 +162,14 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 	afu_dev->id.port      = afu_pr_conf.afu_id.port;
 
 	if (rawdev->dev_ops && rawdev->dev_ops->dev_info_get)
-		rawdev->dev_ops->dev_info_get(rawdev, afu_dev, sizeof(*afu_dev));
+		rawdev->dev_ops->dev_info_get(rawdev, afu_dev);
 
 	if (rawdev->dev_ops &&
 		rawdev->dev_ops->dev_start &&
 		rawdev->dev_ops->dev_start(rawdev))
 		goto end;
 
+	strlcpy(afu_pr_conf.bs_path, path, sizeof(afu_pr_conf.bs_path));
 	if (rawdev->dev_ops &&
 		rawdev->dev_ops->firmware_load &&
 		rawdev->dev_ops->firmware_load(rawdev,

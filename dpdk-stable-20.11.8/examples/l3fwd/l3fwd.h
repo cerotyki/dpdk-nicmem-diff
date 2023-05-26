@@ -12,7 +12,7 @@
 
 #define RTE_LOGTYPE_L3FWD RTE_LOGTYPE_USER1
 
-#if !defined(NO_HASH_MULTI_LOOKUP) && defined(__ARM_NEON)
+#if !defined(NO_HASH_MULTI_LOOKUP) && defined(RTE_MACHINE_CPUFLAG_NEON)
 #define NO_HASH_MULTI_LOOKUP 1
 #endif
 
@@ -75,13 +75,22 @@ struct lcore_conf {
 	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
 	void *ipv4_lookup_struct;
 	void *ipv6_lookup_struct;
+	uint64_t     rx_cycles; /**< used for RX processing */
+	uint64_t     rx_cycles_idle; /**< used for RX idle processing */
+	uint64_t     tx_cycles; /**< used for TX processing */
+	uint64_t     lookup_cycles; /**< used for lookup processing */
+	uint64_t     dropped_bytes;
+	uint64_t     dropped_pkts;
+	uint64_t     txq_used;
+	uint64_t     txq_used_count;
+	int nb_calls;
+	uint16_t burst;
+#define NB_MEM_CALLS (256 * 256 * 16)
+#define NB_MEM_CALLS_MASK (NB_MEM_CALLS- 1)
+	uint64_t mem_calls[NB_MEM_CALLS];
 } __rte_cache_aligned;
 
 extern volatile bool force_quit;
-
-/* RX and TX queue depths */
-extern uint16_t nb_rxd;
-extern uint16_t nb_txd;
 
 /* ethernet addresses of ports */
 extern uint64_t dest_eth_addr[RTE_MAX_ETHPORTS];
@@ -109,10 +118,13 @@ send_burst(struct lcore_conf *qconf, uint16_t n, uint16_t port)
 	queueid = qconf->tx_queue_id[port];
 	m_table = (struct rte_mbuf **)qconf->tx_mbufs[port].m_table;
 
+	qconf->txq_used += rte_eth_tx_descriptors_used(port, queueid);
+	qconf->txq_used_count++;
 	ret = rte_eth_tx_burst(port, queueid, m_table, n);
 	if (unlikely(ret < n)) {
 		do {
 			rte_pktmbuf_free(m_table[ret]);
+			qconf->dropped_pkts++;
 		} while (++ret < n);
 	}
 
@@ -131,8 +143,8 @@ send_single_packet(struct lcore_conf *qconf,
 	len++;
 
 	/* enough pkts to be sent */
-	if (unlikely(len == MAX_PKT_BURST)) {
-		send_burst(qconf, MAX_PKT_BURST, port);
+	if (unlikely(len == qconf->burst)) {
+		send_burst(qconf, qconf->burst, port);
 		len = 0;
 	}
 

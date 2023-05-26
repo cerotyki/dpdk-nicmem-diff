@@ -11,7 +11,6 @@
 #include <process.h>
 #include "bman_priv.h"
 #include <sys/ioctl.h>
-#include <err.h>
 
 /*
  * Global variables of the max portal/pool number this bman version supported
@@ -41,8 +40,7 @@ static int fsl_bman_portal_init(uint32_t idx, int is_shared)
 	ret = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t),
 				     &cpuset);
 	if (ret) {
-		errno = ret;
-		err(0, "pthread_getaffinity_np()");
+		error(0, ret, "pthread_getaffinity_np()");
 		return ret;
 	}
 	pcfg.cpu = -1;
@@ -62,8 +60,7 @@ static int fsl_bman_portal_init(uint32_t idx, int is_shared)
 	map.index = idx;
 	ret = process_portal_map(&map);
 	if (ret) {
-		errno = ret;
-		err(0, "process_portal_map()");
+		error(0, ret, "process_portal_map()");
 		return ret;
 	}
 	/* Make the portal's cache-[enabled|inhibited] regions */
@@ -107,10 +104,8 @@ static int fsl_bman_portal_finish(void)
 	cfg = bman_destroy_affine_portal();
 	DPAA_BUG_ON(cfg != &pcfg);
 	ret = process_portal_unmap(&map.addr);
-	if (ret) {
-		errno = ret;
-		err(0, "process_portal_unmap()");
-	}
+	if (ret)
+		error(0, ret, "process_portal_unmap()");
 	return ret;
 }
 

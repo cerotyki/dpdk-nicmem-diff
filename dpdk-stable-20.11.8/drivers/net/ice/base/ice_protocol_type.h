@@ -51,8 +51,6 @@ enum ice_protocol_type {
 	ICE_ESP,
 	ICE_AH,
 	ICE_NAT_T,
-	ICE_GTP_NO_PAY,
-	ICE_VLAN_EX,
 	ICE_PROTOCOL_LAST
 };
 
@@ -73,12 +71,6 @@ enum ice_sw_tunnel_type {
 	ICE_SW_IPV6_TCP,
 	ICE_SW_IPV6_UDP,
 	ICE_SW_TUN_GTP,
-	ICE_SW_TUN_IPV4_GTPU_NO_PAY,
-	ICE_SW_TUN_IPV6_GTPU_NO_PAY,
-	ICE_SW_TUN_IPV4_GTPU_IPV4,
-	ICE_SW_TUN_IPV4_GTPU_IPV6,
-	ICE_SW_TUN_IPV6_GTPU_IPV4,
-	ICE_SW_TUN_IPV6_GTPU_IPV6,
 	ICE_SW_TUN_PPPOE,
 	ICE_SW_TUN_PPPOE_PAY,
 	ICE_SW_TUN_PPPOE_IPV4,
@@ -103,12 +95,6 @@ enum ice_sw_tunnel_type {
 	ICE_SW_TUN_PROFID_IPV4_PFCP_SESSION,
 	ICE_SW_TUN_PROFID_IPV6_PFCP_NODE,
 	ICE_SW_TUN_PROFID_IPV6_PFCP_SESSION,
-	ICE_SW_TUN_AND_NON_TUN_QINQ,
-	ICE_NON_TUN_QINQ,
-	ICE_SW_TUN_PPPOE_QINQ,
-	ICE_SW_TUN_PPPOE_PAY_QINQ,
-	ICE_SW_TUN_PPPOE_IPV4_QINQ,
-	ICE_SW_TUN_PPPOE_IPV6_QINQ,
 	ICE_ALL_TUNNELS /* All tunnel types including NVGRE */
 };
 
@@ -164,11 +150,9 @@ enum ice_prot_id {
 
 #define ICE_VNI_OFFSET		12 /* offset of VNI from ICE_PROT_UDP_OF */
 
-#define ICE_NAN_OFFSET		511
 #define ICE_MAC_OFOS_HW		1
 #define ICE_MAC_IL_HW		4
 #define ICE_ETYPE_OL_HW		9
-#define ICE_VLAN_OF_HW		16
 #define ICE_VLAN_OL_HW		17
 #define ICE_IPV4_OFOS_HW	32
 #define ICE_IPV4_IL_HW		33
@@ -394,7 +378,7 @@ struct ice_recp_grp_entry {
 #define ICE_INVAL_CHAIN_IND 0xFF
 	u16 rid;
 	u8 chain_idx;
-	u8 fv_idx[ICE_NUM_WORDS_RECIPE];
+	u16 fv_idx[ICE_NUM_WORDS_RECIPE];
 	u16 fv_mask[ICE_NUM_WORDS_RECIPE];
 	struct ice_pref_recipe_group r_group;
 };

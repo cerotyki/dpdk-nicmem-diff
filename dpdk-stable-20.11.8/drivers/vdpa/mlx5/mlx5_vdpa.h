@@ -67,10 +67,10 @@ struct mlx5_vdpa_event_qp {
 
 struct mlx5_vdpa_query_mr {
 	SLIST_ENTRY(mlx5_vdpa_query_mr) next;
-	union {
-		struct ibv_mr *mr;
-		struct mlx5_devx_obj *mkey;
-	};
+	void *addr;
+	uint64_t length;
+	struct mlx5dv_devx_umem *umem;
+	struct mlx5_devx_obj *mkey;
 	int is_indirect;
 };
 
@@ -87,7 +87,6 @@ struct mlx5_vdpa_virtq {
 	uint16_t vq_size;
 	uint8_t notifier_state;
 	bool stopped;
-	uint32_t version;
 	struct mlx5_vdpa_priv *priv;
 	struct mlx5_devx_obj *virtq;
 	struct mlx5_devx_obj *counters;
@@ -98,8 +97,6 @@ struct mlx5_vdpa_virtq {
 		uint32_t size;
 	} umems[3];
 	struct rte_intr_handle intr_handle;
-	uint64_t err_time[3]; /* RDTSC time of recent errors. */
-	uint32_t n_retry;
 	struct mlx5_devx_virtio_q_couners_attr reset;
 };
 
@@ -146,21 +143,16 @@ struct mlx5_vdpa_priv {
 	struct rte_vhost_memory *vmem;
 	uint32_t eqn;
 	struct mlx5dv_devx_event_channel *eventc;
-	struct mlx5dv_devx_event_channel *err_chnl;
 	struct mlx5dv_devx_uar *uar;
 	struct rte_intr_handle intr_handle;
-	struct rte_intr_handle err_intr_handle;
 	struct mlx5_devx_obj *td;
-	struct mlx5_devx_obj *tiss[16]; /* TIS list for each LAG port. */
+	struct mlx5_devx_obj *tis;
 	uint16_t nr_virtqs;
-	uint8_t num_lag_ports;
-	uint8_t qp_ts_format;
 	uint64_t features; /* Negotiated features. */
 	uint16_t log_max_rqt_size;
 	struct mlx5_vdpa_steer steer;
 	struct mlx5dv_var *var;
 	void *virtq_db_addr;
-	struct mlx5_pmd_wrapped_mr lm_mr;
 	SLIST_HEAD(mr_list, mlx5_vdpa_query_mr) mr_list;
 	struct mlx5_vdpa_virtq virtqs[];
 };
@@ -266,25 +258,6 @@ int mlx5_vdpa_cqe_event_setup(struct mlx5_vdpa_priv *priv);
  *   The vdpa driver private structure.
  */
 void mlx5_vdpa_cqe_event_unset(struct mlx5_vdpa_priv *priv);
-
-/**
- * Setup error interrupt handler.
- *
- * @param[in] priv
- *   The vdpa driver private structure.
- *
- * @return
- *   0 on success, a negative errno value otherwise and rte_errno is set.
- */
-int mlx5_vdpa_err_event_setup(struct mlx5_vdpa_priv *priv);
-
-/**
- * Unset error event handler.
- *
- * @param[in] priv
- *   The vdpa driver private structure.
- */
-void mlx5_vdpa_err_event_unset(struct mlx5_vdpa_priv *priv);
 
 /**
  * Release a virtq and all its related resources.
@@ -418,19 +391,6 @@ int mlx5_vdpa_virtq_modify(struct mlx5_vdpa_virtq *virtq, int state);
  *   0 on success, a negative value otherwise.
  */
 int mlx5_vdpa_virtq_stop(struct mlx5_vdpa_priv *priv, int index);
-
-/**
- * Query virtq information.
- *
- * @param[in] priv
- *   The vdpa driver private structure.
- * @param[in] index
- *   The virtq index.
- *
- * @return
- *   0 on success, a negative value otherwise.
- */
-int mlx5_vdpa_virtq_query(struct mlx5_vdpa_priv *priv, int index);
 
 /**
  * Get virtq statistics.

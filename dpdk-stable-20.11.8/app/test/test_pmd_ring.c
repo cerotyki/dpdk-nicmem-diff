@@ -225,7 +225,6 @@ test_pmd_ring_pair_create_attach(void)
 	struct rte_eth_stats stats, stats2;
 	struct rte_mbuf buf, *pbuf = &buf;
 	struct rte_eth_conf null_conf;
-	int ret;
 
 	memset(&null_conf, 0, sizeof(struct rte_eth_conf));
 
@@ -413,14 +412,8 @@ test_pmd_ring_pair_create_attach(void)
 		return TEST_FAILED;
 	}
 
-	ret = rte_eth_dev_stop(rxtx_portd);
-	if (ret != 0)
-		printf("Error: failed to stop port %u: %s\n",
-		       rxtx_portd, rte_strerror(-ret));
-	ret = rte_eth_dev_stop(rxtx_porte);
-	if (ret != 0)
-		printf("Error: failed to stop port %u: %s\n",
-		       rxtx_porte, rte_strerror(-ret));
+	rte_eth_dev_stop(rxtx_portd);
+	rte_eth_dev_stop(rxtx_porte);
 
 	return TEST_SUCCESS;
 }
@@ -428,22 +421,13 @@ test_pmd_ring_pair_create_attach(void)
 static void
 test_cleanup_resources(void)
 {
-	int itr, ret;
+	int itr;
 	for (itr = 0; itr < NUM_RINGS; itr++)
 		rte_ring_free(rxtx[itr]);
 
-	ret = rte_eth_dev_stop(tx_porta);
-	if (ret != 0)
-		printf("Error: failed to stop port %u: %s\n",
-		       tx_porta, rte_strerror(-ret));
-	ret = rte_eth_dev_stop(rx_portb);
-	if (ret != 0)
-		printf("Error: failed to stop port %u: %s\n",
-		       rx_portb, rte_strerror(-ret));
-	ret = rte_eth_dev_stop(rxtx_portc);
-	if (ret != 0)
-		printf("Error: failed to stop port %u: %s\n",
-		       rxtx_portc, rte_strerror(-ret));
+	rte_eth_dev_stop(tx_porta);
+	rte_eth_dev_stop(rx_portb);
+	rte_eth_dev_stop(rxtx_portc);
 
 	rte_mempool_free(mp);
 	rte_vdev_uninit("net_ring_net_ringa");
@@ -538,8 +522,7 @@ test_command_line_ring_port(void)
 				"test stats reset cmdl_port0 is failed");
 		TEST_ASSERT((test_get_stats(cmdl_port0) < 0),
 				"test get stats cmdl_port0 is failed");
-		TEST_ASSERT((rte_eth_dev_stop(cmdl_port0) == 0),
-				"test stop cmdl_port0 is failed");
+		rte_eth_dev_stop(cmdl_port0);
 	}
 	return TEST_SUCCESS;
 }

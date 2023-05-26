@@ -276,37 +276,37 @@ rte_kni_alloc(struct rte_mempool *pktmbuf_pool,
 	/* TX RING */
 	kni->tx_q = kni->m_tx_q->addr;
 	kni_fifo_init(kni->tx_q, KNI_FIFO_COUNT_MAX);
-	dev_info.tx_phys = kni->m_tx_q->iova;
+	dev_info.tx_phys = kni->m_tx_q->phys_addr;
 
 	/* RX RING */
 	kni->rx_q = kni->m_rx_q->addr;
 	kni_fifo_init(kni->rx_q, KNI_FIFO_COUNT_MAX);
-	dev_info.rx_phys = kni->m_rx_q->iova;
+	dev_info.rx_phys = kni->m_rx_q->phys_addr;
 
 	/* ALLOC RING */
 	kni->alloc_q = kni->m_alloc_q->addr;
 	kni_fifo_init(kni->alloc_q, KNI_FIFO_COUNT_MAX);
-	dev_info.alloc_phys = kni->m_alloc_q->iova;
+	dev_info.alloc_phys = kni->m_alloc_q->phys_addr;
 
 	/* FREE RING */
 	kni->free_q = kni->m_free_q->addr;
 	kni_fifo_init(kni->free_q, KNI_FIFO_COUNT_MAX);
-	dev_info.free_phys = kni->m_free_q->iova;
+	dev_info.free_phys = kni->m_free_q->phys_addr;
 
 	/* Request RING */
 	kni->req_q = kni->m_req_q->addr;
 	kni_fifo_init(kni->req_q, KNI_FIFO_COUNT_MAX);
-	dev_info.req_phys = kni->m_req_q->iova;
+	dev_info.req_phys = kni->m_req_q->phys_addr;
 
 	/* Response RING */
 	kni->resp_q = kni->m_resp_q->addr;
 	kni_fifo_init(kni->resp_q, KNI_FIFO_COUNT_MAX);
-	dev_info.resp_phys = kni->m_resp_q->iova;
+	dev_info.resp_phys = kni->m_resp_q->phys_addr;
 
 	/* Req/Resp sync mem area */
 	kni->sync_addr = kni->m_sync_addr->addr;
 	dev_info.sync_va = kni->m_sync_addr->addr;
-	dev_info.sync_phys = kni->m_sync_addr->iova;
+	dev_info.sync_phys = kni->m_sync_addr->phys_addr;
 
 	kni->pktmbuf_pool = pktmbuf_pool;
 	kni->group_id = conf->group_id;
@@ -514,8 +514,6 @@ kni_config_promiscusity(uint16_t port_id, uint8_t to_on)
 static int
 kni_config_allmulticast(uint16_t port_id, uint8_t to_on)
 {
-	int ret;
-
 	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_LOG(ERR, KNI, "Invalid port id %d\n", port_id);
 		return -EINVAL;
@@ -525,16 +523,11 @@ kni_config_allmulticast(uint16_t port_id, uint8_t to_on)
 		port_id, to_on);
 
 	if (to_on)
-		ret = rte_eth_allmulticast_enable(port_id);
+		rte_eth_allmulticast_enable(port_id);
 	else
-		ret = rte_eth_allmulticast_disable(port_id);
-	if (ret != 0)
-		RTE_LOG(ERR, KNI,
-			"Failed to %s allmulticast mode for port %u: %s\n",
-			to_on ? "enable" : "disable", port_id,
-			rte_strerror(-ret));
+		rte_eth_allmulticast_disable(port_id);
 
-	return ret;
+	return 0;
 }
 
 int
@@ -598,11 +591,8 @@ rte_kni_handle_request(struct rte_kni *kni)
 		break;
 	}
 
-	/* if needed, construct response buffer and put it back to resp_q */
-	if (!req->async)
-		ret = kni_fifo_put(kni->resp_q, (void **)&req, 1);
-	else
-		ret = 1;
+	/* Construct response mbuf and put it back to resp_q */
+	ret = kni_fifo_put(kni->resp_q, (void **)&req, 1);
 	if (ret != 1) {
 		RTE_LOG(ERR, KNI, "Fail to put the muf back to resp_q\n");
 		return -1; /* It is an error of can't putting the mbuf back */
@@ -635,8 +625,8 @@ rte_kni_rx_burst(struct rte_kni *kni, struct rte_mbuf **mbufs, unsigned int num)
 {
 	unsigned int ret = kni_fifo_get(kni->tx_q, (void **)mbufs, num);
 
-	/* If buffers removed or alloc_q is empty, allocate mbufs and then put them into alloc_q */
-	if (ret || (kni_fifo_count(kni->alloc_q) == 0))
+	/* If buffers removed, allocate mbufs and then put them into alloc_q */
+	if (ret)
 		kni_allocate_mbufs(kni);
 
 	return ret;
@@ -684,9 +674,8 @@ kni_allocate_mbufs(struct rte_kni *kni)
 		return;
 	}
 
-	allocq_free = kni_fifo_free_count(kni->alloc_q);
-	allocq_free = (allocq_free > MAX_MBUF_BURST_NUM) ?
-		MAX_MBUF_BURST_NUM : allocq_free;
+	allocq_free = (kni->alloc_q->read - kni->alloc_q->write - 1)
+			& (MAX_MBUF_BURST_NUM - 1);
 	for (i = 0; i < allocq_free; i++) {
 		pkts[i] = rte_pktmbuf_alloc(kni->pktmbuf_pool);
 		if (unlikely(pkts[i] == NULL)) {

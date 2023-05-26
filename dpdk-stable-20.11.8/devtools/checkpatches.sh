@@ -45,7 +45,7 @@ print_usage () {
 
 	The patches to check can be from stdin, files specified on the command line,
 	latest git commits limited with -n option, or commits in the git range
-	specified with -r option (default: "origin/main..").
+	specified with -r option (default: "origin/master..").
 	END_OF_HELP
 }
 
@@ -118,7 +118,8 @@ check_forbidden_additions() { # <patch>
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
-	# SVG must be included with wildcard extension to allow conversion
+	# svg figures must be included with wildcard extension
+	# because of png conversion for pdf docs
 	awk -v FOLDERS='doc' \
 		-v EXPRESSIONS='::[[:space:]]*[^[:space:]]*\\.svg' \
 		-v RET_ON_FAIL=1 \
@@ -199,7 +200,7 @@ check_internal_tags() { # <patch>
 }
 
 number=0
-range='origin/main..'
+range='origin/master..'
 quiet=false
 verbose=false
 while getopts hn:qr:v ARG ; do
@@ -229,12 +230,12 @@ print_headline() { # <title>
 total=0
 status=0
 
-check () { # <patch-file> <commit>
+check () { # <patch> <commit> <title>
 	local ret=0
-	local subject=''
 	headline_printed=false
 
 	total=$(($total + 1))
+	! $verbose || print_headline "$3"
 	if [ -n "$1" ] ; then
 		tmpinput=$1
 	else
@@ -249,14 +250,10 @@ check () { # <patch-file> <commit>
 		fi
 	fi
 
-	# Subject can be on 2 lines
-	subject=$(sed '/^Subject: */!d;s///;N;s,\n[[:space:]]\+, ,;s,\n.*,,;q' "$tmpinput")
-	! $verbose || print_headline "$subject"
-
 	! $verbose || printf 'Running checkpatch.pl:\n'
 	report=$($DPDK_CHECKPATCH_PATH $options "$tmpinput" 2>/dev/null)
 	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
+		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report" | sed -n '1,/^total:.*lines checked$/p'
 		ret=1
 	fi
@@ -264,7 +261,7 @@ check () { # <patch-file> <commit>
 	! $verbose || printf '\nChecking API additions/removals:\n'
 	report=$($VALIDATE_NEW_API "$tmpinput")
 	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
+		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report"
 		ret=1
 	fi
@@ -272,7 +269,7 @@ check () { # <patch-file> <commit>
 	! $verbose || printf '\nChecking forbidden tokens additions:\n'
 	report=$(check_forbidden_additions "$tmpinput")
 	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
+		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report"
 		ret=1
 	fi
@@ -280,7 +277,7 @@ check () { # <patch-file> <commit>
 	! $verbose || printf '\nChecking __rte_experimental tags:\n'
 	report=$(check_experimental_tags "$tmpinput")
 	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
+		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report"
 		ret=1
 	fi
@@ -288,7 +285,7 @@ check () { # <patch-file> <commit>
 	! $verbose || printf '\nChecking __rte_internal tags:\n'
 	report=$(check_internal_tags "$tmpinput")
 	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
+		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report"
 		ret=1
 	fi
@@ -304,10 +301,20 @@ check () { # <patch-file> <commit>
 
 if [ -n "$1" ] ; then
 	for patch in "$@" ; do
-		check "$patch" ''
+		# Subject can be on 2 lines
+		subject=$(sed '/^Subject: */!d;s///;N;s,\n[[:space:]]\+, ,;s,\n.*,,;q' "$patch")
+		check "$patch" '' "$subject"
 	done
 elif [ ! -t 0 ] ; then # stdin
-	check '' ''
+	subject=$(while read header value ; do
+		if [ "$header" = 'Subject:' ] ; then
+			IFS= read next
+			continuation=$(echo "$next" | sed -n 's,^[[:space:]]\+, ,p')
+			echo $value$continuation
+			break
+		fi
+	done)
+	check '' '' "$subject"
 else
 	if [ $number -eq 0 ] ; then
 		commits=$(git rev-list --reverse $range)
@@ -315,7 +322,8 @@ else
 		commits=$(git rev-list --reverse --max-count=$number HEAD)
 	fi
 	for commit in $commits ; do
-		check '' $commit
+		subject=$(git log --format='%s' -1 $commit)
+		check '' $commit "$subject"
 	done
 fi
 pass=$(($total - $status))

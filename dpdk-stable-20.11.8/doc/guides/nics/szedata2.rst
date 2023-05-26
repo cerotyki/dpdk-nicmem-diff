@@ -17,6 +17,13 @@ can be found on the `Netcope Technologies website <http://www.netcope.com/>`_.
 
 .. note::
 
+   This driver has external dependencies.
+   Therefore it is disabled in default configuration files.
+   It can be enabled by setting ``CONFIG_RTE_LIBRTE_PMD_SZEDATA2=y``
+   and recompiling.
+
+.. note::
+
    Currently the driver is supported only on x86_64 architectures.
    Only x86_64 versions of the external libraries are provided.
 
@@ -56,6 +63,15 @@ The minimum version of the provided packages:
 
 * for DPDK up to 18.02 (including): **3.0.5**
 
+Configuration
+-------------
+
+These configuration options can be modified before compilation in the
+``.config`` file:
+
+*  ``CONFIG_RTE_LIBRTE_PMD_SZEDATA2`` default value: **n**
+
+   Value **y** enables compilation of szedata2 PMD.
 
 Using the SZEDATA2 PMD
 ----------------------
@@ -113,7 +129,7 @@ transmit channel:
 
 .. code-block:: console
 
-   ./<build_dir>/app/dpdk-testpmd -l 0-3 -n 2 \
+   $RTE_TARGET/app/testpmd -l 0-3 -n 2 \
    -- --port-topology=chained --rxq=2 --txq=2 --nb-cores=2 -i -a
 
 Example output:

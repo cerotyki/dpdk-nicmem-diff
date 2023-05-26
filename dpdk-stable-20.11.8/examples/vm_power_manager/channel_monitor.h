@@ -5,9 +5,8 @@
 #ifndef CHANNEL_MONITOR_H_
 #define CHANNEL_MONITOR_H_
 
-#include <rte_power.h>
-
 #include "channel_manager.h"
+#include "channel_commands.h"
 
 struct core_share {
 	unsigned int pcpu;
@@ -19,11 +18,11 @@ struct core_share {
 };
 
 struct policy {
-	struct rte_power_channel_packet pkt;
-	uint32_t pfid[RTE_POWER_MAX_VFS];
-	uint32_t port[RTE_POWER_MAX_VFS];
+	struct channel_packet pkt;
+	uint32_t pfid[MAX_VFS];
+	uint32_t port[MAX_VFS];
 	unsigned int enabled;
-	struct core_share core_share[RTE_POWER_MAX_VCPU_PER_VM];
+	struct core_share core_share[MAX_VCPU_PER_VM];
 };
 
 #ifdef __cplusplus

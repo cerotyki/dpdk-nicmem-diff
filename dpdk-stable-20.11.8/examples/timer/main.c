@@ -18,7 +18,8 @@
 #include <rte_timer.h>
 #include <rte_debug.h>
 
-static uint64_t timer_resolution_cycles;
+#define TIMER_RESOLUTION_CYCLES 20000000ULL /* around 10ms at 2 Ghz */
+
 static struct rte_timer timer0;
 static struct rte_timer timer1;
 
@@ -65,14 +66,15 @@ lcore_mainloop(__rte_unused void *arg)
 
 	while (1) {
 		/*
-		 * Call the timer handler on each core: as we don't need a
-		 * very precise timer, so only call rte_timer_manage()
-		 * every ~10ms. In a real application, this will enhance
-		 * performances as reading the HPET timer is not efficient.
+		 * Call the timer handler on each core: as we don't
+		 * need a very precise timer, so only call
+		 * rte_timer_manage() every ~10ms (at 2Ghz). In a real
+		 * application, this will enhance performances as
+		 * reading the HPET timer is not efficient.
 		 */
-		cur_tsc = rte_get_timer_cycles();
+		cur_tsc = rte_rdtsc();
 		diff_tsc = cur_tsc - prev_tsc;
-		if (diff_tsc > timer_resolution_cycles) {
+		if (diff_tsc > TIMER_RESOLUTION_CYCLES) {
 			rte_timer_manage();
 			prev_tsc = cur_tsc;
 		}
@@ -98,10 +100,8 @@ main(int argc, char **argv)
 	rte_timer_init(&timer0);
 	rte_timer_init(&timer1);
 
+	/* load timer0, every second, on master lcore, reloaded automatically */
 	hz = rte_get_timer_hz();
-	timer_resolution_cycles = hz * 10 / 1000; /* around 10ms */
-
-	/* load timer0, every second, on main lcore, reloaded automatically */
 	lcore_id = rte_lcore_id();
 	rte_timer_reset(&timer0, hz, PERIODICAL, lcore_id, timer0_cb, NULL);
 
@@ -109,16 +109,13 @@ main(int argc, char **argv)
 	lcore_id = rte_get_next_lcore(lcore_id, 0, 1);
 	rte_timer_reset(&timer1, hz/3, SINGLE, lcore_id, timer1_cb, NULL);
 
-	/* call lcore_mainloop() on every worker lcore */
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+	/* call lcore_mainloop() on every slave lcore */
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		rte_eal_remote_launch(lcore_mainloop, NULL, lcore_id);
 	}
 
-	/* call it on main lcore too */
+	/* call it on master lcore too */
 	(void) lcore_mainloop(NULL);
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 
 	return 0;
 }

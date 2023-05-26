@@ -179,11 +179,11 @@ static const struct rte_igc_xstats_name_off rte_igc_stats_strings[] = {
 
 static int eth_igc_configure(struct rte_eth_dev *dev);
 static int eth_igc_link_update(struct rte_eth_dev *dev, int wait_to_complete);
-static int eth_igc_stop(struct rte_eth_dev *dev);
+static void eth_igc_stop(struct rte_eth_dev *dev);
 static int eth_igc_start(struct rte_eth_dev *dev);
 static int eth_igc_set_link_up(struct rte_eth_dev *dev);
 static int eth_igc_set_link_down(struct rte_eth_dev *dev);
-static int eth_igc_close(struct rte_eth_dev *dev);
+static void eth_igc_close(struct rte_eth_dev *dev);
 static int eth_igc_reset(struct rte_eth_dev *dev);
 static int eth_igc_promiscuous_enable(struct rte_eth_dev *dev);
 static int eth_igc_promiscuous_disable(struct rte_eth_dev *dev);
@@ -272,6 +272,10 @@ static const struct eth_dev_ops eth_igc_ops = {
 
 	.rx_queue_setup		= eth_igc_rx_queue_setup,
 	.rx_queue_release	= eth_igc_rx_queue_release,
+	.rx_queue_count		= eth_igc_rx_queue_count,
+	.rx_descriptor_done	= eth_igc_rx_descriptor_done,
+	.rx_descriptor_status	= eth_igc_rx_descriptor_status,
+	.tx_descriptor_status	= eth_igc_tx_descriptor_status,
 	.tx_queue_setup		= eth_igc_tx_queue_setup,
 	.tx_queue_release	= eth_igc_tx_queue_release,
 	.tx_done_cleanup	= eth_igc_tx_done_cleanup,
@@ -340,9 +344,6 @@ eth_igc_configure(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	ret  = igc_check_mq_mode(dev);
 	if (ret != 0)
@@ -543,7 +544,8 @@ eth_igc_interrupt_action(struct rte_eth_dev *dev)
 				pci_dev->addr.bus,
 				pci_dev->addr.devid,
 				pci_dev->addr.function);
-		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+				NULL);
 	}
 }
 
@@ -610,7 +612,7 @@ eth_igc_rxtx_control(struct rte_eth_dev *dev, bool enable)
  *  This routine disables all traffic on the adapter by issuing a
  *  global reset on the MAC.
  */
-static int
+static void
 eth_igc_stop(struct rte_eth_dev *dev)
 {
 	struct igc_adapter *adapter = IGC_DEV_PRIVATE(dev);
@@ -619,7 +621,6 @@ eth_igc_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct rte_eth_link link;
 
-	dev->data->dev_started = 0;
 	adapter->stopped = 1;
 
 	/* disable receive and transmit */
@@ -672,8 +673,6 @@ eth_igc_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
-
-	return 0;
 }
 
 /*
@@ -989,20 +988,15 @@ eth_igc_start(struct rte_eth_dev *dev)
 		hw->mac.autoneg = 1;
 	} else {
 		int num_speeds = 0;
+		bool autoneg = (*speeds & ETH_LINK_SPEED_FIXED) == 0;
 
-		if (*speeds & ETH_LINK_SPEED_FIXED) {
-			PMD_DRV_LOG(ERR,
-				    "Force speed mode currently not supported");
-			igc_dev_clear_queues(dev);
-			return -EINVAL;
-		}
-
+		/* Reset */
 		hw->phy.autoneg_advertised = 0;
-		hw->mac.autoneg = 1;
 
 		if (*speeds & ~(ETH_LINK_SPEED_10M_HD | ETH_LINK_SPEED_10M |
 				ETH_LINK_SPEED_100M_HD | ETH_LINK_SPEED_100M |
-				ETH_LINK_SPEED_1G | ETH_LINK_SPEED_2_5G)) {
+				ETH_LINK_SPEED_1G | ETH_LINK_SPEED_2_5G |
+				ETH_LINK_SPEED_FIXED)) {
 			num_speeds = -1;
 			goto error_invalid_config;
 		}
@@ -1030,8 +1024,19 @@ eth_igc_start(struct rte_eth_dev *dev)
 			hw->phy.autoneg_advertised |= ADVERTISE_2500_FULL;
 			num_speeds++;
 		}
-		if (num_speeds == 0)
+		if (num_speeds == 0 || (!autoneg && num_speeds > 1))
 			goto error_invalid_config;
+
+		/* Set/reset the mac.autoneg based on the link speed,
+		 * fixed or not
+		 */
+		if (!autoneg) {
+			hw->mac.autoneg = 0;
+			hw->mac.forced_speed_duplex =
+					hw->phy.autoneg_advertised;
+		} else {
+			hw->mac.autoneg = 1;
+		}
 	}
 
 	igc_setup_link(hw);
@@ -1165,7 +1170,7 @@ igc_dev_free_queues(struct rte_eth_dev *dev)
 	dev->data->nb_tx_queues = 0;
 }
 
-static int
+static void
 eth_igc_close(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -1173,14 +1178,11 @@ eth_igc_close(struct rte_eth_dev *dev)
 	struct igc_hw *hw = IGC_DEV_PRIVATE_HW(dev);
 	struct igc_adapter *adapter = IGC_DEV_PRIVATE(dev);
 	int retry = 0;
-	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
 
 	if (!adapter->stopped)
-		ret = eth_igc_stop(dev);
+		eth_igc_stop(dev);
 
 	igc_flow_flush(dev, NULL);
 	igc_clear_all_filter(dev);
@@ -1202,8 +1204,6 @@ eth_igc_close(struct rte_eth_dev *dev)
 
 	/* Reset any pending lock */
 	igc_reset_swfw_lock(hw);
-
-	return ret;
 }
 
 static void
@@ -1227,28 +1227,16 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 	dev->dev_ops = &eth_igc_ops;
-	dev->rx_descriptor_done	= eth_igc_rx_descriptor_done;
-	dev->rx_queue_count = eth_igc_rx_queue_count;
-	dev->rx_descriptor_status = eth_igc_rx_descriptor_status;
-	dev->tx_descriptor_status = eth_igc_tx_descriptor_status;
 
 	/*
 	 * for secondary processes, we don't initialize any further as primary
 	 * has already done this work. Only check we don't need a different
 	 * RX function.
 	 */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-		dev->rx_pkt_burst = igc_recv_pkts;
-		if (dev->data->scattered_rx)
-			dev->rx_pkt_burst = igc_recv_scattered_pkts;
-
-		dev->tx_pkt_burst = igc_xmit_pkts;
-		dev->tx_pkt_prepare = eth_igc_prep_pkts;
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
-	}
 
 	rte_eth_copy_pci_info(dev, pci_dev);
-	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	hw->back = pci_dev;
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
@@ -1334,6 +1322,11 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 		goto err_late;
 	}
 
+	/* Pass the information to the rte_eth_dev_close() that it should also
+	 * release the private port resources.
+	 */
+	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
+
 	hw->mac.get_link_status = 1;
 	igc->stopped = 0;
 
@@ -1374,6 +1367,10 @@ static int
 eth_igc_dev_uninit(__rte_unused struct rte_eth_dev *eth_dev)
 {
 	PMD_INIT_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
 	eth_igc_close(eth_dev);
 	return 0;
 }
@@ -1477,11 +1474,9 @@ eth_igc_fw_version_get(struct rte_eth_dev *dev, char *fw_version,
 				 fw.eep_build);
 		}
 	}
-	if (ret < 0)
-		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (size_t)ret)
+	if (fw_size < (u32)ret)
 		return ret;
 	else
 		return 0;
@@ -1596,14 +1591,12 @@ eth_igc_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EINVAL;
 
 	/*
-	 * If device is started, refuse mtu that requires the support of
-	 * scattered packets when this feature has not been enabled before.
+	 * refuse mtu that requires the support of scattered packets when
+	 * this feature has not been enabled before.
 	 */
-	if (dev->data->dev_started && !dev->data->scattered_rx &&
-	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
-		PMD_INIT_LOG(ERR, "Stop port first.");
+	if (!dev->data->scattered_rx &&
+	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)
 		return -EINVAL;
-	}
 
 	rctl = IGC_READ_REG(hw, IGC_RCTL);
 
@@ -1907,7 +1900,8 @@ eth_igc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
-	rte_stats->ierrors = stats->crcerrs + stats->rlec +
+	rte_stats->ierrors = stats->crcerrs +
+			stats->rlec + stats->ruc + stats->roc +
 			stats->rxerrc + stats->algnerrc;
 
 	/* Tx Errors */

@@ -235,7 +235,7 @@ static void i40e_parse_ieee_app_tlv(struct i40e_lldp_org_tlv *tlv,
 }
 
 /**
- * i40e_parse_ieee_tlv
+ * i40e_parse_ieee_etsrec_tlv
  * @tlv: IEEE 802.1Qaz TLV
  * @dcbcfg: Local store to update ETS REC data
  *
@@ -1267,8 +1267,7 @@ enum i40e_status_code i40e_set_dcb_config(struct i40e_hw *hw)
 
 /**
  * i40e_dcb_config_to_lldp - Convert Dcbconfig to MIB format
- * @lldpmib: pointer to mib to be output
- * @miblen: pointer to u16 for length of lldpmib
+ * @hw: pointer to the hw struct
  * @dcbcfg: store for LLDPDU data
  *
  * send DCB configuration to FW

@@ -114,7 +114,7 @@ ionic_lif_get_abs_stats(const struct ionic_lif *lif, struct rte_eth_stats *stats
 
 	for (i = 0; i < lif->nrxqcqs; i++) {
 		struct ionic_rx_stats *rx_stats = &lif->rxqcqs[i]->stats.rx;
-		stats->ierrors +=
+		stats->imissed +=
 			rx_stats->no_cb_arg +
 			rx_stats->bad_cq_status +
 			rx_stats->no_room +
@@ -126,8 +126,10 @@ ionic_lif_get_abs_stats(const struct ionic_lif *lif, struct rte_eth_stats *stats
 		ls->rx_mcast_drop_packets +
 		ls->rx_bcast_drop_packets;
 
-	stats->ierrors +=
+	stats->imissed +=
+		ls->rx_queue_empty +
 		ls->rx_dma_error +
+		ls->rx_queue_disabled +
 		ls->rx_desc_fetch_error +
 		ls->rx_desc_data_error;
 
@@ -549,7 +551,7 @@ ionic_intr_alloc(struct ionic_lif *lif, struct ionic_intr_info *intr)
 	/*
 	 * Note: interrupt handler is called for index = 0 only
 	 * (we use interrupts for the notifyq only anyway,
-	 * which has index = 0)
+	 * which hash index = 0)
 	 */
 
 	for (index = 0; index < adapter->nintrs; index++)
@@ -682,8 +684,8 @@ ionic_qcq_alloc(struct ionic_lif *lif, uint8_t type,
 		ionic_q_sg_map(&new->q, sg_base, sg_base_pa);
 	}
 
-	IONIC_PRINT(DEBUG, "Q-Base-PA = %#jx CQ-Base-PA = %#jx "
-		"SG-base-PA = %#jx",
+	IONIC_PRINT(DEBUG, "Q-Base-PA = %ju CQ-Base-PA = %ju "
+		"SG-base-PA = %ju",
 		q_base_pa, cq_base_pa, sg_base_pa);
 
 	ionic_q_map(&new->q, q_base, q_base_pa);
@@ -822,13 +824,7 @@ ionic_lif_alloc(struct ionic_lif *lif)
 	int dbpage_num;
 	int err;
 
-	/*
-	 * lif->name was zeroed on allocation.
-	 * Copy (sizeof() - 1) bytes to ensure that it is NULL terminated.
-	 */
-	memcpy(lif->name, lif->eth_dev->data->name, sizeof(lif->name) - 1);
-
-	IONIC_PRINT(DEBUG, "LIF: %s", lif->name);
+	snprintf(lif->name, sizeof(lif->name), "lif%u", lif->index);
 
 	IONIC_PRINT(DEBUG, "Allocating Lif Info");
 
@@ -868,6 +864,8 @@ ionic_lif_alloc(struct ionic_lif *lif)
 		IONIC_PRINT(ERR, "Cannot allocate notify queue");
 		return err;
 	}
+
+	IONIC_PRINT(DEBUG, "Allocating Admin Queue");
 
 	IONIC_PRINT(DEBUG, "Allocating Admin Queue");
 
@@ -1226,7 +1224,6 @@ ionic_lif_notifyq_init(struct ionic_lif *lif)
 		ctx.cmd.q_init.ring_base);
 	IONIC_PRINT(DEBUG, "notifyq_init.ring_size %d",
 		ctx.cmd.q_init.ring_size);
-	IONIC_PRINT(DEBUG, "notifyq_init.ver %u", ctx.cmd.q_init.ver);
 
 	err = ionic_adminq_post_wait(lif, &ctx);
 	if (err)
@@ -1338,7 +1335,6 @@ ionic_lif_txq_init(struct ionic_qcq *qcq)
 		ctx.cmd.q_init.ring_base);
 	IONIC_PRINT(DEBUG, "txq_init.ring_size %d",
 		ctx.cmd.q_init.ring_size);
-	IONIC_PRINT(DEBUG, "txq_init.ver %u", ctx.cmd.q_init.ver);
 
 	err = ionic_adminq_post_wait(qcq->lif, &ctx);
 	if (err)
@@ -1387,7 +1383,6 @@ ionic_lif_rxq_init(struct ionic_qcq *qcq)
 		ctx.cmd.q_init.ring_base);
 	IONIC_PRINT(DEBUG, "rxq_init.ring_size %d",
 		ctx.cmd.q_init.ring_size);
-	IONIC_PRINT(DEBUG, "rxq_init.ver %u", ctx.cmd.q_init.ver);
 
 	err = ionic_adminq_post_wait(qcq->lif, &ctx);
 	if (err)
@@ -1458,8 +1453,8 @@ ionic_lif_set_name(struct ionic_lif *lif)
 		},
 	};
 
-	memcpy(ctx.cmd.lif_setattr.name, lif->name,
-		sizeof(ctx.cmd.lif_setattr.name) - 1);
+	snprintf(ctx.cmd.lif_setattr.name, sizeof(ctx.cmd.lif_setattr.name),
+		"%d", lif->port_id);
 
 	ionic_adminq_post_wait(lif, &ctx);
 }
@@ -1468,17 +1463,16 @@ int
 ionic_lif_init(struct ionic_lif *lif)
 {
 	struct ionic_dev *idev = &lif->adapter->idev;
-	struct ionic_lif_init_comp comp;
+	struct ionic_q_init_comp comp;
 	int err;
 
 	memset(&lif->stats_base, 0, sizeof(lif->stats_base));
 
 	ionic_dev_cmd_lif_init(idev, lif->index, lif->info_pa);
 	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
+	ionic_dev_cmd_comp(idev, &comp);
 	if (err)
 		return err;
-
-	ionic_dev_cmd_comp(idev, &comp);
 
 	lif->hw_index = comp.hw_index;
 
@@ -1691,8 +1685,7 @@ ionic_lifs_size(struct ionic_adapter *adapter)
 	nintrs = nlifs * 1 /* notifyq */;
 
 	if (nintrs > dev_nintrs) {
-		IONIC_PRINT(ERR,
-			"At most %d intr supported, minimum req'd is %u",
+		IONIC_PRINT(ERR, "At most %d intr queues supported, minimum required is %u",
 			dev_nintrs, nintrs);
 		return -ENOSPC;
 	}

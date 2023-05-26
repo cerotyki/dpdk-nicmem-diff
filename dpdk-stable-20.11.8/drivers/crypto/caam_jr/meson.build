@@ -3,7 +3,7 @@
 
 if not is_linux
 	build = false
-	reason = 'only supported on Linux'
+	reason = 'only supported on linux'
 endif
 
 deps += ['bus_vdev', 'bus_dpaa', 'security']

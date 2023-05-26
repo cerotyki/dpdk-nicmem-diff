@@ -7,12 +7,9 @@
 # DPDK instance, use 'make'
 
 allow_experimental_apis = true
-build = dpdk_conf.has('RTE_RAW_IOAT')
-if not build
-	subdir_done()
-endif
+build = dpdk_conf.has('RTE_LIBRTE_PMD_IOAT_RAWDEV')
 
-deps += ['raw_ioat']
+deps += ['rawdev_ioat']
 
 sources = files(
 	'ioatfwd.c'

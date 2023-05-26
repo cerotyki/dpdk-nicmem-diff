@@ -2,7 +2,7 @@
 # Copyright(c) 2017 Intel Corporation
 
 deps += ['pci']
-headers = files('rte_bus_pci.h')
+install_headers('rte_bus_pci.h')
 sources = files('pci_common.c',
 	'pci_params.c')
 if is_linux
@@ -18,8 +18,7 @@ if is_freebsd
 	includes += include_directories('bsd')
 endif
 if is_windows
-	sources += files('windows/pci.c',
-			'windows/pci_netuio.c')
+	sources += files('windows/pci.c')
 	includes += include_directories('windows')
 endif
 

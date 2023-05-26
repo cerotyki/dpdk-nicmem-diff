@@ -20,11 +20,6 @@ error_cflags = ['-Wno-unused-value',
 		'-Wno-unused-variable',
 		'-Wno-unused-parameter',
 ]
-# Bugzilla ID: 678
-if (toolchain == 'gcc' and cc.version().version_compare('>=11.0.0'))
-    error_cflags += ['-Wno-array-bounds']
-endif
-
 c_args = cflags
 
 foreach flag: error_cflags

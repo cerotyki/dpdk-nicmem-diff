@@ -2,6 +2,10 @@
  * Copyright 2019 Mellanox Technologies, Ltd
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -16,10 +20,15 @@
 
 /* PMD socket service for tools. */
 
-#define MLX5_SOCKET_PATH "/var/tmp/dpdk_net_mlx5_%d"
-
-int server_socket = -1; /* Unix socket for primary process. */
+int server_socket; /* Unix socket for primary process. */
 struct rte_intr_handle server_intr_handle; /* Interrupt handler. */
+
+static void
+mlx5_pmd_make_path(struct sockaddr_un *addr, int pid)
+{
+	snprintf(addr->sun_path, sizeof(addr->sun_path), "/var/tmp/dpdk_%s_%d",
+		 MLX5_DRIVER_NAME, pid);
+}
 
 /**
  * Handle server pmd socket interrupts.
@@ -117,7 +126,7 @@ error:
 static int
 mlx5_pmd_interrupt_handler_install(void)
 {
-	MLX5_ASSERT(server_socket != -1);
+	MLX5_ASSERT(server_socket);
 	server_intr_handle.fd = server_socket;
 	server_intr_handle.type = RTE_INTR_HANDLE_EXT;
 	return rte_intr_callback_register(&server_intr_handle,
@@ -130,7 +139,7 @@ mlx5_pmd_interrupt_handler_install(void)
 static void
 mlx5_pmd_interrupt_handler_uninstall(void)
 {
-	if (server_socket != -1) {
+	if (server_socket) {
 		mlx5_intr_callback_unregister(&server_intr_handle,
 					      mlx5_pmd_socket_handle,
 					      NULL);
@@ -140,7 +149,10 @@ mlx5_pmd_interrupt_handler_uninstall(void)
 }
 
 /**
- * Initialise the socket to communicate with external tools.
+ * Initialise the socket to communicate with the secondary process
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
  *
  * @return
  *   0 on success, a negative value otherwise.
@@ -155,8 +167,12 @@ mlx5_pmd_socket_init(void)
 	int flags;
 
 	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
-	if (server_socket != -1)
+	if (server_socket)
 		return 0;
+	/*
+	 * Initialize the socket to communicate with the secondary
+	 * process.
+	 */
 	ret = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (ret < 0) {
 		DRV_LOG(WARNING, "Failed to open mlx5 socket: %s",
@@ -166,37 +182,35 @@ mlx5_pmd_socket_init(void)
 	server_socket = ret;
 	flags = fcntl(server_socket, F_GETFL, 0);
 	if (flags == -1)
-		goto close;
+		goto error;
 	ret = fcntl(server_socket, F_SETFL, flags | O_NONBLOCK);
 	if (ret < 0)
-		goto close;
-	snprintf(sun.sun_path, sizeof(sun.sun_path), MLX5_SOCKET_PATH,
-		 getpid());
+		goto error;
+	mlx5_pmd_make_path(&sun, getpid());
 	remove(sun.sun_path);
 	ret = bind(server_socket, (const struct sockaddr *)&sun, sizeof(sun));
 	if (ret < 0) {
 		DRV_LOG(WARNING,
 			"cannot bind mlx5 socket: %s", strerror(errno));
-		goto remove;
+		goto close;
 	}
 	ret = listen(server_socket, 0);
 	if (ret < 0) {
 		DRV_LOG(WARNING, "cannot listen on mlx5 socket: %s",
 			strerror(errno));
-		goto remove;
+		goto close;
 	}
 	if (mlx5_pmd_interrupt_handler_install()) {
 		DRV_LOG(WARNING, "cannot register interrupt handler for mlx5 socket: %s",
 			strerror(errno));
-		goto remove;
+		goto close;
 	}
 	return 0;
-remove:
-	remove(sun.sun_path);
 close:
-	claim_zero(close(server_socket));
-	server_socket = -1;
+	remove(sun.sun_path);
 error:
+	claim_zero(close(server_socket));
+	server_socket = 0;
 	DRV_LOG(ERR, "Cannot initialize socket: %s", strerror(errno));
 	return -errno;
 }
@@ -204,14 +218,13 @@ error:
 /**
  * Un-Initialize the pmd socket
  */
-void
-mlx5_pmd_socket_uninit(void)
+RTE_FINI(mlx5_pmd_socket_uninit)
 {
-	if (server_socket == -1)
+	if (!server_socket)
 		return;
 	mlx5_pmd_interrupt_handler_uninstall();
 	claim_zero(close(server_socket));
-	server_socket = -1;
-	MKSTR(path, MLX5_SOCKET_PATH, getpid());
+	server_socket = 0;
+	MKSTR(path, "/var/tmp/dpdk_%s_%d", MLX5_DRIVER_NAME, getpid());
 	claim_zero(remove(path));
 }

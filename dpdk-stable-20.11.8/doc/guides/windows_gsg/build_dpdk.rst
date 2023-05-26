@@ -100,7 +100,7 @@ To compile the examples, the flag ``-Dexamples`` is required.
 .. code-block:: console
 
     cd C:\Users\me\dpdk
-    meson setup -Dexamples=helloworld build
+    meson -Dexamples=helloworld build
     ninja -C build
 
 Option 2. Cross-Compile with MinGW-w64
@@ -111,5 +111,5 @@ Depending on the distribution, paths in this file may need adjustments.
 
 .. code-block:: console
 
-    meson setup --cross-file config/x86/cross-mingw -Dexamples=helloworld build
+    meson --cross-file config/x86/cross-mingw -Dexamples=helloworld build
     ninja -C build

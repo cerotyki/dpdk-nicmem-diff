@@ -15,6 +15,8 @@
 #define OTX2_IPSEC_PO_MAX_INB_CTX_LEN    0x22
 #define OTX2_IPSEC_PO_MAX_OUTB_CTX_LEN   0x38
 
+#define OTX2_IPSEC_PO_PER_PKT_IV  BIT(11)
+
 #define OTX2_IPSEC_PO_WRITE_IPSEC_OUTB     0x20
 #define OTX2_IPSEC_PO_WRITE_IPSEC_INB      0x21
 #define OTX2_IPSEC_PO_PROCESS_IPSEC_OUTB   0x23
@@ -317,7 +319,7 @@ ipsec_po_sa_ctl_set(struct rte_security_ipsec_xform *ipsec,
 			return -EINVAL;
 	}
 
-	ctl->inner_ip_ver = ctl->outer_ip_ver;
+	ctl->inner_ip_ver = OTX2_IPSEC_PO_SA_IP_VERSION_4;
 
 	if (ipsec->mode == RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT)
 		ctl->ipsec_mode = OTX2_IPSEC_PO_SA_MODE_TRANSPORT;

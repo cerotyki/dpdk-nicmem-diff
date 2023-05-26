@@ -8,15 +8,19 @@
 /**
  * @file
  *
- * Software implementation of the Toeplitz hash function used by RSS.
- * Can be used either for packet distribution on single queue NIC
- * or for simulating of RSS computation on specific NIC (for example
- * after GRE header decapsulating)
+ * toeplitz hash functions.
  */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * Software implementation of the Toeplitz hash function used by RSS.
+ * Can be used either for packet distribution on single queue NIC
+ * or for simulating of RSS computation on specific NIC (for example
+ * after GRE header decapsulating)
+ */
 
 #include <stdint.h>
 #include <rte_byteorder.h>
@@ -24,7 +28,7 @@ extern "C" {
 #include <rte_ip.h>
 #include <rte_common.h>
 
-#if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
+#if defined(RTE_ARCH_X86) || defined(RTE_MACHINE_CPUFLAG_NEON)
 #include <rte_vect.h>
 #endif
 
@@ -145,7 +149,7 @@ rte_thash_load_v6_addrs(const struct rte_ipv6_hdr *orig,
 	ipv6 = _mm_loadu_si128((const __m128i *)orig->dst_addr);
 	*(__m128i *)targ->v6.dst_addr =
 			_mm_shuffle_epi8(ipv6, rte_thash_ipv6_bswap_mask);
-#elif defined(__ARM_NEON)
+#elif defined(RTE_MACHINE_CPUFLAG_NEON)
 	uint8x16_t ipv6 = vld1q_u8((uint8_t const *)orig->src_addr);
 	vst1q_u8((uint8_t *)targ->v6.src_addr, vrev32q_u8(ipv6));
 	ipv6 = vld1q_u8((uint8_t const *)orig->dst_addr);

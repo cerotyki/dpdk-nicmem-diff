@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <termios.h>
 #include <sys/queue.h>
 
 #include <cmdline_rdline.h>
@@ -35,9 +36,6 @@ int main(int argc, char **argv)
 		rte_panic("Cannot create cmdline instance\n");
 	cmdline_interact(cl);
 	cmdline_stdin_exit(cl);
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 
 	return 0;
 }

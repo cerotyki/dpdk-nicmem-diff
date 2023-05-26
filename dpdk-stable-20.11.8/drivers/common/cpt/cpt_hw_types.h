@@ -31,10 +31,7 @@ typedef union {
 	uint64_t u64;
 	struct {
 #if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
-		struct {
-			uint8_t minor;
-			uint8_t major;
-		} opcode;
+		uint16_t opcode;
 		uint16_t param1;
 		uint16_t param2;
 		uint16_t dlen;
@@ -42,10 +39,7 @@ typedef union {
 		uint16_t dlen;
 		uint16_t param2;
 		uint16_t param1;
-		struct {
-			uint8_t major;
-			uint8_t minor;
-		} opcode;
+		uint16_t opcode;
 #endif
 	} s;
 } vq_cmd_word0_t;
@@ -466,7 +460,7 @@ typedef union {
 		uint64_t dbell_cnt             : 20;
 		/** [ 19:  0](R/W/H) Number of instruction queue 64-bit words
 		 * to add to the CPT instruction doorbell count. Readback value
-		 * is the current number of pending doorbell requests.
+		 * is the the current number of pending doorbell requests.
 		 *
 		 * If counter overflows CPT()_VQ()_MISC_INT[DBELL_DOVF] is set.
 		 *

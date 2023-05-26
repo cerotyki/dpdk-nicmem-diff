@@ -57,7 +57,7 @@ mrvl_get_max_rate(struct rte_eth_dev *dev, uint64_t *rate)
 
 	close(fd);
 
-	*rate = (uint64_t)ethtool_cmd_speed(&edata) * 1000 * 1000 / 8;
+	*rate = ethtool_cmd_speed(&edata) * 1000 * 1000 / 8;
 
 	return 0;
 }
@@ -146,11 +146,6 @@ mrvl_node_type_get(struct rte_eth_dev *dev, uint32_t node_id, int *is_leaf,
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_node *node;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (!is_leaf)
 		return -rte_tm_error_set(error, EINVAL,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -182,11 +177,6 @@ mrvl_capabilities_get(struct rte_eth_dev *dev,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (!cap)
 		return -rte_tm_error_set(error, EINVAL,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -203,16 +193,12 @@ mrvl_capabilities_get(struct rte_eth_dev *dev,
 	cap->shaper_private_n_max = cap->shaper_n_max;
 	cap->shaper_private_rate_min = MRVL_RATE_MIN;
 	cap->shaper_private_rate_max = priv->rate_max;
-	cap->shaper_private_packet_mode_supported = 0;
-	cap->shaper_private_byte_mode_supported = 1;
 
 	cap->sched_n_children_max = dev->data->nb_tx_queues;
 	cap->sched_sp_n_priorities_max = dev->data->nb_tx_queues;
 	cap->sched_wfq_n_children_per_group_max = dev->data->nb_tx_queues;
 	cap->sched_wfq_n_groups_max = 1;
 	cap->sched_wfq_weight_max = MRVL_WEIGHT_MAX;
-	cap->sched_wfq_packet_mode_supported = 0;
-	cap->sched_wfq_byte_mode_supported = 1;
 
 	cap->dynamic_update_mask = RTE_TM_UPDATE_NODE_SUSPEND_RESUME |
 				   RTE_TM_UPDATE_NODE_STATS;
@@ -238,11 +224,6 @@ mrvl_level_capabilities_get(struct rte_eth_dev *dev,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (!cap)
 		return -rte_tm_error_set(error, EINVAL,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -263,8 +244,6 @@ mrvl_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->nonleaf.shaper_private_supported = 1;
 		cap->nonleaf.shaper_private_rate_min = MRVL_RATE_MIN;
 		cap->nonleaf.shaper_private_rate_max = priv->rate_max;
-		cap->nonleaf.shaper_private_packet_mode_supported = 0;
-		cap->nonleaf.shaper_private_byte_mode_supported = 1;
 
 		cap->nonleaf.sched_n_children_max = dev->data->nb_tx_queues;
 		cap->nonleaf.sched_sp_n_priorities_max = 1;
@@ -272,8 +251,6 @@ mrvl_level_capabilities_get(struct rte_eth_dev *dev,
 			dev->data->nb_tx_queues;
 		cap->nonleaf.sched_wfq_n_groups_max = 1;
 		cap->nonleaf.sched_wfq_weight_max = MRVL_WEIGHT_MAX;
-		cap->nonleaf.sched_wfq_packet_mode_supported = 0;
-		cap->nonleaf.sched_wfq_byte_mode_supported = 1;
 		cap->nonleaf.stats_mask = RTE_TM_STATS_N_PKTS |
 					  RTE_TM_STATS_N_BYTES;
 	} else { /* level_id == MRVL_NODE_QUEUE */
@@ -284,8 +261,6 @@ mrvl_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->leaf.shaper_private_supported = 1;
 		cap->leaf.shaper_private_rate_min = MRVL_RATE_MIN;
 		cap->leaf.shaper_private_rate_max = priv->rate_max;
-		cap->leaf.shaper_private_packet_mode_supported = 0;
-		cap->leaf.shaper_private_byte_mode_supported = 1;
 		cap->leaf.stats_mask = RTE_TM_STATS_N_PKTS;
 	}
 
@@ -309,11 +284,6 @@ mrvl_node_capabilities_get(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_node *node;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (!cap)
 		return -rte_tm_error_set(error, EINVAL,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -330,8 +300,6 @@ mrvl_node_capabilities_get(struct rte_eth_dev *dev, uint32_t node_id,
 	cap->shaper_private_supported = 1;
 	cap->shaper_private_rate_min = MRVL_RATE_MIN;
 	cap->shaper_private_rate_max = priv->rate_max;
-	cap->shaper_private_packet_mode_supported = 0;
-	cap->shaper_private_byte_mode_supported = 1;
 
 	if (node->type == MRVL_NODE_PORT) {
 		cap->nonleaf.sched_n_children_max = dev->data->nb_tx_queues;
@@ -340,8 +308,6 @@ mrvl_node_capabilities_get(struct rte_eth_dev *dev, uint32_t node_id,
 			dev->data->nb_tx_queues;
 		cap->nonleaf.sched_wfq_n_groups_max = 1;
 		cap->nonleaf.sched_wfq_weight_max = MRVL_WEIGHT_MAX;
-		cap->nonleaf.sched_wfq_packet_mode_supported = 0;
-		cap->nonleaf.sched_wfq_byte_mode_supported = 1;
 		cap->stats_mask = RTE_TM_STATS_N_PKTS | RTE_TM_STATS_N_BYTES;
 	} else {
 		cap->stats_mask = RTE_TM_STATS_N_PKTS;
@@ -385,11 +351,6 @@ mrvl_shaper_profile_add(struct rte_eth_dev *dev, uint32_t shaper_profile_id,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_shaper_profile *profile;
-
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
 
 	if (!params)
 		return -rte_tm_error_set(error, EINVAL,
@@ -458,11 +419,6 @@ mrvl_shaper_profile_delete(struct rte_eth_dev *dev, uint32_t shaper_profile_id,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_shaper_profile *profile;
-
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
 
 	profile = mrvl_shaper_profile_from_id(priv, shaper_profile_id);
 	if (!profile)
@@ -610,11 +566,6 @@ mrvl_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_tm_node *node, *parent = NULL;
 	int ret;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (priv->ppio)
 		return -rte_tm_error_set(error, EPERM,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -700,11 +651,6 @@ mrvl_node_delete(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_node *node;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (priv->ppio) {
 		return -rte_tm_error_set(error, EPERM,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -769,11 +715,6 @@ mrvl_node_suspend(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_tm_node *node, *tmp;
 	int ret;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	node = mrvl_node_from_id(priv, node_id);
 	if (!node)
 		return -rte_tm_error_set(error, ENODEV,
@@ -815,11 +756,6 @@ mrvl_node_resume(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_tm_node *node;
 	int ret;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	node = mrvl_node_from_id(priv, node_id);
 	if (!node)
 		return -rte_tm_error_set(error, ENODEV,
@@ -855,11 +791,6 @@ mrvl_hierarchy_commit(struct rte_eth_dev *dev, int clear_on_fail,
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_node *node;
 	int ret;
-
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
 
 	if (priv->ppio) {
 		ret = -rte_tm_error_set(error, EPERM,
@@ -967,11 +898,6 @@ mrvl_node_stats_read(struct rte_eth_dev *dev, uint32_t node_id,
 	struct mrvl_tm_node *node;
 	int ret;
 
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
-
 	if (!priv->ppio) {
 		return -rte_tm_error_set(error, EPERM,
 					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
@@ -1040,11 +966,6 @@ mrvl_node_stats_update(struct rte_eth_dev *dev, uint32_t node_id,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_tm_node *node;
-
-	if (!priv->configured)
-		return -rte_tm_error_set(error, ENODEV,
-					 RTE_TM_ERROR_TYPE_UNSPECIFIED,
-					 NULL, "Port didn't configured\n");
 
 	node = mrvl_node_from_id(priv, node_id);
 	if (!node)

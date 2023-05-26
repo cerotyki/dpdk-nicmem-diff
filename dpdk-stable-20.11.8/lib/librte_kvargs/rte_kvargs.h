@@ -36,19 +36,7 @@ extern "C" {
 /** separator character used between key and value */
 #define RTE_KVARGS_KV_DELIM	"="
 
-/**
- * Callback prototype used by rte_kvargs_process().
- *
- * @param key
- *   The key to consider, it will not be NULL.
- * @param value
- *   The value corresponding to the key, it may be NULL (e.g. only with key)
- * @param opaque
- *   An opaque pointer coming from the caller.
- * @return
- *   - >=0 handle key success.
- *   - <0 on error.
- */
+/** Type of callback function used by rte_kvargs_process() */
 typedef int (*arg_handler_t)(const char *key, const char *value, void *opaque);
 
 /** A key/value association */
@@ -157,7 +145,7 @@ int rte_kvargs_process(const struct rte_kvargs *kvlist,
  *   The rte_kvargs structure
  * @param key_match
  *   The key that should match, or NULL to count all associations
- *
+
  * @return
  *   The number of entries
  */

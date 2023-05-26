@@ -3,8 +3,6 @@
  * Copyright(c) 2017-2018 Intel Corporation.
  */
 
-#include <math.h>
-
 #include <rte_atomic.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -48,7 +46,7 @@ static uint64_t global_info_bkt_tck_ns;
 static volatile uint8_t arm_done;
 
 #define CALC_TICKS(tks)					\
-	ceil((double)(tks * global_bkt_tck_ns) / global_info_bkt_tck_ns)
+	((tks * global_bkt_tck_ns) / global_info_bkt_tck_ns)
 
 
 static bool using_services;
@@ -764,6 +762,7 @@ _cancel_thread(void *args)
 {
 	RTE_SET_USED(args);
 	struct rte_event_timer *ev_tim = NULL;
+	uint64_t cancel_count = 0;
 	uint16_t ret;
 
 	while (!arm_done || rte_ring_count(timer_producer_ring) > 0) {
@@ -773,6 +772,7 @@ _cancel_thread(void *args)
 		ret = rte_event_timer_cancel_burst(timdev, &ev_tim, 1);
 		TEST_ASSERT_EQUAL(ret, 1, "Failed to cancel timer");
 		rte_mempool_put(eventdev_test_mempool, (void *)ev_tim);
+		cancel_count++;
 	}
 
 	return TEST_SUCCESS;
@@ -963,6 +963,8 @@ adapter_create(void)
 
 	TEST_ASSERT_SUCCESS(rte_event_timer_adapter_free(adapter),
 			"Failed to free adapter");
+
+	rte_mempool_free(eventdev_test_mempool);
 
 	return TEST_SUCCESS;
 }

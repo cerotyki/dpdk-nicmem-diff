@@ -7,14 +7,16 @@ MLX5 vDPA driver
 ================
 
 The MLX5 vDPA (vhost data path acceleration) driver library
-(**librte_vdpa_mlx5**) provides support for **Mellanox ConnectX-6**,
+(**librte_pmd_mlx5_vdpa**) provides support for **Mellanox ConnectX-6**,
 **Mellanox ConnectX-6 Dx** and **Mellanox BlueField** families of
 10/25/40/50/100/200 Gb/s adapters as well as their virtual functions (VF) in
 SR-IOV context.
 
 .. note::
 
-   This driver is enabled automatically when using "meson" build system which
+   Due to external dependencies, this driver is disabled in default
+   configuration of the "make" build. It can be enabled with
+   ``CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD=y`` or by using "meson" build system which
    will detect dependencies.
 
 
@@ -37,7 +39,7 @@ to get the best performances:
 - DevX allows to access firmware objects
 - Direct Rules manages flow steering at low-level hardware layer
 
-Enabling librte_vdpa_mlx5 causes DPDK applications to be linked against
+Enabling librte_pmd_mlx5_vdpa causes DPDK applications to be linked against
 libibverbs.
 
 A Mellanox mlx5 PCI device can be probed by either net/mlx5 driver or vdpa/mlx5
@@ -60,13 +62,16 @@ Prerequisites
 - Mellanox OFED version: **5.0**
   see :doc:`../../nics/mlx5` guide for more Mellanox OFED details.
 
-Compilation option
-~~~~~~~~~~~~~~~~~~
+Compilation options
+~~~~~~~~~~~~~~~~~~~
 
-The meson option ``ibverbs_link`` is **shared** by default,
-but can be configured to have the following values:
+These options can be modified in the ``.config`` file.
 
-- ``dlopen``
+- ``CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD`` (default **n**)
+
+  Toggle compilation of librte_pmd_mlx5 itself.
+
+- ``CONFIG_RTE_IBVERBS_LINK_DLOPEN`` (default **n**)
 
   Build PMD with additional code to make it loadable without hard
   dependencies on **libibverbs** nor **libmlx5**, which may not be installed
@@ -74,23 +79,28 @@ but can be configured to have the following values:
 
   In this mode, their presence is still required for it to run properly,
   however their absence won't prevent a DPDK application from starting (with
-  DPDK shared build disabled) and they won't show up as missing with ``ldd(1)``.
+  ``CONFIG_RTE_BUILD_SHARED_LIB`` disabled) and they won't show up as
+  missing with ``ldd(1)``.
 
   It works by moving these dependencies to a purpose-built rdma-core "glue"
-  plug-in which must be installed in a directory whose name is based
-  on ``RTE_EAL_PMD_PATH`` suffixed with ``-glue``.
+  plug-in which must either be installed in a directory whose name is based
+  on ``CONFIG_RTE_EAL_PMD_PATH`` suffixed with ``-glue`` if set, or in a
+  standard location for the dynamic linker (e.g. ``/lib``) if left to the
+  default empty string (``""``).
 
   This option has no performance impact.
 
-- ``static``
+- ``CONFIG_RTE_IBVERBS_LINK_STATIC`` (default **n**)
 
   Embed static flavor of the dependencies **libibverbs** and **libmlx5**
   in the PMD shared library or the executable static binary.
 
 .. note::
 
-   Default armv8a configuration of meson build sets ``RTE_CACHE_LINE_SIZE``
-   to 128 then brings performance degradation.
+   For BlueField, target should be set to ``arm64-bluefield-linux-gcc``. This
+   will enable ``CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD`` and set
+   ``RTE_CACHE_LINE_SIZE`` to 64. Default armv8a configuration of make build and
+   meson build set it to 128 then brings performance degradation.
 
 Run-time configuration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -134,11 +144,3 @@ Driver options
   driver to no-traffic mode. In this mode the timer events are stopped and
   interrupts are configured to the device in order to notify traffic for the
   driver. Default value is 2s.
-
-Error handling
-^^^^^^^^^^^^^^
-
-Upon potential hardware errors, mlx5 PMD try to recover, give up if failed 3
-times in 3 seconds, virtq will be put in disable state. User should check log
-to get error information, or query vdpa statistics counter to know error type
-and count report.

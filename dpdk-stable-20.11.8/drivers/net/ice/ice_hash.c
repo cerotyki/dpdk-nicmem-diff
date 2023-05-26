@@ -312,9 +312,6 @@ struct rss_type_match_hdr hint_eth_pppoes_ipv6_tcp = {
 struct rss_type_match_hdr hint_eth_pppoes = {
 	ICE_FLOW_SEG_HDR_PPPOE,
 	ETH_RSS_ETH | ETH_RSS_PPPOE};
-struct rss_type_match_hdr hint_ethertype = {
-	ICE_FLOW_SEG_HDR_ETH | ICE_FLOW_SEG_HDR_ETH_NON_IP,
-	ETH_RSS_ETH};
 
 /* Supported pattern for os default package. */
 static struct ice_pattern_match_item ice_hash_pattern_list_os[] = {
@@ -447,8 +444,6 @@ static struct ice_pattern_match_item ice_hash_pattern_list_comms[] = {
 		&hint_eth_pppoes_ipv6_tcp},
 	{pattern_eth_pppoes,		    ICE_INSET_NONE,
 		&hint_eth_pppoes},
-	{pattern_ethertype,		    ICE_INSET_NONE,
-		&hint_ethertype},
 };
 
 /**
@@ -1145,17 +1140,8 @@ ice_hash_parse_action(struct ice_pattern_match_item *pattern_match_item,
 					"Not supported flow");
 			}
 
-			/* update hash field for eth-non-ip. */
-			if (rss_type & ETH_RSS_ETH) {
-				if (hash_meta->pkt_hdr &
-				    ICE_FLOW_SEG_HDR_ETH_NON_IP) {
-					hash_meta->hash_flds |=
-					BIT_ULL(ICE_FLOW_FIELD_IDX_ETH_TYPE);
-				}
-			}
-
 			/* update hash field for nat-t esp. */
-			if (rss_type & ETH_RSS_ESP &&
+			if (rss_type == ETH_RSS_ESP &&
 			    (m->eth_rss_hint & ETH_RSS_NONFRAG_IPV4_UDP ||
 			     m->eth_rss_hint & ETH_RSS_NONFRAG_IPV6_UDP)) {
 				hash_meta->hash_flds &=
@@ -1165,10 +1151,7 @@ ice_hash_parse_action(struct ice_pattern_match_item *pattern_match_item,
 			}
 
 			/* update hash field for gtpu eh/gtpu dwn/gtpu up. */
-			if (!(rss_type & ETH_RSS_GTPU)) {
-				break;
-			} else if (hash_meta->pkt_hdr &
-				   ICE_FLOW_SEG_HDR_GTPU_EH) {
+			if (hash_meta->pkt_hdr & ICE_FLOW_SEG_HDR_GTPU_EH) {
 				hash_meta->hash_flds &=
 				~(BIT_ULL(ICE_FLOW_FIELD_IDX_GTPU_IP_TEID));
 				hash_meta->hash_flds |=
@@ -1288,15 +1271,16 @@ ice_hash_create(struct ice_adapter *ad,
 
 		goto out;
 	} else {
-		filter_ptr->rss_cfg.hash.addl_hdrs = headermask;
-		filter_ptr->rss_cfg.hash.hash_flds = hash_field;
-		filter_ptr->rss_cfg.hash.symm =
+		filter_ptr->rss_cfg.packet_hdr = headermask;
+		filter_ptr->rss_cfg.hashed_flds = hash_field;
+		filter_ptr->rss_cfg.symm =
 			(hash_function ==
 				RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ);
-		filter_ptr->rss_cfg.hash.hdr_type = ICE_RSS_ANY_HEADERS;
 
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx,
-					   &filter_ptr->rss_cfg.hash);
+				filter_ptr->rss_cfg.hashed_flds,
+				filter_ptr->rss_cfg.packet_hdr,
+				filter_ptr->rss_cfg.symm);
 		if (ret) {
 			rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1338,7 +1322,8 @@ ice_hash_destroy(struct ice_adapter *ad,
 		ICE_WRITE_REG(hw, VSIQF_HASH_CTL(vsi->vsi_id), reg);
 	} else {
 		ret = ice_rem_rss_cfg_wrap(pf, vsi->idx,
-					   &filter_ptr->rss_cfg.hash);
+				filter_ptr->rss_cfg.hashed_flds,
+				filter_ptr->rss_cfg.packet_hdr);
 		/* Fixme: Ignore the error if a rule does not exist.
 		 * Currently a rule for inputset change or symm turn on/off
 		 * will overwrite an exist rule, while application still

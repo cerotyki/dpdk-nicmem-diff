@@ -310,16 +310,16 @@ rte_node_edge_shrink(rte_node_t id, rte_edge_t size)
 		if (node->id == id) {
 			if (node->nb_edges < size) {
 				rte_errno = E2BIG;
-			} else {
-				node->nb_edges = size;
-				rc = size;
+				goto fail;
 			}
+			node->nb_edges = size;
+			rc = size;
 			break;
 		}
 	}
 
-	graph_spinlock_unlock();
 fail:
+	graph_spinlock_unlock();
 	return rc;
 }
 

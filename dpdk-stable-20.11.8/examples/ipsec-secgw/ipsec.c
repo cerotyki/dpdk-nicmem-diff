@@ -117,8 +117,7 @@ create_lookaside_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa,
 			set_ipsec_conf(sa, &(sess_conf.ipsec));
 
 			ips->security.ses = rte_security_session_create(ctx,
-					&sess_conf, ipsec_ctx->session_pool,
-					ipsec_ctx->session_priv_pool);
+					&sess_conf, ipsec_ctx->session_priv_pool);
 			if (ips->security.ses == NULL) {
 				RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -199,8 +198,7 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 		}
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-				&sess_conf, skt_ctx->session_pool,
-				skt_ctx->session_priv_pool);
+				&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -380,8 +378,7 @@ flow_create_failure:
 		sess_conf.userdata = (void *) sa;
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-					&sess_conf, skt_ctx->session_pool,
-					skt_ctx->session_priv_pool);
+					&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -425,7 +422,7 @@ int
 create_ipsec_esp_flow(struct ipsec_sa *sa)
 {
 	int ret = 0;
-	struct rte_flow_error err = {};
+	struct rte_flow_error err;
 	if (sa->direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS) {
 		RTE_LOG(ERR, IPSEC,
 			"No Flow director rule for Egress traffic\n");

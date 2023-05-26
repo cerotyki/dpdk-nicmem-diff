@@ -1,42 +1,48 @@
-#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2015 Intel Corporation
 
+from __future__ import print_function
+import subprocess
 from docutils import nodes
-from packaging.version import Version
+from distutils.version import LooseVersion
 from sphinx import __version__ as sphinx_version
+from sphinx.highlighting import PygmentsBridge
+from pygments.formatters.latex import LatexFormatter
 from os import listdir
 from os import environ
 from os.path import basename
 from os.path import dirname
 from os.path import join as path_join
-from sys import argv, stderr
 
-import configparser
+try:
+    # Python 2.
+    import ConfigParser as configparser
+except:
+    # Python 3.
+    import configparser
 
 try:
     import sphinx_rtd_theme
 
     html_theme = "sphinx_rtd_theme"
+    html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 except:
     print('Install the sphinx ReadTheDocs theme for improved html documentation '
-          'layout: https://sphinx-rtd-theme.readthedocs.io/',
-          file=stderr)
+          'layout: pip install sphinx_rtd_theme')
     pass
-
-stop_on_error = ('-W' in argv)
 
 project = 'Data Plane Development Kit'
 html_logo = '../logo/DPDK_logo_vertical_rev_small.png'
-if Version(sphinx_version) >= Version('3.5'):
-    html_permalinks = False
-else:
-    html_add_permalinks = ""
+latex_logo = '../logo/DPDK_logo_horizontal_tag.png'
+html_add_permalinks = ""
 html_show_copyright = False
 highlight_language = 'none'
 
-release = environ.setdefault('DPDK_VERSION', "None")
-version = release
+# If MAKEFLAGS is exported by the user, garbage text might end up in version
+version = subprocess.check_output(['make', '-sRrC', '../../', 'showversion'],
+                                  env=dict(environ, MAKEFLAGS=""))
+version = version.decode('utf-8').rstrip()
+release = version
 
 master_doc = 'index'
 
@@ -45,6 +51,46 @@ feature_str_len = 30
 
 # Figures, tables and code-blocks automatically numbered if they have caption
 numfig = True
+
+latex_documents = [
+    ('index',
+     'doc.tex',
+     '',
+     '',
+     'manual')
+]
+
+# Latex directives to be included directly in the latex/pdf docs.
+custom_latex_preamble = r"""
+\usepackage{textalpha}
+\RecustomVerbatimEnvironment{Verbatim}{Verbatim}{xleftmargin=5mm}
+\usepackage{etoolbox}
+\robustify\(
+\robustify\)
+"""
+
+# Configuration for the latex/pdf docs.
+latex_elements = {
+    'papersize': 'a4paper',
+    'pointsize': '11pt',
+    # remove blank pages
+    'classoptions': ',openany,oneside',
+    'babel': '\\usepackage[english]{babel}',
+    # customize Latex formatting
+    'preamble': custom_latex_preamble
+}
+
+
+# Override the default Latex formatter in order to modify the
+# code/verbatim blocks.
+class CustomLatexFormatter(LatexFormatter):
+    def __init__(self, **options):
+        super(CustomLatexFormatter, self).__init__(**options)
+        # Use the second smallest font size for code/verbatim blocks.
+        self.verboptions = r'formatcom=\footnotesize'
+
+# Replace the default latex formatter.
+PygmentsBridge.latex_formatter = CustomLatexFormatter
 
 # Configuration for man pages
 man_pages = [("testpmd_app_ug/run_app", "testpmd",
@@ -180,10 +226,7 @@ def generate_overview_table(output_filename, table_id, section, table_name, titl
         if not config.has_section(section):
             print("{}: File '{}' has no [{}] secton".format(warning,
                                                             ini_filename,
-                                                            section),
-                                                            file=stderr)
-            if stop_on_error:
-                raise Exception('Warning is treated as a failure')
+                                                            section))
             continue
 
         # Check for valid features names.
@@ -191,10 +234,7 @@ def generate_overview_table(output_filename, table_id, section, table_name, titl
             if name not in valid_features:
                 print("{}: Unknown feature '{}' in '{}'".format(warning,
                                                                 name,
-                                                                ini_filename),
-                                                                file=stderr)
-                if stop_on_error:
-                    raise Exception('Warning is treated as a failure')
+                                                                ini_filename))
                 continue
 
             if value:
@@ -385,10 +425,9 @@ def setup(app):
                             'Features availability in bbdev drivers',
                             'Feature')
 
-    if Version(sphinx_version) < Version('1.3.1'):
+    if LooseVersion(sphinx_version) < LooseVersion('1.3.1'):
         print('Upgrade sphinx to version >= 1.3.1 for '
-              'improved Figure/Table number handling.',
-              file=stderr)
+              'improved Figure/Table number handling.')
         # Add a role to handle :numref: references.
         app.add_role('numref', numref_role)
         # Process the numref references once the doctree has been created.

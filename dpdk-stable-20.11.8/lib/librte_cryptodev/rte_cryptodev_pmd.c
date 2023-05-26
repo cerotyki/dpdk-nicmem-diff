@@ -17,9 +17,6 @@ rte_cryptodev_pmd_parse_name_arg(const char *key __rte_unused,
 	struct rte_cryptodev_pmd_init_params *params = extra_args;
 	int n;
 
-	if (value == NULL || extra_args == NULL)
-		return -EINVAL;
-
 	n = strlcpy(params->name, value, RTE_CRYPTODEV_NAME_MAX_LEN);
 	if (n >= RTE_CRYPTODEV_NAME_MAX_LEN)
 		return -EINVAL;
@@ -36,10 +33,6 @@ rte_cryptodev_pmd_parse_uint_arg(const char *key __rte_unused,
 {
 	int i;
 	char *end;
-
-	if (value == NULL || extra_args == NULL)
-		return -EINVAL;
-
 	errno = 0;
 
 	i = strtol(value, &end, 10);
@@ -101,11 +94,11 @@ rte_cryptodev_pmd_create(const char *name,
 	struct rte_cryptodev *cryptodev;
 
 	if (params->name[0] != '\0') {
-		CDEV_LOG_INFO("User specified device name = %s", params->name);
+		CDEV_LOG_INFO("User specified device name = %s\n", params->name);
 		name = params->name;
 	}
 
-	CDEV_LOG_INFO("Creating cryptodev %s", name);
+	CDEV_LOG_INFO("Creating cryptodev %s\n", name);
 
 	CDEV_LOG_INFO("Initialisation parameters - name: %s,"
 			"socket id: %d, max queue pairs: %u",
@@ -147,7 +140,6 @@ int
 rte_cryptodev_pmd_destroy(struct rte_cryptodev *cryptodev)
 {
 	int retval;
-	void *dev_priv = cryptodev->data->dev_private;
 
 	CDEV_LOG_INFO("Closing crypto device %s", cryptodev->device->name);
 
@@ -157,7 +149,7 @@ rte_cryptodev_pmd_destroy(struct rte_cryptodev *cryptodev)
 		return retval;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(dev_priv);
+		rte_free(cryptodev->data->dev_private);
 
 
 	cryptodev->device = NULL;

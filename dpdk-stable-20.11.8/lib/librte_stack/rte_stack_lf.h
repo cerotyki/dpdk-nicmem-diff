@@ -13,11 +13,6 @@
 #else
 #include "rte_stack_lf_generic.h"
 #endif
-
-/**
- * Indicates that RTE_STACK_F_LF is supported.
- */
-#define RTE_STACK_LF_SUPPORTED
 #endif
 
 /**
@@ -32,6 +27,7 @@
  * @return
  *   Actual number of objects enqueued.
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 __rte_stack_lf_push(struct rte_stack *s,
 		    void * const *obj_table,
@@ -70,6 +66,7 @@ __rte_stack_lf_push(struct rte_stack *s,
  * @return
  *   - Actual number of objects popped.
  */
+__rte_experimental
 static __rte_always_inline unsigned int
 __rte_stack_lf_pop(struct rte_stack *s, void **obj_table, unsigned int n)
 {

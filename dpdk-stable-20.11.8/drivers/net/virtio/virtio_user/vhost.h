@@ -57,10 +57,6 @@ struct vhost_vring_addr {
 #define VHOST_USER_PROTOCOL_F_REPLY_ACK 3
 #endif
 
-#ifndef VHOST_USER_PROTOCOL_F_STATUS
-#define VHOST_USER_PROTOCOL_F_STATUS 16
-#endif
-
 enum vhost_user_request {
 	VHOST_USER_NONE = 0,
 	VHOST_USER_GET_FEATURES = 1,
@@ -81,18 +77,8 @@ enum vhost_user_request {
 	VHOST_USER_SET_PROTOCOL_FEATURES = 16,
 	VHOST_USER_GET_QUEUE_NUM = 17,
 	VHOST_USER_SET_VRING_ENABLE = 18,
-	VHOST_USER_SET_STATUS = 39,
-	VHOST_USER_GET_STATUS = 40,
 	VHOST_USER_MAX
 };
-
-#ifndef VHOST_BACKEND_F_IOTLB_MSG_V2
-#define VHOST_BACKEND_F_IOTLB_MSG_V2 1
-#endif
-
-#ifndef VHOST_BACKEND_F_IOTLB_BATCH
-#define VHOST_BACKEND_F_IOTLB_BATCH 2
-#endif
 
 extern const char * const vhost_msg_strings[VHOST_USER_MAX];
 
@@ -113,14 +99,9 @@ struct virtio_user_backend_ops {
 	int (*enable_qp)(struct virtio_user_dev *dev,
 			 uint16_t pair_idx,
 			 int enable);
-	int (*dma_map)(struct virtio_user_dev *dev, void *addr,
-				  uint64_t iova, size_t len);
-	int (*dma_unmap)(struct virtio_user_dev *dev, void *addr,
-				  uint64_t iova, size_t len);
 };
 
 extern struct virtio_user_backend_ops virtio_ops_user;
 extern struct virtio_user_backend_ops virtio_ops_kernel;
-extern struct virtio_user_backend_ops virtio_ops_vdpa;
 
 #endif

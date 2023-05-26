@@ -109,7 +109,7 @@ sfc_efx_rx_qrefill(struct sfc_efx_rxq *rxq)
 		     ++i, id = (id + 1) & rxq->ptr_mask) {
 			m = objs[i];
 
-			__rte_mbuf_raw_sanity_check(m);
+			MBUF_RAW_ALLOC_CHECK(m);
 
 			rxd = &rxq->sw_desc[id];
 			rxd->mbuf = m;
@@ -378,20 +378,10 @@ sfc_efx_rx_qdesc_status(struct sfc_dp_rxq *dp_rxq, uint16_t offset)
 
 boolean_t
 sfc_rx_check_scatter(size_t pdu, size_t rx_buf_size, uint32_t rx_prefix_size,
-		     boolean_t rx_scatter_enabled, uint32_t rx_scatter_max,
-		     const char **error)
+		     boolean_t rx_scatter_enabled, const char **error)
 {
-	uint32_t effective_rx_scatter_max;
-	uint32_t rx_scatter_bufs;
-
-	effective_rx_scatter_max = rx_scatter_enabled ? rx_scatter_max : 1;
-	rx_scatter_bufs = EFX_DIV_ROUND_UP(pdu + rx_prefix_size, rx_buf_size);
-
-	if (rx_scatter_bufs > effective_rx_scatter_max) {
-		if (rx_scatter_enabled)
-			*error = "Possible number of Rx scatter buffers exceeds maximum number";
-		else
-			*error = "Rx scatter is disabled and RxQ mbuf pool object size is too small";
+	if ((rx_buf_size < pdu + rx_prefix_size) && !rx_scatter_enabled) {
+		*error = "Rx scatter is disabled and RxQ mbuf pool object size is too small";
 		return B_FALSE;
 	}
 
@@ -528,21 +518,12 @@ static sfc_dp_rx_qpurge_t sfc_efx_rx_qpurge;
 static sfc_dp_rx_qstart_t sfc_efx_rx_qstart;
 static int
 sfc_efx_rx_qstart(struct sfc_dp_rxq *dp_rxq,
-		  __rte_unused unsigned int evq_read_ptr,
-		  const efx_rx_prefix_layout_t *pinfo)
+		  __rte_unused unsigned int evq_read_ptr)
 {
 	/* libefx-based datapath is specific to libefx-based PMD */
 	struct sfc_efx_rxq *rxq = sfc_efx_rxq_by_dp_rxq(dp_rxq);
 	struct sfc_rxq *crxq = sfc_rxq_by_dp_rxq(dp_rxq);
 	int rc;
-
-	/*
-	 * libefx API is used to extract information from Rx prefix and
-	 * it guarantees consistency. Just do length check to ensure
-	 * that we reserved space in Rx buffers correctly.
-	 */
-	if (rxq->prefix_size != pinfo->erpl_length)
-		return ENOTSUP;
 
 	rxq->common = crxq->common;
 
@@ -633,7 +614,7 @@ struct sfc_dp_rx sfc_efx_rx = {
 	.dp = {
 		.name		= SFC_KVARG_DATAPATH_EFX,
 		.type		= SFC_DP_RX,
-		.hw_fw_caps	= SFC_DP_HW_FW_CAP_RX_EFX,
+		.hw_fw_caps	= 0,
 	},
 	.features		= SFC_DP_RX_FEAT_INTR,
 	.dev_offload_capa	= DEV_RX_OFFLOAD_CHECKSUM |
@@ -769,7 +750,6 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 	struct sfc_rxq_info *rxq_info;
 	struct sfc_rxq *rxq;
 	struct sfc_evq *evq;
-	efx_rx_prefix_layout_t pinfo;
 	int rc;
 
 	sfc_log_init(sa, "sw_index=%u", sw_index);
@@ -821,13 +801,9 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 	if (rc != 0)
 		goto fail_rx_qcreate;
 
-	rc = efx_rx_prefix_get_layout(rxq->common, &pinfo);
-	if (rc != 0)
-		goto fail_prefix_get_layout;
-
 	efx_rx_qenable(rxq->common);
 
-	rc = sa->priv.dp_rx->qstart(rxq_info->dp, evq->read_ptr, &pinfo);
+	rc = sa->priv.dp_rx->qstart(rxq_info->dp, evq->read_ptr);
 	if (rc != 0)
 		goto fail_dp_qstart;
 
@@ -853,7 +829,6 @@ fail_mac_filter_default_rxq_set:
 fail_dp_qstart:
 	efx_rx_qdestroy(rxq->common);
 
-fail_prefix_get_layout:
 fail_rx_qcreate:
 fail_bad_contig_block_size:
 fail_mp_get_info:
@@ -1028,7 +1003,7 @@ sfc_rx_mb_pool_buf_size(struct sfc_adapter *sa, struct rte_mempool *mb_pool)
 	/* Make sure that end padding does not write beyond the buffer */
 	if (buf_aligned < nic_align_end) {
 		/*
-		 * Estimate space which can be lost. If guaranteed buffer
+		 * Estimate space which can be lost. If guarnteed buffer
 		 * size is odd, lost space is (nic_align_end - 1). More
 		 * accurate formula is below.
 		 */
@@ -1109,7 +1084,6 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	if (!sfc_rx_check_scatter(sa->port.pdu, buf_size,
 				  encp->enc_rx_prefix_size,
 				  (offloads & DEV_RX_OFFLOAD_SCATTER),
-				  encp->enc_rx_scatter_max,
 				  &error)) {
 		sfc_err(sa, "RxQ %u MTU check failed: %s", sw_index, error);
 		sfc_err(sa, "RxQ %u calculated Rx buffer size is %u vs "
@@ -1140,9 +1114,6 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	     DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM) != 0)
 		rxq_info->type_flags |= EFX_RXQ_FLAG_INNER_CLASSES;
 
-	if (offloads & DEV_RX_OFFLOAD_RSS_HASH)
-		rxq_info->type_flags |= EFX_RXQ_FLAG_RSS_HASH;
-
 	rc = sfc_ev_qinit(sa, SFC_EVQ_TYPE_RX, sw_index,
 			  evq_entries, socket_id, &evq);
 	if (rc != 0)
@@ -1168,13 +1139,6 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	rxq_info->refill_threshold =
 		RTE_MAX(rx_free_thresh, SFC_RX_REFILL_BULK);
 	rxq_info->refill_mb_pool = mb_pool;
-
-	if (rss->hash_support == EFX_RX_HASH_AVAILABLE && rss->channels > 0 &&
-	    (offloads & DEV_RX_OFFLOAD_RSS_HASH))
-		rxq_info->rxq_flags = SFC_RXQ_FLAG_RSS_HASH;
-	else
-		rxq_info->rxq_flags = 0;
-
 	rxq->buf_size = buf_size;
 
 	rc = sfc_dma_alloc(sa, "rxq", sw_index,
@@ -1190,7 +1154,10 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.buf_size = buf_size;
 	info.batch_max = encp->enc_rx_batch_max;
 	info.prefix_size = encp->enc_rx_prefix_size;
-	info.flags = rxq_info->rxq_flags;
+
+	if (rss->hash_support == EFX_RX_HASH_AVAILABLE && rss->channels > 0)
+		info.flags |= SFC_RXQ_FLAG_RSS_HASH;
+
 	info.rxq_entries = rxq_info->entries;
 	info.rxq_hw_ring = rxq->mem.esm_base;
 	info.evq_hw_index = sfc_evq_index_by_rxq_sw_index(sa, sw_index);
@@ -1199,7 +1166,6 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.hw_index = rxq->hw_index;
 	info.mem_bar = sa->mem_bar.esb_base;
 	info.vi_window_shift = encp->enc_vi_window_shift;
-	info.fcw_offset = sa->fcw_offset;
 
 	rc = sa->priv.dp_rx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				     &RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,

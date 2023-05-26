@@ -33,7 +33,7 @@
 
 #define RTE_IXGBE_DESCS_PER_LOOP    4
 
-#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM)
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64) || defined(RTE_ARCH_ARM)
 #define RTE_IXGBE_RXQ_REARM_THRESH      32
 #define RTE_IXGBE_MAX_RX_BURST          RTE_IXGBE_RXQ_REARM_THRESH
 #endif
@@ -113,11 +113,11 @@ struct ixgbe_rx_queue {
 	uint16_t rx_free_trigger; /**< triggers rx buffer allocation */
 	uint8_t            rx_using_sse;
 	/**< indicates that vector RX is in use */
-#ifdef RTE_LIB_SECURITY
+#ifdef RTE_LIBRTE_SECURITY
 	uint8_t            using_ipsec;
 	/**< indicates that IPsec RX feature is in use */
 #endif
-#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM)
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64) || defined(RTE_ARCH_ARM)
 	uint16_t            rxrearm_nb;     /**< number of remaining to be re-armed */
 	uint16_t            rxrearm_start;  /**< the idx we start the re-arming from */
 #endif
@@ -129,8 +129,6 @@ struct ixgbe_rx_queue {
 	uint8_t             crc_len;  /**< 0 if CRC stripped, 4 otherwise. */
 	uint8_t             drop_en;  /**< If not 0, set SRRCTL.Drop_En. */
 	uint8_t             rx_deferred_start; /**< not in global dev start. */
-	/** UDP frames with a 0 checksum can be marked as checksum errors. */
-	uint8_t             rx_udp_csum_zero_err;
 	/** flags to set in mbuf when a vlan is detected. */
 	uint64_t            vlan_flags;
 	uint64_t	    offloads; /**< Rx offloads with DEV_RX_OFFLOAD_* */
@@ -138,7 +136,6 @@ struct ixgbe_rx_queue {
 	struct rte_mbuf fake_mbuf;
 	/** hold packets to return to application */
 	struct rte_mbuf *rx_stage[RTE_PMD_IXGBE_RX_MAX_BURST*2];
-	const struct rte_memzone *mz;
 };
 
 /**
@@ -164,7 +161,7 @@ union ixgbe_tx_offload {
 		/* fields for TX offloading of tunnels */
 		uint64_t outer_l3_len:8; /**< Outer L3 (IP) Hdr Length. */
 		uint64_t outer_l2_len:8; /**< Outer L2 (MAC) Hdr Length. */
-#ifdef RTE_LIB_SECURITY
+#ifdef RTE_LIBRTE_SECURITY
 		/* inline ipsec related*/
 		uint64_t sa_idx:8;	/**< TX SA database entry index */
 		uint64_t sec_pad_len:4;	/**< padding length */
@@ -233,11 +230,10 @@ struct ixgbe_tx_queue {
 	struct ixgbe_advctx_info ctx_cache[IXGBE_CTX_NUM];
 	const struct ixgbe_txq_ops *ops;       /**< txq ops */
 	uint8_t             tx_deferred_start; /**< not in global dev start. */
-#ifdef RTE_LIB_SECURITY
+#ifdef RTE_LIBRTE_SECURITY
 	uint8_t		    using_ipsec;
 	/**< indicates that IPsec TX feature is in use */
 #endif
-	const struct rte_memzone *mz;
 };
 
 struct ixgbe_txq_ops {

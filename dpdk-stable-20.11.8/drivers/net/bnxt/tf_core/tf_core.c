@@ -34,8 +34,7 @@ tf_open_session(struct tf *tfp,
 	 * side. It is assumed that the Firmware will be supported if
 	 * firmware open session succeeds.
 	 */
-	if (parms->device_type != TF_DEVICE_TYPE_WH &&
-	    parms->device_type != TF_DEVICE_TYPE_SR) {
+	if (parms->device_type != TF_DEVICE_TYPE_WH) {
 		TFP_DRV_LOG(ERR,
 			    "Unsupported device type %d\n",
 			    parms->device_type);
@@ -44,7 +43,7 @@ tf_open_session(struct tf *tfp,
 
 	/* Verify control channel and build the beginning of session_id */
 	rc = sscanf(parms->ctrl_chan_name,
-		    "%x:%x:%x.%u",
+		    "%x:%x:%x.%d",
 		    &domain,
 		    &bus,
 		    &slot,
@@ -57,7 +56,7 @@ tf_open_session(struct tf *tfp,
 
 		/* Check parsing of bus/slot/device */
 		rc = sscanf(parms->ctrl_chan_name,
-			    "%x:%x.%u",
+			    "%x:%x.%d",
 			    &bus,
 			    &slot,
 			    &device);
@@ -82,7 +81,7 @@ tf_open_session(struct tf *tfp,
 		return rc;
 
 	TFP_DRV_LOG(INFO,
-		    "domain:%d, bus:%d, device:%u\n",
+		    "domain:%d, bus:%d, device:%d\n",
 		    parms->session_id.internal.domain,
 		    parms->session_id.internal.bus,
 		    parms->session_id.internal.device);
@@ -102,7 +101,7 @@ tf_attach_session(struct tf *tfp,
 
 	/* Verify control channel */
 	rc = sscanf(parms->ctrl_chan_name,
-		    "%x:%x:%x.%u",
+		    "%x:%x:%x.%d",
 		    &domain,
 		    &bus,
 		    &slot,
@@ -115,7 +114,7 @@ tf_attach_session(struct tf *tfp,
 
 	/* Verify 'attach' channel */
 	rc = sscanf(parms->attach_chan_name,
-		    "%x:%x:%x.%u",
+		    "%x:%x:%x.%d",
 		    &domain,
 		    &bus,
 		    &slot,
@@ -303,6 +302,7 @@ int tf_get_global_cfg(struct tf *tfp,
 	int rc = 0;
 	struct tf_session *tfs;
 	struct tf_dev_info *dev;
+	struct tf_dev_global_cfg_parms gparms = { 0 };
 
 	TF_CHECK_PARMS2(tfp, parms);
 
@@ -341,7 +341,12 @@ int tf_get_global_cfg(struct tf *tfp,
 		return -EOPNOTSUPP;
 	}
 
-	rc = dev->ops->tf_dev_get_global_cfg(tfp, parms);
+	gparms.dir = parms->dir;
+	gparms.type = parms->type;
+	gparms.offset = parms->offset;
+	gparms.config = parms->config;
+	gparms.config_sz_in_bytes = parms->config_sz_in_bytes;
+	rc = dev->ops->tf_dev_get_global_cfg(tfp, &gparms);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "%s: Global Cfg get failed, rc:%s\n",
@@ -365,6 +370,7 @@ int tf_set_global_cfg(struct tf *tfp,
 	int rc = 0;
 	struct tf_session *tfs;
 	struct tf_dev_info *dev;
+	struct tf_dev_global_cfg_parms gparms = { 0 };
 
 	TF_CHECK_PARMS2(tfp, parms);
 
@@ -403,7 +409,12 @@ int tf_set_global_cfg(struct tf *tfp,
 		return -EOPNOTSUPP;
 	}
 
-	rc = dev->ops->tf_dev_set_global_cfg(tfp, parms);
+	gparms.dir = parms->dir;
+	gparms.type = parms->type;
+	gparms.offset = parms->offset;
+	gparms.config = parms->config;
+	gparms.config_sz_in_bytes = parms->config_sz_in_bytes;
+	rc = dev->ops->tf_dev_set_global_cfg(tfp, &gparms);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "%s: Global Cfg set failed, rc:%s\n",
@@ -1335,44 +1346,6 @@ tf_alloc_tbl_scope(struct tf *tfp,
 	} else {
 		TFP_DRV_LOG(ERR,
 			    "Alloc table scope not supported by device\n");
-		return -EINVAL;
-	}
-
-	return rc;
-}
-int
-tf_map_tbl_scope(struct tf *tfp,
-		   struct tf_map_tbl_scope_parms *parms)
-{
-	struct tf_session *tfs;
-	struct tf_dev_info *dev;
-	int rc;
-
-	TF_CHECK_PARMS2(tfp, parms);
-
-	/* Retrieve the session information */
-	rc = tf_session_get_session(tfp, &tfs);
-	if (rc) {
-		TFP_DRV_LOG(ERR,
-			    "Failed to lookup session, rc:%s\n",
-			    strerror(-rc));
-		return rc;
-	}
-
-	/* Retrieve the device information */
-	rc = tf_session_get_device(tfs, &dev);
-	if (rc) {
-		TFP_DRV_LOG(ERR,
-			    "Failed to lookup device, rc:%s\n",
-			    strerror(-rc));
-		return rc;
-	}
-
-	if (dev->ops->tf_dev_map_tbl_scope != NULL) {
-		rc = dev->ops->tf_dev_map_tbl_scope(tfp, parms);
-	} else {
-		TFP_DRV_LOG(ERR,
-			    "Map table scope not supported by device\n");
 		return -EINVAL;
 	}
 

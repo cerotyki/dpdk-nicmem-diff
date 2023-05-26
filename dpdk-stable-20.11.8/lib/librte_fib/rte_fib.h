@@ -19,8 +19,6 @@
  * for IPv4 Longest Prefix Match
  */
 
-#include <stdint.h>
-
 #include <rte_compat.h>
 
 #ifdef __cplusplus
@@ -36,7 +34,8 @@ struct rte_rib;
 /** Type of FIB struct */
 enum rte_fib_type {
 	RTE_FIB_DUMMY,		/**< RIB tree based FIB */
-	RTE_FIB_DIR24_8		/**< DIR24_8 based FIB */
+	RTE_FIB_DIR24_8,	/**< DIR24_8 based FIB */
+	RTE_FIB_TYPE_MAX
 };
 
 /** Modify FIB function */
@@ -57,25 +56,6 @@ enum rte_fib_dir24_8_nh_sz {
 	RTE_FIB_DIR24_8_2B,
 	RTE_FIB_DIR24_8_4B,
 	RTE_FIB_DIR24_8_8B
-};
-
-/** Type of lookup function implementation */
-enum rte_fib_lookup_type {
-	RTE_FIB_LOOKUP_DEFAULT,
-	/**< Selects the best implementation based on the max simd bitwidth */
-	RTE_FIB_LOOKUP_DIR24_8_SCALAR_MACRO,
-	/**< Macro based lookup function */
-	RTE_FIB_LOOKUP_DIR24_8_SCALAR_INLINE,
-	/**<
-	 * Lookup implementation using inlined functions
-	 * for different next hop sizes
-	 */
-	RTE_FIB_LOOKUP_DIR24_8_SCALAR_UNI,
-	/**<
-	 * Unified lookup function for all next hop sizes
-	 */
-	RTE_FIB_LOOKUP_DIR24_8_VECTOR_AVX512
-	/**< Vector implementation using AVX512 */
 };
 
 /** FIB configuration structure */
@@ -128,6 +108,8 @@ rte_fib_find_existing(const char *name);
  *
  * @param fib
  *   FIB object handle
+ * @return
+ *   None
  */
 __rte_experimental
 void
@@ -195,7 +177,7 @@ rte_fib_lookup_bulk(struct rte_fib *fib, uint32_t *ips,
  *   FIB object handle
  * @return
  *   Pointer on the dataplane struct on success
- *   NULL otherwise
+ *   NULL othervise
  */
 __rte_experimental
 void *
@@ -208,27 +190,11 @@ rte_fib_get_dp(struct rte_fib *fib);
  *   FIB object handle
  * @return
  *   Pointer on the RIB on success
- *   NULL otherwise
+ *   NULL othervise
  */
 __rte_experimental
 struct rte_rib *
 rte_fib_get_rib(struct rte_fib *fib);
-
-/**
- * Set lookup function based on type
- *
- * @param fib
- *   FIB object handle
- * @param type
- *   type of lookup function
- *
- * @return
- *   0 on success
- *   -EINVAL on failure
- */
-__rte_experimental
-int
-rte_fib_select_lookup(struct rte_fib *fib, enum rte_fib_lookup_type type);
 
 #ifdef __cplusplus
 }

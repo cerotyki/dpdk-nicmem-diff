@@ -12,7 +12,6 @@
 #include "efx.h"
 
 #include "sfc.h"
-#include "sfc_debug.h"
 #include "sfc_log.h"
 
 boolean_t

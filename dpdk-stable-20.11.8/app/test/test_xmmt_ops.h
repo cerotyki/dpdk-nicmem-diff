@@ -7,7 +7,7 @@
 
 #include <rte_vect.h>
 
-#if defined(RTE_ARCH_ARM)
+#if defined(RTE_ARCH_ARM) || defined(RTE_ARCH_ARM64)
 
 /* vect_* abstraction implementation using NEON */
 

@@ -70,19 +70,20 @@ Compiling the Application
 
 * Compile Application
 
-    To compile the sample application see :doc:`compiling`.
+    .. code-block:: console
+
+         make -C examples/fips_validation
 
 *  Run ``dos2unix`` on the request files
 
     .. code-block:: console
 
          dos2unix AES/req/*
-         dos2unix GCM/req/*
+         dos2unix AES_GCM/req/*
          dos2unix CCM/req/*
          dos2unix CMAC/req/*
          dos2unix HMAC/req/*
          dos2unix TDES/req/*
-         dos2unix SHA/req/*
 
 Running the Application
 -----------------------
@@ -91,11 +92,10 @@ The application requires a number of command line options:
 
     .. code-block:: console
 
-         ./dpdk-fips_validation [EAL options]
+         ./fips_validation [EAL options]
          -- --req-file FILE_PATH/FOLDER_PATH
          --rsp-file FILE_PATH/FOLDER_PATH
          [--cryptodev DEVICE_NAME] [--cryptodev-id ID] [--path-is-folder]
-         --mbuf-dataroom DATAROOM_SIZE
 
 where,
   * req-file: The path of the request file or folder, separated by
@@ -111,18 +111,13 @@ where,
   * path-is-folder: If presented the application expects req-file and rsp-file
     are folder paths.
 
-  * mbuf-dataroom: By default the application creates mbuf pool with maximum
-    possible data room (65535 bytes). If the user wants to test scatter-gather
-    list feature of the PMD he or she may set this value to reduce the dataroom
-    size so that the input data may be divided into multiple chained mbufs.
-
 
 To run the application in linux environment to test one AES FIPS test data
 file for crypto_aesni_mb PMD, issue the command:
 
 .. code-block:: console
 
-    $ ./dpdk-fips_validation --vdev crypto_aesni_mb --
+    $ ./fips_validation --vdev crypto_aesni_mb --
     --req-file /PATH/TO/REQUEST/FILE.req --rsp-file ./PATH/TO/RESPONSE/FILE.rsp
     --cryptodev crypto_aesni_mb
 
@@ -131,7 +126,7 @@ data files in one folder for crypto_aesni_gcm PMD, issue the command:
 
 .. code-block:: console
 
-    $ ./dpdk-fips_validation --vdev crypto_aesni_gcm0 --
+    $ ./fips_validation --vdev crypto_aesni_gcm0 --
     --req-file /PATH/TO/REQUEST/FILE/FOLDER/
     --rsp-file ./PATH/TO/RESPONSE/FILE/FOLDER/
     --cryptodev-id 0 --path-is-folder

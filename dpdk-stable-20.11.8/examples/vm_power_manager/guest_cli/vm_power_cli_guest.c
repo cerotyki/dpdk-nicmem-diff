@@ -19,6 +19,7 @@
 #include <rte_ethdev.h>
 
 #include <rte_power.h>
+#include <guest_channel.h>
 
 #include "vm_power_cli_guest.h"
 
@@ -37,9 +38,9 @@ union PFID {
 	uint64_t pfid;
 };
 
-static struct rte_power_channel_packet policy;
+static struct channel_packet policy;
 
-struct rte_power_channel_packet *
+struct channel_packet *
 get_policy(void)
 {
 	return &policy;
@@ -48,7 +49,7 @@ get_policy(void)
 int
 set_policy_mac(int port, int idx)
 {
-	struct rte_power_channel_packet *policy;
+	struct channel_packet *policy;
 	union PFID pfid;
 	int ret;
 
@@ -72,7 +73,7 @@ set_policy_mac(int port, int idx)
 }
 
 int
-set_policy_defaults(struct rte_power_channel_packet *pkt)
+set_policy_defaults(struct channel_packet *pkt)
 {
 	int ret;
 
@@ -102,10 +103,10 @@ set_policy_defaults(struct rte_power_channel_packet *pkt)
 	pkt->timer_policy.hours_to_use_traffic_profile[0] = 8;
 	pkt->timer_policy.hours_to_use_traffic_profile[1] = 10;
 
-	pkt->core_type = RTE_POWER_CORE_TYPE_VIRTUAL;
-	pkt->workload = RTE_POWER_WL_LOW;
-	pkt->policy_to_use = RTE_POWER_POLICY_TIME;
-	pkt->command = RTE_POWER_PKT_POLICY;
+	pkt->core_type = CORE_TYPE_VIRTUAL;
+	pkt->workload = LOW;
+	pkt->policy_to_use = TIME;
+	pkt->command = PKT_POLICY;
 	strlcpy(pkt->vm_name, "ubuntu2", sizeof(pkt->vm_name));
 
 	return 0;
@@ -144,7 +145,7 @@ struct cmd_freq_list_result {
 };
 
 static int
-query_data(struct rte_power_channel_packet *pkt, unsigned int lcore_id)
+query_data(struct channel_packet *pkt, unsigned int lcore_id)
 {
 	int ret;
 	ret = rte_power_guest_channel_send_msg(pkt, lcore_id);
@@ -156,19 +157,19 @@ query_data(struct rte_power_channel_packet *pkt, unsigned int lcore_id)
 }
 
 static int
-receive_freq_list(struct rte_power_channel_packet_freq_list *pkt_freq_list,
+receive_freq_list(struct channel_packet_freq_list *pkt_freq_list,
 		unsigned int lcore_id)
 {
 	int ret;
 
 	ret = rte_power_guest_channel_receive_msg(pkt_freq_list,
-			sizeof(*pkt_freq_list),
+			sizeof(struct channel_packet_freq_list),
 			lcore_id);
 	if (ret < 0) {
 		RTE_LOG(ERR, GUEST_CLI, "Error receiving message.\n");
 		return -1;
 	}
-	if (pkt_freq_list->command != RTE_POWER_FREQ_LIST) {
+	if (pkt_freq_list->command != CPU_POWER_FREQ_LIST) {
 		RTE_LOG(ERR, GUEST_CLI, "Unexpected message received.\n");
 		return -1;
 	}
@@ -182,14 +183,14 @@ cmd_query_freq_list_parsed(void *parsed_result,
 {
 	struct cmd_freq_list_result *res = parsed_result;
 	unsigned int lcore_id;
-	struct rte_power_channel_packet_freq_list pkt_freq_list;
-	struct rte_power_channel_packet pkt;
+	struct channel_packet_freq_list pkt_freq_list;
+	struct channel_packet pkt;
 	bool query_list = false;
 	int ret;
 	char *ep;
 
-	memset(&pkt, 0, sizeof(pkt));
-	memset(&pkt_freq_list, 0, sizeof(pkt_freq_list));
+	memset(&pkt, 0, sizeof(struct channel_packet));
+	memset(&pkt_freq_list, 0, sizeof(struct channel_packet_freq_list));
 
 	if (!strcmp(res->cpu_num, "all")) {
 
@@ -202,18 +203,18 @@ cmd_query_freq_list_parsed(void *parsed_result,
 			return;
 		}
 
-		pkt.command = RTE_POWER_QUERY_FREQ_LIST;
+		pkt.command = CPU_POWER_QUERY_FREQ_LIST;
 		strlcpy(pkt.vm_name, policy.vm_name, sizeof(pkt.vm_name));
 		query_list = true;
 	} else {
 		errno = 0;
 		lcore_id = (unsigned int)strtol(res->cpu_num, &ep, 10);
-		if (errno != 0 || lcore_id >= RTE_POWER_MAX_VCPU_PER_VM ||
+		if (errno != 0 || lcore_id >= MAX_VCPU_PER_VM ||
 			ep == res->cpu_num) {
 			cmdline_printf(cl, "Invalid parameter provided.\n");
 			return;
 		}
-		pkt.command = RTE_POWER_QUERY_FREQ;
+		pkt.command = CPU_POWER_QUERY_FREQ;
 		strlcpy(pkt.vm_name, policy.vm_name, sizeof(pkt.vm_name));
 		pkt.resource_id = lcore_id;
 	}
@@ -266,19 +267,19 @@ struct cmd_query_caps_result {
 };
 
 static int
-receive_capabilities(struct rte_power_channel_packet_caps_list *pkt_caps_list,
+receive_capabilities(struct channel_packet_caps_list *pkt_caps_list,
 		unsigned int lcore_id)
 {
 	int ret;
 
 	ret = rte_power_guest_channel_receive_msg(pkt_caps_list,
-		sizeof(*pkt_caps_list),
+		sizeof(struct channel_packet_caps_list),
 		lcore_id);
 	if (ret < 0) {
 		RTE_LOG(ERR, GUEST_CLI, "Error receiving message.\n");
 		return -1;
 	}
-	if (pkt_caps_list->command != RTE_POWER_CAPS_LIST) {
+	if (pkt_caps_list->command != CPU_POWER_CAPS_LIST) {
 		RTE_LOG(ERR, GUEST_CLI, "Unexpected message received.\n");
 		return -1;
 	}
@@ -292,14 +293,14 @@ cmd_query_caps_list_parsed(void *parsed_result,
 {
 	struct cmd_query_caps_result *res = parsed_result;
 	unsigned int lcore_id;
-	struct rte_power_channel_packet_caps_list pkt_caps_list;
-	struct rte_power_channel_packet pkt;
+	struct channel_packet_caps_list pkt_caps_list;
+	struct channel_packet pkt;
 	bool query_list = false;
 	int ret;
 	char *ep;
 
-	memset(&pkt, 0, sizeof(pkt));
-	memset(&pkt_caps_list, 0, sizeof(pkt_caps_list));
+	memset(&pkt, 0, sizeof(struct channel_packet));
+	memset(&pkt_caps_list, 0, sizeof(struct channel_packet_caps_list));
 
 	if (!strcmp(res->cpu_num, "all")) {
 
@@ -312,18 +313,18 @@ cmd_query_caps_list_parsed(void *parsed_result,
 			return;
 		}
 
-		pkt.command = RTE_POWER_QUERY_CAPS_LIST;
+		pkt.command = CPU_POWER_QUERY_CAPS_LIST;
 		strlcpy(pkt.vm_name, policy.vm_name, sizeof(pkt.vm_name));
 		query_list = true;
 	} else {
 		errno = 0;
 		lcore_id = (unsigned int)strtol(res->cpu_num, &ep, 10);
-		if (errno != 0 || lcore_id >= RTE_POWER_MAX_VCPU_PER_VM ||
+		if (errno != 0 || lcore_id >= MAX_VCPU_PER_VM ||
 			ep == res->cpu_num) {
 			cmdline_printf(cl, "Invalid parameter provided.\n");
 			return;
 		}
-		pkt.command = RTE_POWER_QUERY_CAPS;
+		pkt.command = CPU_POWER_QUERY_CAPS;
 		strlcpy(pkt.vm_name, policy.vm_name, sizeof(pkt.vm_name));
 		pkt.resource_id = lcore_id;
 	}
@@ -343,15 +344,13 @@ cmd_query_caps_list_parsed(void *parsed_result,
 		unsigned int i;
 		for (i = 0; i < pkt_caps_list.num_vcpu; ++i)
 			cmdline_printf(cl, "Capabilities of [%d] vcore are:"
-					" turbo possibility: %" PRId64 ", "
-					"is priority core: %" PRId64 ".\n",
+					" turbo possibility: %ld, is priority core: %ld.\n",
 					i,
 					pkt_caps_list.turbo[i],
 					pkt_caps_list.priority[i]);
 	} else {
 		cmdline_printf(cl, "Capabilities of [%d] vcore are:"
-				" turbo possibility: %" PRId64 ", "
-				"is priority core: %" PRId64 ".\n",
+				" turbo possibility: %ld, is priority core: %ld.\n",
 				lcore_id,
 				pkt_caps_list.turbo[lcore_id],
 				pkt_caps_list.priority[lcore_id]);
@@ -379,7 +378,7 @@ cmdline_parse_inst_t cmd_query_caps_list = {
 static int
 check_response_cmd(unsigned int lcore_id, int *result)
 {
-	struct rte_power_channel_packet pkt;
+	struct channel_packet pkt;
 	int ret;
 
 	ret = rte_power_guest_channel_receive_msg(&pkt, sizeof pkt, lcore_id);
@@ -387,10 +386,10 @@ check_response_cmd(unsigned int lcore_id, int *result)
 		return -1;
 
 	switch (pkt.command) {
-	case(RTE_POWER_CMD_ACK):
+	case(CPU_POWER_CMD_ACK):
 		*result = 1;
 		break;
-	case(RTE_POWER_CMD_NACK):
+	case(CPU_POWER_CMD_NACK):
 		*result = 0;
 		break;
 	default:
@@ -447,7 +446,7 @@ cmdline_parse_token_string_t cmd_set_cpu_freq =
 			set_cpu_freq, "set_cpu_freq");
 cmdline_parse_token_num_t cmd_set_cpu_freq_core_num =
 	TOKEN_NUM_INITIALIZER(struct cmd_set_cpu_freq_result,
-			lcore_id, RTE_UINT8);
+			lcore_id, UINT8);
 cmdline_parse_token_string_t cmd_set_cpu_freq_cmd_cmd =
 	TOKEN_STRING_INITIALIZER(struct cmd_set_cpu_freq_result,
 			cmd, "up#down#min#max#enable_turbo#disable_turbo");
@@ -472,7 +471,7 @@ struct cmd_send_policy_result {
 };
 
 static inline int
-send_policy(struct rte_power_channel_packet *pkt, struct cmdline *cl)
+send_policy(struct channel_packet *pkt, struct cmdline *cl)
 {
 	int ret;
 

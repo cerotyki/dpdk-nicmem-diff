@@ -224,7 +224,6 @@ struct iavf_hw_capabilities {
 	u32 num_tx_qp;
 	u32 base_queue;
 	u32 num_msix_vectors_vf;
-	u32 max_mtu;
 	bool apm_wol_support;
 	enum iavf_acpi_programming_method acpi_prog_method;
 	bool proxy_support;
@@ -1003,7 +1002,7 @@ struct iavf_profile_tlv_section_record {
 	u8 data[12];
 };
 
-/* Generic AQ section in profile */
+/* Generic AQ section in proflie */
 struct iavf_profile_aq_section {
 	u16 opcode;
 	u16 flags;

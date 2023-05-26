@@ -42,12 +42,6 @@ static int
 testsuite_setup(void)
 {
 	uint8_t count;
-
-	total = 0;
-	passed = 0;
-	failed = 0;
-	unsupported = 0;
-
 	count = rte_rawdev_count();
 	if (!count) {
 		SKELDEV_TEST_INFO("\tNo existing rawdev; "
@@ -112,12 +106,12 @@ test_rawdev_info_get(void)
 	struct rte_rawdev_info rdev_info = {0};
 	struct skeleton_rawdev_conf skel_conf = {0};
 
-	ret = rte_rawdev_info_get(test_dev_id, NULL, 0);
+	ret = rte_rawdev_info_get(test_dev_id, NULL);
 	RTE_TEST_ASSERT(ret == -EINVAL, "Expected -EINVAL, %d", ret);
 
 	rdev_info.dev_private = &skel_conf;
 
-	ret = rte_rawdev_info_get(test_dev_id, &rdev_info, sizeof(skel_conf));
+	ret = rte_rawdev_info_get(test_dev_id, &rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to get raw dev info");
 
 	return TEST_SUCCESS;
@@ -132,7 +126,7 @@ test_rawdev_configure(void)
 	struct skeleton_rawdev_conf rdev_conf_get = {0};
 
 	/* Check invalid configuration */
-	ret = rte_rawdev_configure(test_dev_id, NULL, 0);
+	ret = rte_rawdev_configure(test_dev_id, NULL);
 	RTE_TEST_ASSERT(ret == -EINVAL,
 			"Null configure; Expected -EINVAL, got %d", ret);
 
@@ -143,14 +137,12 @@ test_rawdev_configure(void)
 
 	rdev_info.dev_private = &rdev_conf_set;
 	ret = rte_rawdev_configure(test_dev_id,
-				   (rte_rawdev_obj_t)&rdev_info,
-				   sizeof(rdev_conf_set));
+				   (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to configure rawdev (%d)", ret);
 
 	rdev_info.dev_private = &rdev_conf_get;
 	ret = rte_rawdev_info_get(test_dev_id,
-				  (rte_rawdev_obj_t)&rdev_info,
-				  sizeof(rdev_conf_get));
+				  (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret,
 				"Failed to obtain rawdev configuration (%d)",
 				ret);
@@ -178,8 +170,7 @@ test_rawdev_queue_default_conf_get(void)
 	/* Get the current configuration */
 	rdev_info.dev_private = &rdev_conf_get;
 	ret = rte_rawdev_info_get(test_dev_id,
-				  (rte_rawdev_obj_t)&rdev_info,
-				  sizeof(rdev_conf_get));
+				  (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to obtain rawdev configuration (%d)",
 				ret);
 
@@ -191,7 +182,7 @@ test_rawdev_queue_default_conf_get(void)
 	 * depth = DEF_DEPTH
 	 */
 	for (i = 0; i < rdev_conf_get.num_queues; i++) {
-		rte_rawdev_queue_conf_get(test_dev_id, i, &q, sizeof(q));
+		rte_rawdev_queue_conf_get(test_dev_id, i, &q);
 		RTE_TEST_ASSERT_EQUAL(q.depth, SKELETON_QUEUE_DEF_DEPTH,
 				      "Invalid default depth of queue (%d)",
 				      q.depth);
@@ -227,8 +218,7 @@ test_rawdev_queue_setup(void)
 	/* Get the current configuration */
 	rdev_info.dev_private = &rdev_conf_get;
 	ret = rte_rawdev_info_get(test_dev_id,
-				  (rte_rawdev_obj_t)&rdev_info,
-				  sizeof(rdev_conf_get));
+				  (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret,
 				"Failed to obtain rawdev configuration (%d)",
 				ret);
@@ -241,11 +231,11 @@ test_rawdev_queue_setup(void)
 	/* Modify the queue depth for Queue 0 and attach it */
 	qset.depth = 15;
 	qset.state = SKELETON_QUEUE_ATTACH;
-	ret = rte_rawdev_queue_setup(test_dev_id, 0, &qset, sizeof(qset));
+	ret = rte_rawdev_queue_setup(test_dev_id, 0, &qset);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to setup queue (%d)", ret);
 
 	/* Now, fetching the queue 0 should show depth as 15 */
-	ret = rte_rawdev_queue_conf_get(test_dev_id, 0, &qget, sizeof(qget));
+	ret = rte_rawdev_queue_conf_get(test_dev_id, 0, &qget);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to get queue config (%d)", ret);
 
 	RTE_TEST_ASSERT_EQUAL(qset.depth, qget.depth,
@@ -269,7 +259,7 @@ test_rawdev_queue_release(void)
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to release queue 0; (%d)", ret);
 
 	/* Now, fetching the queue 0 should show depth as default */
-	ret = rte_rawdev_queue_conf_get(test_dev_id, 0, &qget, sizeof(qget));
+	ret = rte_rawdev_queue_conf_get(test_dev_id, 0, &qget);
 	RTE_TEST_ASSERT_SUCCESS(ret, "Failed to get queue config (%d)", ret);
 
 	RTE_TEST_ASSERT_EQUAL(qget.depth, SKELETON_QUEUE_DEF_DEPTH,
@@ -295,7 +285,6 @@ test_rawdev_attr_set_get(void)
 	dummy_value = &set_value;
 	*dummy_value = 200;
 	ret = rte_rawdev_set_attr(test_dev_id, "Test2", (uintptr_t)dummy_value);
-	RTE_TEST_ASSERT(!ret, "Unable to set an attribute (Test2)");
 
 	/* Check if attributes have been set */
 	ret = rte_rawdev_get_attr(test_dev_id, "Test1", &ret_value);
@@ -338,8 +327,7 @@ test_rawdev_start_stop(void)
 	dummy_firmware = NULL;
 
 	rte_rawdev_start(test_dev_id);
-	ret = rte_rawdev_info_get(test_dev_id, (rte_rawdev_obj_t)&rdev_info,
-			sizeof(rdev_conf_get));
+	ret = rte_rawdev_info_get(test_dev_id, (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret,
 				"Failed to obtain rawdev configuration (%d)",
 				ret);
@@ -348,8 +336,7 @@ test_rawdev_start_stop(void)
 			      rdev_conf_get.device_state);
 
 	rte_rawdev_stop(test_dev_id);
-	ret = rte_rawdev_info_get(test_dev_id, (rte_rawdev_obj_t)&rdev_info,
-			sizeof(rdev_conf_get));
+	ret = rte_rawdev_info_get(test_dev_id, (rte_rawdev_obj_t)&rdev_info);
 	RTE_TEST_ASSERT_SUCCESS(ret,
 				"Failed to obtain rawdev configuration (%d)",
 				ret);
@@ -368,34 +355,42 @@ static int
 test_rawdev_enqdeq(void)
 {
 	int ret;
+	unsigned int count = 1;
 	uint16_t queue_id = 0;
-	struct rte_rawdev_buf buffer;
-	struct rte_rawdev_buf *buffers[1];
-	struct rte_rawdev_buf deq_buffer;
-	struct rte_rawdev_buf *deq_buffers[1];
+	struct rte_rawdev_buf buffers[1];
+	struct rte_rawdev_buf *deq_buffers = NULL;
 
-	buffers[0] = &buffer;
-	buffer.buf_addr = malloc(strlen(TEST_DEV_NAME) + 3);
-	if (!buffer.buf_addr)
-		return TEST_FAILED;
-	snprintf(buffer.buf_addr, strlen(TEST_DEV_NAME) + 2, "%s%d",
+	buffers[0].buf_addr = malloc(strlen(TEST_DEV_NAME) + 3);
+	if (!buffers[0].buf_addr)
+		goto cleanup;
+	snprintf(buffers[0].buf_addr, strlen(TEST_DEV_NAME) + 2, "%s%d",
 		 TEST_DEV_NAME, 0);
 
-	ret = rte_rawdev_enqueue_buffers(test_dev_id, buffers,
-					 RTE_DIM(buffers), &queue_id);
-	RTE_TEST_ASSERT_EQUAL((unsigned int)ret, RTE_DIM(buffers),
+	ret = rte_rawdev_enqueue_buffers(test_dev_id,
+					 (struct rte_rawdev_buf **)&buffers,
+					 count, &queue_id);
+	RTE_TEST_ASSERT_EQUAL((unsigned int)ret, count,
 			      "Unable to enqueue buffers");
 
-	deq_buffers[0] = &deq_buffer;
-	ret = rte_rawdev_dequeue_buffers(test_dev_id, deq_buffers,
-					RTE_DIM(deq_buffers), &queue_id);
-	RTE_TEST_ASSERT_EQUAL((unsigned int)ret, RTE_DIM(buffers),
-			      "Unable to dequeue buffers");
-	RTE_TEST_ASSERT_EQUAL(deq_buffers[0]->buf_addr, buffers[0]->buf_addr,
-			      "Did not retrieve expected object");
+	deq_buffers = malloc(sizeof(struct rte_rawdev_buf) * count);
+	if (!deq_buffers)
+		goto cleanup;
 
-	free(buffer.buf_addr);
+	ret = rte_rawdev_dequeue_buffers(test_dev_id,
+					(struct rte_rawdev_buf **)&deq_buffers,
+					count, &queue_id);
+	RTE_TEST_ASSERT_EQUAL((unsigned int)ret, count,
+			      "Unable to dequeue buffers");
+
+	if (deq_buffers)
+		free(deq_buffers);
+
 	return TEST_SUCCESS;
+cleanup:
+	if (buffers[0].buf_addr)
+		free(buffers[0].buf_addr);
+
+	return TEST_FAILED;
 }
 
 static void skeldev_test_run(int (*setup)(void),

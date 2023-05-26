@@ -57,7 +57,7 @@ New Features
 
 * **Enabled Virtio 1.0 support.**
 
-  Enabled Virtio 1.0 support for Virtio PMD.
+  Enabled Virtio 1.0 support for Virtio pmd driver.
 
 * **Supported Virtio for ARM.**
 

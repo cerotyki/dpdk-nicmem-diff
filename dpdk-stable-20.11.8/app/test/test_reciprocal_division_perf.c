@@ -71,12 +71,10 @@ test_reciprocal_division_perf(void)
 			tot_cyc_n);
 	printf("Total number of cycles reciprocal division : %"PRIu64"\n",
 			tot_cyc_r);
-	if (i != 0) {
-		printf("Cycles per division(normal) : %3.2f\n",
-				((double)tot_cyc_n)/i);
-		printf("Cycles per division(reciprocal) : %3.2f\n\n",
-				((double)tot_cyc_r)/i);
-	}
+	printf("Cycles per division(normal) : %3.2f\n",
+			((double)tot_cyc_n)/i);
+	printf("Cycles per division(reciprocal) : %3.2f\n\n",
+			((double)tot_cyc_r)/i);
 
 	tot_cyc_n = 0;
 	tot_cyc_r = 0;
@@ -113,12 +111,11 @@ test_reciprocal_division_perf(void)
 			tot_cyc_n);
 	printf("Total number of cycles reciprocal division : %"PRIu64"\n",
 			tot_cyc_r);
-	if (i != 0) {
-		printf("Cycles per division(normal) : %3.2f\n",
-				((double)tot_cyc_n)/i);
-		printf("Cycles per division(reciprocal) : %3.2f\n\n",
-				((double)tot_cyc_r)/i);
-	}
+	printf("Cycles per division(normal) : %3.2f\n",
+			((double)tot_cyc_n)/i);
+	printf("Cycles per division(reciprocal) : %3.2f\n\n",
+			((double)tot_cyc_r)/i);
+
 	tot_cyc_n = 0;
 	tot_cyc_r = 0;
 
@@ -155,12 +152,10 @@ test_reciprocal_division_perf(void)
 			tot_cyc_n);
 	printf("Total number of cycles reciprocal division : %"PRIu64"\n",
 			tot_cyc_r);
-	if (i != 0) {
-		printf("Cycles per division(normal) : %3.2f\n",
-				((double)tot_cyc_n)/i);
-		printf("Cycles per division(reciprocal) : %3.2f\n\n",
-				((double)tot_cyc_r)/i);
-	}
+	printf("Cycles per division(normal) : %3.2f\n",
+			((double)tot_cyc_n)/i);
+	printf("Cycles per division(reciprocal) : %3.2f\n\n",
+			((double)tot_cyc_r)/i);
 
 	tot_cyc_n = 0;
 	tot_cyc_r = 0;
@@ -195,12 +190,10 @@ test_reciprocal_division_perf(void)
 			tot_cyc_n);
 	printf("Total number of cycles reciprocal division : %"PRIu64"\n",
 			tot_cyc_r);
-	if (i != 0) {
-		printf("Cycles per division(normal) : %3.2f\n",
-				((double)tot_cyc_n)/i);
-		printf("Cycles per division(reciprocal) : %3.2f\n",
-				((double)tot_cyc_r)/i);
-	}
+	printf("Cycles per division(normal) : %3.2f\n",
+			((double)tot_cyc_n)/i);
+	printf("Cycles per division(reciprocal) : %3.2f\n",
+			((double)tot_cyc_r)/i);
 
 	return result;
 }

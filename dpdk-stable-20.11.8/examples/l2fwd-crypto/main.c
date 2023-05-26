@@ -43,7 +43,7 @@
 #include <rte_prefetch.h>
 #include <rte_random.h>
 #include <rte_hexdump.h>
-#ifdef RTE_CRYPTO_SCHEDULER
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
 #include <rte_cryptodev_scheduler.h>
 #endif
 
@@ -252,9 +252,11 @@ struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 struct l2fwd_crypto_statistics crypto_statistics[RTE_CRYPTO_MAX_DEVS];
 
 /* A tsc-based timer responsible for triggering statistics printout */
-#define TIMER_MILLISECOND (rte_get_tsc_hz() / 1000)
+#define TIMER_MILLISECOND 2000000ULL /* around 1ms at 2 Ghz */
 #define MAX_TIMER_PERIOD 86400UL /* 1 day max */
-#define DEFAULT_TIMER_PERIOD 10UL
+
+/* default period is 10 seconds */
+static int64_t timer_period = 10 * TIMER_MILLISECOND * 1000;
 
 /* Print out statistics on packets dropped */
 static void
@@ -614,25 +616,11 @@ l2fwd_simple_forward(struct rte_mbuf *m, uint16_t portid,
 		struct l2fwd_crypto_options *options)
 {
 	uint16_t dst_port;
-	uint32_t pad_len;
-	struct rte_ipv4_hdr *ip_hdr;
-	uint32_t ipdata_offset = sizeof(struct rte_ether_hdr);
 
-	ip_hdr = (struct rte_ipv4_hdr *)(rte_pktmbuf_mtod(m, char *) +
-					 ipdata_offset);
 	dst_port = l2fwd_dst_ports[portid];
 
 	if (options->mac_updating)
 		l2fwd_mac_updating(m, dst_port);
-
-	if (options->auth_xform.auth.op == RTE_CRYPTO_AUTH_OP_VERIFY)
-		rte_pktmbuf_trim(m, options->auth_xform.auth.digest_length);
-
-	if (options->cipher_xform.cipher.op == RTE_CRYPTO_CIPHER_OP_DECRYPT) {
-		pad_len = m->pkt_len - rte_be_to_cpu_16(ip_hdr->total_length) -
-			  ipdata_offset;
-		rte_pktmbuf_trim(m, pad_len);
-	}
 
 	l2fwd_send_packet(m, dst_port);
 }
@@ -877,17 +865,18 @@ l2fwd_main_loop(struct l2fwd_crypto_options *options)
 			}
 
 			/* if timer is enabled */
-			if (options->refresh_period > 0) {
+			if (timer_period > 0) {
 
 				/* advance the timer */
 				timer_tsc += diff_tsc;
 
 				/* if timer has reached its timeout */
 				if (unlikely(timer_tsc >=
-						options->refresh_period)) {
+						(uint64_t)timer_period)) {
 
-					/* do this only on main core */
-					if (lcore_id == rte_get_main_lcore()) {
+					/* do this only on master core */
+					if (lcore_id == rte_get_master_lcore()
+						&& options->refresh_period) {
 						print_stats();
 						timer_tsc = 0;
 					}
@@ -1448,8 +1437,7 @@ l2fwd_crypto_default_options(struct l2fwd_crypto_options *options)
 {
 	options->portmask = 0xffffffff;
 	options->nb_ports_per_lcore = 1;
-	options->refresh_period = DEFAULT_TIMER_PERIOD *
-					TIMER_MILLISECOND * 1000;
+	options->refresh_period = 10000;
 	options->single_lcore = 0;
 	options->sessionless = 0;
 
@@ -1746,7 +1734,6 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
-	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -1766,10 +1753,14 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				rte_eth_link_to_str(link_status_text,
-					sizeof(link_status_text), &link);
-				printf("Port %d %s\n", portid,
-					link_status_text);
+				if (link.link_status)
+					printf(
+					"Port%d Link Up. Speed %u Mbps - %s\n",
+						portid, link.link_speed,
+				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+					("full-duplex") : ("half-duplex"));
+				else
+					printf("Port %d Link Down\n", portid);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -2263,12 +2254,6 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 		if (enabled_cdevs[cdev_id] == 0)
 			continue;
 
-		if (check_cryptodev_mask(options, cdev_id) < 0)
-			continue;
-
-		if (check_capabilities(options, cdev_id) < 0)
-			continue;
-
 		retval = rte_cryptodev_socket_id(cdev_id);
 
 		if (retval < 0) {
@@ -2291,12 +2276,12 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 		 * (one for the header, one for the private data)
 		 */
 		if (!strcmp(dev_info.driver_name, "crypto_scheduler")) {
-#ifdef RTE_CRYPTO_SCHEDULER
-			uint32_t nb_workers =
-				rte_cryptodev_scheduler_workers_get(cdev_id,
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
+			uint32_t nb_slaves =
+				rte_cryptodev_scheduler_slaves_get(cdev_id,
 								NULL);
 
-			sessions_needed = enabled_cdev_count * nb_workers;
+			sessions_needed = enabled_cdev_count * nb_slaves;
 #endif
 		} else
 			sessions_needed = enabled_cdev_count;
@@ -2634,7 +2619,7 @@ initialize_ports(struct l2fwd_crypto_options *options)
 			last_portid = portid;
 		}
 
-		l2fwd_enabled_port_mask |= (1ULL << portid);
+		l2fwd_enabled_port_mask |= (1 << portid);
 		enabled_portcount++;
 	}
 
@@ -2724,7 +2709,7 @@ main(int argc, char **argv)
 	/* Enable Ethernet ports */
 	enabled_portcount = initialize_ports(&options);
 	if (enabled_portcount < 1)
-		rte_exit(EXIT_FAILURE, "Failed to initialize Ethernet ports\n");
+		rte_exit(EXIT_FAILURE, "Failed to initial Ethernet ports\n");
 
 	/* Initialize the port/queue configuration of each logical core */
 	RTE_ETH_FOREACH_DEV(portid) {
@@ -2817,14 +2802,11 @@ main(int argc, char **argv)
 
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, (void *)&options,
-			CALL_MAIN);
-	RTE_LCORE_FOREACH_WORKER(lcore_id) {
+			CALL_MASTER);
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
 
 	return 0;
 }

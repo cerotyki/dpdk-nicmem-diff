@@ -19,7 +19,7 @@ order_queue_process_stage_0(struct rte_event *const ev)
 }
 
 static int
-order_queue_worker(void *arg, const bool flow_id_cap)
+order_queue_worker(void *arg)
 {
 	ORDER_WORKER_INIT;
 	struct rte_event ev;
@@ -33,9 +33,6 @@ order_queue_worker(void *arg, const bool flow_id_cap)
 			rte_pause();
 			continue;
 		}
-
-		if (!flow_id_cap)
-			order_flow_id_copy_from_mbuf(t, &ev);
 
 		if (ev.queue_id == 0) { /* from ordered queue */
 			order_queue_process_stage_0(&ev);
@@ -53,7 +50,7 @@ order_queue_worker(void *arg, const bool flow_id_cap)
 }
 
 static int
-order_queue_worker_burst(void *arg, const bool flow_id_cap)
+order_queue_worker_burst(void *arg)
 {
 	ORDER_WORKER_INIT;
 	struct rte_event ev[BURST_SIZE];
@@ -71,10 +68,6 @@ order_queue_worker_burst(void *arg, const bool flow_id_cap)
 		}
 
 		for (i = 0; i < nb_rx; i++) {
-
-			if (!flow_id_cap)
-				order_flow_id_copy_from_mbuf(t, &ev[i]);
-
 			if (ev[i].queue_id == 0) { /* from ordered queue */
 				order_queue_process_stage_0(&ev[i]);
 			} else if (ev[i].queue_id == 1) {/* from atomic queue */
@@ -102,19 +95,11 @@ worker_wrapper(void *arg)
 {
 	struct worker_data *w  = arg;
 	const bool burst = evt_has_burst_mode(w->dev_id);
-	const bool flow_id_cap = evt_has_flow_id(w->dev_id);
 
-	if (burst) {
-		if (flow_id_cap)
-			return order_queue_worker_burst(arg, true);
-		else
-			return order_queue_worker_burst(arg, false);
-	} else {
-		if (flow_id_cap)
-			return order_queue_worker(arg, true);
-		else
-			return order_queue_worker(arg, false);
-	}
+	if (burst)
+		return order_queue_worker_burst(arg);
+	else
+		return order_queue_worker(arg);
 }
 
 static int

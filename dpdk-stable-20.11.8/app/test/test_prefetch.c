@@ -20,17 +20,11 @@
 static int
 test_prefetch(void)
 {
-	int a = 0;
+	int a;
 
 	rte_prefetch0(&a);
 	rte_prefetch1(&a);
 	rte_prefetch2(&a);
-
-	rte_prefetch0_write(&a);
-	rte_prefetch1_write(&a);
-	rte_prefetch2_write(&a);
-
-	rte_cldemote(&a);
 
 	return 0;
 }

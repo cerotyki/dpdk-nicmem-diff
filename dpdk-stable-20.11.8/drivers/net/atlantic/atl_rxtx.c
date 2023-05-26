@@ -1099,7 +1099,7 @@ err_stop:
 	 * register.
 	 * Update the RDT with the value of the last processed RX descriptor
 	 * minus 1, to guarantee that the RDT register is never equal to the
-	 * RDH register, which creates a "full" ring situation from the
+	 * RDH register, which creates a "full" ring situtation from the
 	 * hardware point of view...
 	 */
 	nb_hold = (uint16_t)(nb_hold + rxq->nb_rx_hold);
@@ -1132,9 +1132,10 @@ atl_xmit_cleanup(struct atl_tx_queue *txq)
 	if (txq != NULL) {
 		sw_ring = txq->sw_ring;
 		int head = txq->tx_head;
-		int cnt = head;
+		int cnt;
+		int i;
 
-		while (true) {
+		for (i = 0, cnt = head; ; i++) {
 			txd = &txq->hw_ring[cnt];
 
 			if (txd->dd)

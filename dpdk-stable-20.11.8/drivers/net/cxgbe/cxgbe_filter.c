@@ -145,7 +145,7 @@ static unsigned int get_filter_steerq(struct rte_eth_dev *dev,
 		 * then assume it is an absolute qid.
 		 */
 		if (fs->iq < pi->n_rx_qsets)
-			iq = adapter->sge.ethrxq[pi->first_rxqset +
+			iq = adapter->sge.ethrxq[pi->first_qset +
 						 fs->iq].rspq.abs_id;
 		else
 			iq = fs->iq;

@@ -4,7 +4,6 @@
 
 #include <unistd.h>
 
-#include "rte_pmd_ark.h"
 #include "ark_ethdev_rx.h"
 #include "ark_global.h"
 #include "ark_logs.h"
@@ -26,6 +25,9 @@ static uint32_t eth_ark_rx_jumbo(struct ark_rx_queue *queue,
 				 struct rte_mbuf *mbuf0,
 				 uint32_t cons_index);
 static inline int eth_ark_rx_seed_mbufs(struct ark_rx_queue *queue);
+static int eth_ark_rx_seed_recovery(struct ark_rx_queue *queue,
+				    uint32_t *pnb,
+				    struct rte_mbuf **mbufs);
 
 /* ************************************************************************* */
 struct ark_rx_queue {
@@ -51,7 +53,7 @@ struct ark_rx_queue {
 	/* The queue Index is used within the dpdk device structures */
 	uint16_t queue_index;
 
-	uint32_t unused;
+	uint32_t last_cons;
 
 	/* separate cache line */
 	/* second cache line - fields only used in slow path */
@@ -79,7 +81,7 @@ eth_ark_rx_hw_setup(struct rte_eth_dev *dev,
 
 	/* Verify HW */
 	if (ark_mpu_verify(queue->mpu, sizeof(rte_iova_t))) {
-		ARK_PMD_LOG(ERR, "Illegal configuration rx queue\n");
+		PMD_DRV_LOG(ERR, "Illegal configuration rx queue\n");
 		return -1;
 	}
 
@@ -102,8 +104,9 @@ static inline void
 eth_ark_rx_update_cons_index(struct ark_rx_queue *queue, uint32_t cons_index)
 {
 	queue->cons_index = cons_index;
-	if ((cons_index + queue->queue_size - queue->seed_index) >= 64U) {
-		eth_ark_rx_seed_mbufs(queue);
+	eth_ark_rx_seed_mbufs(queue);
+	if (((cons_index - queue->last_cons) >= 64U)) {
+		queue->last_cons = cons_index;
 		ark_mpu_set_producer(queue->mpu, queue->seed_index);
 	}
 }
@@ -134,19 +137,19 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	if (rx_conf != NULL && warning1 == 0) {
 		warning1 = 1;
-		ARK_PMD_LOG(NOTICE,
+		PMD_DRV_LOG(INFO,
 			    "Arkville ignores rte_eth_rxconf argument.\n");
 	}
 
 	if (RTE_PKTMBUF_HEADROOM < ARK_RX_META_SIZE) {
-		ARK_PMD_LOG(ERR,
+		PMD_DRV_LOG(ERR,
 			    "Error: DPDK Arkville requires head room > %d bytes (%s)\n",
 			    ARK_RX_META_SIZE, __func__);
 		return -1;		/* ERROR CODE */
 	}
 
 	if (!rte_is_power_of_2(nb_desc)) {
-		ARK_PMD_LOG(ERR,
+		PMD_DRV_LOG(ERR,
 			    "DPDK Arkville configuration queue size must be power of two %u (%s)\n",
 			    nb_desc, __func__);
 		return -1;		/* ERROR CODE */
@@ -158,7 +161,7 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 				   64,
 				   socket_id);
 	if (queue == 0) {
-		ARK_PMD_LOG(ERR, "Failed to allocate memory in %s\n", __func__);
+		PMD_DRV_LOG(ERR, "Failed to allocate memory in %s\n", __func__);
 		return -ENOMEM;
 	}
 
@@ -181,7 +184,7 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 				   socket_id);
 
 	if (queue->reserve_q == 0 || queue->paddress_q == 0) {
-		ARK_PMD_LOG(ERR,
+		PMD_DRV_LOG(ERR,
 			    "Failed to allocate queue memory in %s\n",
 			    __func__);
 		rte_free(queue->reserve_q);
@@ -198,7 +201,7 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	status = eth_ark_rx_seed_mbufs(queue);
 
 	if (queue->seed_index != nb_desc) {
-		ARK_PMD_LOG(ERR, "Failed to allocate %u mbufs for RX queue %d\n",
+		PMD_DRV_LOG(ERR, "ARK: Failed to allocate %u mbufs for RX queue %d\n",
 			    nb_desc, qidx);
 		status = -1;
 	}
@@ -209,7 +212,7 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	if (unlikely(status != 0)) {
 		struct rte_mbuf **mbuf;
 
-		ARK_PMD_LOG(ERR, "Failed to initialize RX queue %d %s\n",
+		PMD_DRV_LOG(ERR, "Failed to initialize RX queue %d %s\n",
 			    qidx,
 			    __func__);
 		/* Free the mbufs allocated */
@@ -268,18 +271,13 @@ eth_ark_recv_pkts(void *rx_queue,
 		mbuf->port = meta->port;
 		mbuf->pkt_len = meta->pkt_len;
 		mbuf->data_len = meta->pkt_len;
-		/* set timestamp if enabled at least on one device */
-		if (ark_timestamp_rx_dynflag > 0) {
-			*RTE_MBUF_DYNFIELD(mbuf, ark_timestamp_dynfield_offset,
-				rte_mbuf_timestamp_t *) = meta->timestamp;
-			mbuf->ol_flags |= ark_timestamp_rx_dynflag;
-		}
-		rte_pmd_ark_mbuf_rx_userdata_set(mbuf, meta->user_data);
+		mbuf->timestamp = meta->timestamp;
+		mbuf->udata64 = meta->user_data;
 
-		if (ARK_DEBUG_CORE) {	/* debug sanity checks */
+		if (ARK_RX_DEBUG) {	/* debug sanity checks */
 			if ((meta->pkt_len > (1024 * 16)) ||
 			    (meta->pkt_len == 0)) {
-				ARK_PMD_LOG(DEBUG, "RX: Bad Meta Q: %u"
+				PMD_RX_LOG(DEBUG, "RX: Bad Meta Q: %u"
 					   " cons: %" PRIU32
 					   " prod: %" PRIU32
 					   " seed_index %" PRIU32
@@ -290,7 +288,7 @@ eth_ark_recv_pkts(void *rx_queue,
 					   queue->seed_index);
 
 
-				ARK_PMD_LOG(DEBUG, "       :  UDM"
+				PMD_RX_LOG(DEBUG, "       :  UDM"
 					   " prod: %" PRIU32
 					   " len: %u\n",
 					   queue->udm->rt_cfg.prod_idx,
@@ -303,6 +301,8 @@ eth_ark_recv_pkts(void *rx_queue,
 				mbuf->pkt_len = 63;
 				meta->pkt_len = 63;
 			}
+			/* seqn is only set under debug */
+			mbuf->seqn = cons_index;
 		}
 
 		if (unlikely(meta->pkt_len > ARK_RX_MAX_NOCHAIN))
@@ -317,7 +317,9 @@ eth_ark_recv_pkts(void *rx_queue,
 			break;
 	}
 
-	eth_ark_rx_update_cons_index(queue, cons_index);
+	if (unlikely(nb != 0))
+		/* report next free to FPGA */
+		eth_ark_rx_update_cons_index(queue, cons_index);
 
 	return nb;
 }
@@ -357,6 +359,8 @@ eth_ark_rx_jumbo(struct ark_rx_queue *queue,
 		mbuf_prev = mbuf;
 		mbuf->data_len = data_len;
 		mbuf->data_off = 0;
+		if (ARK_RX_DEBUG)
+			mbuf->seqn = cons_index;	/* for debug only */
 
 		cons_index += 1;
 	}
@@ -452,16 +456,14 @@ eth_ark_rx_seed_mbufs(struct ark_rx_queue *queue)
 	int status = rte_pktmbuf_alloc_bulk(queue->mb_pool, mbufs, nb);
 
 	if (unlikely(status != 0)) {
-		ARK_PMD_LOG(NOTICE,
-			    "Could not allocate %u mbufs from pool"
-			    " for RX queue %u;"
-			    " %u free buffers remaining in queue\n",
-			    nb, queue->queue_index,
-			    queue->seed_index - queue->cons_index);
-		return -1;
+		/* Try to recover from lack of mbufs in pool */
+		status = eth_ark_rx_seed_recovery(queue, &nb, mbufs);
+		if (unlikely(status != 0)) {
+			return -1;
+		}
 	}
 
-	if (ARK_DEBUG_CORE) {		/* DEBUG */
+	if (ARK_RX_DEBUG) {		/* DEBUG */
 		while (count != nb) {
 			struct rte_mbuf *mbuf_init =
 				queue->reserve_q[seed_m + count];
@@ -505,6 +507,29 @@ eth_ark_rx_seed_mbufs(struct ark_rx_queue *queue)
 	} /* switch */
 
 	return 0;
+}
+
+int
+eth_ark_rx_seed_recovery(struct ark_rx_queue *queue,
+			 uint32_t *pnb,
+			 struct rte_mbuf **mbufs)
+{
+	int status = -1;
+
+	/* Ignore small allocation failures */
+	if (*pnb <= 64)
+		return -1;
+
+	*pnb = 64U;
+	status = rte_pktmbuf_alloc_bulk(queue->mb_pool, mbufs, *pnb);
+	if (status != 0) {
+		PMD_DRV_LOG(ERR,
+			    "ARK: Could not allocate %u mbufs from pool for RX queue %u;"
+			    " %u free buffers remaining in queue\n",
+			    *pnb, queue->queue_index,
+			    queue->seed_index - queue->cons_index);
+	}
+	return status;
 }
 
 void
@@ -591,7 +616,7 @@ eth_ark_udm_force_close(struct rte_eth_dev *dev)
 
 	if (!ark_udm_is_flushed(ark->udm.v)) {
 		/* restart the MPUs */
-		ARK_PMD_LOG(NOTICE, "UDM not flushed -- forcing flush\n");
+		PMD_DRV_LOG(ERR, "ARK: %s UDM not flushed\n", __func__);
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			queue = (struct ark_rx_queue *)dev->data->rx_queues[i];
 			if (queue == 0)
@@ -605,7 +630,7 @@ eth_ark_udm_force_close(struct rte_eth_dev *dev)
 		/* Wait to allow data to pass */
 		usleep(100);
 
-		ARK_PMD_LOG(DEBUG, "UDM forced flush attempt, stopped = %d\n",
+		PMD_DEBUG_LOG(DEBUG, "UDM forced flush attempt, stopped = %d\n",
 				ark_udm_is_flushed(ark->udm.v));
 	}
 	ark_udm_reset(ark->udm.v);
@@ -616,8 +641,8 @@ ark_ethdev_rx_dump(const char *name, struct ark_rx_queue *queue)
 {
 	if (queue == NULL)
 		return;
-	ARK_PMD_LOG(DEBUG, "RX QUEUE %d -- %s", queue->phys_qid, name);
-	ARK_PMD_LOG(DEBUG, ARK_SU32 ARK_SU32 ARK_SU32 ARK_SU32 "\n",
+	PMD_DEBUG_LOG(DEBUG, "RX QUEUE %d -- %s", queue->phys_qid, name);
+	PMD_DEBUG_LOG(DEBUG, ARK_SU32 ARK_SU32 ARK_SU32 ARK_SU32 "\n",
 			"queue_size", queue->queue_size,
 			"seed_index", queue->seed_index,
 			"prod_index", queue->prod_index,
@@ -641,15 +666,15 @@ dump_mbuf_data(struct rte_mbuf *mbuf, uint16_t lo, uint16_t hi)
 {
 	uint16_t i, j;
 
-	ARK_PMD_LOG(DEBUG, " MBUF: %p len %d, off: %d\n",
-		    mbuf, mbuf->pkt_len, mbuf->data_off);
+	PMD_DRV_LOG(INFO, " MBUF: %p len %d, off: %d, seq: %" PRIU32 "\n", mbuf,
+		mbuf->pkt_len, mbuf->data_off, mbuf->seqn);
 	for (i = lo; i < hi; i += 16) {
 		uint8_t *dp = RTE_PTR_ADD(mbuf->buf_addr, i);
 
-		ARK_PMD_LOG(DEBUG, "  %6d:  ", i);
+		PMD_DRV_LOG(INFO, "  %6d:  ", i);
 		for (j = 0; j < 16; j++)
-			ARK_PMD_LOG(DEBUG, " %02x", dp[j]);
+			PMD_DRV_LOG(INFO, " %02x", dp[j]);
 
-		ARK_PMD_LOG(DEBUG, "\n");
+		PMD_DRV_LOG(INFO, "\n");
 	}
 }

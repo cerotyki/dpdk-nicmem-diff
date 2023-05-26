@@ -7,13 +7,9 @@
 #ifndef _CMDLINE_H_
 #define _CMDLINE_H_
 
-#ifndef RTE_EXEC_ENV_WINDOWS
-#include <termios.h>
-#endif
-
 #include <rte_common.h>
-#include <rte_compat.h>
 
+#include <termios.h>
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
 
@@ -27,8 +23,6 @@
 extern "C" {
 #endif
 
-#ifndef RTE_EXEC_ENV_WINDOWS
-
 struct cmdline {
 	int s_in;
 	int s_out;
@@ -38,12 +32,6 @@ struct cmdline {
 	struct termios oldterm;
 };
 
-#else
-
-struct cmdline;
-
-#endif /* RTE_EXEC_ENV_WINDOWS */
-
 struct cmdline *cmdline_new(cmdline_parse_ctx_t *ctx, const char *prompt, int s_in, int s_out);
 void cmdline_set_prompt(struct cmdline *cl, const char *prompt);
 void cmdline_free(struct cmdline *cl);
@@ -51,10 +39,6 @@ void cmdline_printf(const struct cmdline *cl, const char *fmt, ...)
 	__rte_format_printf(2, 3);
 int cmdline_in(struct cmdline *cl, const char *buf, int size);
 int cmdline_write_char(struct rdline *rdl, char c);
-
-__rte_experimental
-struct rdline *
-cmdline_get_rdline(struct cmdline *cl);
 
 /**
  * This function is nonblocking equivalent of ``cmdline_interact()``. It polls

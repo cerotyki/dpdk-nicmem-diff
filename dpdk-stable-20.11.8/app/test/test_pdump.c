@@ -147,19 +147,11 @@ send_pkts(void *empty)
 	ret = test_get_mbuf_from_pool(&mp, pbuf, poolname);
 	if (ret < 0)
 		printf("get_mbuf_from_pool failed\n");
-
-	ret = test_dev_start(portid, mp);
-	if (ret < 0)
-		printf("test_dev_start(%hu, %p) failed, error code: %d\n",
-			portid, mp, ret);
-
-	while (ret >= 0 && flag_for_send_pkts) {
+	do {
 		ret = test_packet_forward(pbuf, portid, QUEUE_ID);
 		if (ret < 0)
 			printf("send pkts Failed\n");
-	};
-
-	rte_eth_dev_stop(portid);
+	} while (flag_for_send_pkts);
 	test_put_mbuf_to_pool(mp, pbuf);
 	return empty;
 }
@@ -192,7 +184,7 @@ run_pdump_server_tests(void)
 	};
 
 	snprintf(coremask, sizeof(coremask), "%x",
-		 (1 << rte_get_main_lcore()));
+		 (1 << rte_get_master_lcore()));
 
 	ret = test_pdump_init();
 	ret |= launch_p(argv1);

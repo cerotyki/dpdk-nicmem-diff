@@ -8,17 +8,6 @@
 #include <rte_crypto_sym.h>
 #include <rte_security.h>
 
-/* Macros for anti replay and ESN */
-#define OTX2_IPSEC_MAX_REPLAY_WIN_SZ	1024
-#define OTX2_IPSEC_SAINDEX_SZ		4
-#define OTX2_IPSEC_SEQNO_LO		4
-
-#define OTX2_IPSEC_SEQNO_LO_INDEX	(RTE_ETHER_HDR_LEN + \
-					 OTX2_IPSEC_SAINDEX_SZ)
-
-#define OTX2_IPSEC_SEQNO_HI_INDEX	(OTX2_IPSEC_SEQNO_LO_INDEX + \
-					 OTX2_IPSEC_SEQNO_LO)
-
 enum {
 	OTX2_IPSEC_FP_SA_DIRECTION_INBOUND = 0,
 	OTX2_IPSEC_FP_SA_DIRECTION_OUTBOUND = 1,
@@ -116,14 +105,6 @@ struct otx2_ipsec_fp_out_sa {
 	uint8_t hmac_key[48];
 };
 
-struct otx2_ipsec_replay {
-	rte_spinlock_t lock;
-	uint32_t winb;
-	uint32_t wint;
-	uint64_t base; /**< base of the anti-replay window */
-	uint64_t window[17]; /**< anti-replay window */
-};
-
 struct otx2_ipsec_fp_in_sa {
 	/* w0 */
 	struct otx2_ipsec_fp_sa_ctl ctl;
@@ -133,8 +114,8 @@ struct otx2_ipsec_fp_in_sa {
 	uint32_t unused;
 
 	/* w2 */
-	uint32_t esn_hi;
 	uint32_t esn_low;
+	uint32_t esn_hi;
 
 	/* w3-w6 */
 	uint8_t cipher_key[32];
@@ -147,13 +128,9 @@ struct otx2_ipsec_fp_in_sa {
 		void *userdata;
 		uint64_t udata64;
 	};
-	union {
-		struct otx2_ipsec_replay *replay;
-		uint64_t replay64;
-	};
-	uint32_t replay_win_sz;
 
-	uint32_t reserved1;
+	uint64_t reserved1;
+	uint64_t reserved2;
 };
 
 static inline int

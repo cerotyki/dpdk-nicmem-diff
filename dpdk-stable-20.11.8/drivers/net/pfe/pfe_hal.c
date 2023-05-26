@@ -185,7 +185,7 @@ gemac_set_mode(void *base, __rte_unused int mode)
 {
 	u32 val = readl(base + EMAC_RCNTRL_REG);
 
-	/* Remove loopback */
+	/*Remove loopbank*/
 	val &= ~EMAC_RCNTRL_LOOP;
 
 	/*Enable flow control and MII mode*/

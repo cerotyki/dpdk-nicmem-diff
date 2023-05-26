@@ -111,7 +111,7 @@ static const struct rte_cryptodev_capabilities
 					.increment = 1
 				},
 				.digest_size = {
-					.min = 12,
+					.min = 28,
 					.max = 28,
 					.increment = 0
 				},
@@ -232,7 +232,7 @@ static const struct rte_cryptodev_capabilities
 				},
 				.digest_size = {
 					.min = 12,
-					.max = 64,
+					.max = 48,
 					.increment = 4
 				},
 			}, }
@@ -252,7 +252,7 @@ static const struct rte_cryptodev_capabilities
 				},
 				.digest_size = {
 					.min = 12,
-					.max = 64,
+					.max = 48,
 					.increment = 0
 				},
 			}, }
@@ -336,9 +336,9 @@ static const struct rte_cryptodev_capabilities
 					.increment = 0
 				},
 				.aad_size = {
-					.min = 0,
-					.max = 64,
-					.increment = 1
+					.min = 8,
+					.max = 12,
+					.increment = 4
 				},
 				.iv_size = {
 					.min = 12,
@@ -793,7 +793,7 @@ mrvl_crypto_pmd_sym_session_clear(struct rte_cryptodev *dev,
 			MRVL_LOG(ERR, "Error while destroying session!");
 		}
 
-		memset(mrvl_sess, 0, sizeof(struct mrvl_crypto_session));
+		memset(sess, 0, sizeof(struct mrvl_crypto_session));
 		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
 		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);

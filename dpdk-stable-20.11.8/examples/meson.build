@@ -6,6 +6,8 @@ if get_option('default_library') == 'static'
 	link_whole_libs = dpdk_static_libraries + dpdk_drivers
 endif
 
+execinfo = cc.find_library('execinfo', required: false)
+
 # list of all example apps. Keep 1-3 per line, in alphabetical order.
 all_examples = [
 	'bbdev_app', 'bond',
@@ -22,6 +24,7 @@ all_examples = [
 	'l2fwd-crypto', 'l2fwd-jobstats',
 	'l2fwd-keepalive', 'l3fwd',
 	'l3fwd-acl', 'l3fwd-power', 'l3fwd-graph',
+	'l3fwd-count',
 	'link_status_interrupt',
 	'multi_process/client_server_mp/mp_client',
 	'multi_process/client_server_mp/mp_server',
@@ -31,25 +34,25 @@ all_examples = [
 	'ntb', 'packet_ordering',
 	'performance-thread/l3fwd-thread',
 	'performance-thread/pthread_shim',
-	'pipeline',
 	'ptpclient',
 	'qos_meter', 'qos_sched',
 	'rxtx_callbacks',
 	'server_node_efd/node',
 	'server_node_efd/server',
 	'service_cores',
-	'skeleton',
+	'skeleton', 'tep_termination',
 	'timer', 'vdpa',
 	'vhost', 'vhost_crypto',
 	'vhost_blk', 'vm_power_manager',
 	'vm_power_manager/guest_cli',
 	'vmdq', 'vmdq_dcb',
 ]
-
-# on install, skip copying all meson.build files
-ex_file_excludes = ['meson.build']
+# install all example code on install - irrespective of whether the example in
+# question is to be built as part of this build or not.
 foreach ex:all_examples
-	ex_file_excludes += [ex + '/meson.build']
+	install_subdir(ex,
+			install_dir: get_option('datadir') + '/dpdk/examples',
+			exclude_files: 'meson.build')
 endforeach
 
 if get_option('examples') == ''
@@ -67,10 +70,6 @@ default_cflags = machine_args
 if cc.has_argument('-Wno-format-truncation')
 	default_cflags += '-Wno-format-truncation'
 endif
-default_ldflags = dpdk_extra_ldflags
-if get_option('default_library') == 'static' and not is_windows
-	default_ldflags += ['-Wl,--export-dynamic']
-endif
 
 foreach example: examples
 	name = example.split('/')[-1]
@@ -78,11 +77,13 @@ foreach example: examples
 	sources = []
 	allow_experimental_apis = false
 	cflags = default_cflags
-	ldflags = default_ldflags
 
-	ext_deps = []
+	ext_deps = [execinfo]
 	includes = [include_directories(example)]
 	deps = ['eal', 'mempool', 'net', 'mbuf', 'ethdev', 'cmdline']
+	if is_windows
+		deps = ['eal'] # only supported lib on Windows currently
+	endif
 	subdir(example)
 
 	if build
@@ -100,7 +101,7 @@ foreach example: examples
 		executable('dpdk-' + name, sources,
 			include_directories: includes,
 			link_whole: link_whole_libs,
-			link_args: ldflags,
+			link_args: dpdk_extra_ldflags,
 			c_args: cflags,
 			dependencies: dep_objs)
 	elif not allow_skips

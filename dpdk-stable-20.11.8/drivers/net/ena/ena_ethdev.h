@@ -32,7 +32,7 @@
 
 /* While processing submitted and completed descriptors (rx and tx path
  * respectively) in a loop it is desired to:
- *  - perform batch submissions while populating submission queue
+ *  - perform batch submissions while populating sumbissmion queue
  *  - avoid blocking transmission of other packets during cleanup phase
  * Hence the utilization ratio of 1/8 of a queue size or max value if the size
  * of the ring is very big - like 8k Rx rings.
@@ -100,10 +100,6 @@ struct ena_ring {
 
 	enum ena_ring_type type;
 	enum ena_admin_placement_policy_type tx_mem_queue_type;
-
-	/* Indicate there are Tx packets pushed to the device and wait for db */
-	bool pkts_without_db;
-
 	/* Holds the empty requests for TX/RX OOO completions */
 	union {
 		uint16_t *empty_tx_reqs;
@@ -175,35 +171,10 @@ struct ena_stats_dev {
 	u64 tx_drops;
 };
 
-struct ena_stats_eni {
-	/*
-	 * The number of packets shaped due to inbound aggregate BW
-	 * allowance being exceeded
-	 */
-	uint64_t bw_in_allowance_exceeded;
-	/*
-	 * The number of packets shaped due to outbound aggregate BW
-	 * allowance being exceeded
-	 */
-	uint64_t bw_out_allowance_exceeded;
-	/* The number of packets shaped due to PPS allowance being exceeded */
-	uint64_t pps_allowance_exceeded;
-	/*
-	 * The number of packets shaped due to connection tracking
-	 * allowance being exceeded and leading to failure in establishment
-	 * of new connections
-	 */
-	uint64_t conntrack_allowance_exceeded;
-	/*
-	 * The number of packets shaped due to linklocal packet rate
-	 * allowance being exceeded
-	 */
-	uint64_t linklocal_allowance_exceeded;
-};
-
 struct ena_offloads {
-	uint32_t tx_offloads;
-	uint32_t rx_offloads;
+	bool tso4_supported;
+	bool tx_csum_supported;
+	bool rx_csum_supported;
 };
 
 /* board specific private data structure */
@@ -229,13 +200,6 @@ struct ena_adapter {
 	u16 max_mtu;
 	struct ena_offloads offloads;
 
-	/* The admin queue isn't protected by the lock and is used to
-	 * retrieve statistics from the device. As there is no guarantee that
-	 * application won't try to get statistics from multiple threads, it is
-	 * safer to lock the queue to avoid admin queue failure.
-	 */
-	rte_spinlock_t admin_lock;
-
 	int id_number;
 	char name[ENA_NAME_MAX_LEN];
 	u8 mac_addr[RTE_ETHER_ADDR_LEN];
@@ -246,6 +210,11 @@ struct ena_adapter {
 	struct ena_driver_stats *drv_stats;
 	enum ena_adapter_state state;
 
+	uint64_t tx_supported_offloads;
+	uint64_t tx_selected_offloads;
+	uint64_t rx_supported_offloads;
+	uint64_t rx_selected_offloads;
+
 	bool link_status;
 
 	enum ena_regs_reset_reason_types reset_reason;
@@ -255,7 +224,6 @@ struct ena_adapter {
 	uint64_t keep_alive_timeout;
 
 	struct ena_stats_dev dev_stats;
-	struct ena_stats_eni eni_stats;
 
 	bool trigger_reset;
 

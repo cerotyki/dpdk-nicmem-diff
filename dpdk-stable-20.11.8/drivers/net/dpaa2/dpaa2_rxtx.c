@@ -31,13 +31,6 @@ dpaa2_dev_rx_parse_slow(struct rte_mbuf *mbuf,
 
 static void enable_tx_tstamp(struct qbman_fd *fd) __rte_unused;
 
-static inline rte_mbuf_timestamp_t *
-dpaa2_timestamp_dynfield(struct rte_mbuf *mbuf)
-{
-	return RTE_MBUF_DYNFIELD(mbuf,
-		dpaa2_timestamp_dynfield_offset, rte_mbuf_timestamp_t *);
-}
-
 #define DPAA2_MBUF_TO_CONTIG_FD(_mbuf, _fd, _bpid)  do { \
 	DPAA2_SET_FD_ADDR(_fd, DPAA2_MBUF_VADDR_TO_IOVA(_mbuf)); \
 	DPAA2_SET_FD_LEN(_fd, _mbuf->data_len); \
@@ -116,10 +109,9 @@ dpaa2_dev_rx_parse_new(struct rte_mbuf *m, const struct qbman_fd *fd,
 	m->ol_flags |= PKT_RX_RSS_HASH;
 
 	if (dpaa2_enable_ts[m->port]) {
-		*dpaa2_timestamp_dynfield(m) = annotation->word2;
-		m->ol_flags |= dpaa2_timestamp_rx_dynflag;
-		DPAA2_PMD_DP_DEBUG("pkt timestamp:0x%" PRIx64 "",
-				*dpaa2_timestamp_dynfield(m));
+		m->timestamp = annotation->word2;
+		m->ol_flags |= PKT_RX_TIMESTAMP;
+		DPAA2_PMD_DP_DEBUG("pkt timestamp:0x%" PRIx64 "", m->timestamp);
 	}
 
 	DPAA2_PMD_DP_DEBUG("HW frc = 0x%x\t packet type =0x%x "
@@ -139,10 +131,8 @@ dpaa2_dev_rx_parse_slow(struct rte_mbuf *mbuf,
 			annotation->word3, annotation->word4);
 
 #if defined(RTE_LIBRTE_IEEE1588)
-	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_PTP)) {
+	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_PTP))
 		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP;
-		mbuf->ol_flags |= PKT_RX_IEEE1588_TMST;
-	}
 #endif
 
 	if (BIT_ISSET_AT_POS(annotation->word3, L2_VLAN_1_PRESENT)) {
@@ -233,12 +223,9 @@ dpaa2_dev_rx_parse(struct rte_mbuf *mbuf, void *hw_annot_addr)
 	else if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L4CE))
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
 
-	if (dpaa2_enable_ts[mbuf->port]) {
-		*dpaa2_timestamp_dynfield(mbuf) = annotation->word2;
-		mbuf->ol_flags |= dpaa2_timestamp_rx_dynflag;
-		DPAA2_PMD_DP_DEBUG("pkt timestamp: 0x%" PRIx64 "",
-				*dpaa2_timestamp_dynfield(mbuf));
-	}
+	mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+	mbuf->timestamp = annotation->word2;
+	DPAA2_PMD_DP_DEBUG("pkt timestamp: 0x%" PRIx64 "", mbuf->timestamp);
 
 	/* Check detailed parsing requirement */
 	if (annotation->word3 & 0x7FFFFC3FFFF)
@@ -587,7 +574,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	rte_prefetch0((void *)(size_t)(dq_storage + 1));
 
 	/* Prepare next pull descriptor. This will give space for the
-	 * prefetching done on DQRR entries
+	 * prefething done on DQRR entries
 	 */
 	q_storage->toggle ^= 1;
 	dq_storage1 = q_storage->dq_storage[q_storage->toggle];
@@ -642,10 +629,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		else
 			bufs[num_rx] = eth_fd_to_mbuf(fd, eth_data->port_id);
 #if defined(RTE_LIBRTE_IEEE1588)
-		if (bufs[num_rx]->ol_flags & PKT_RX_IEEE1588_TMST) {
-			priv->rx_timestamp =
-				*dpaa2_timestamp_dynfield(bufs[num_rx]);
-		}
+		priv->rx_timestamp = bufs[num_rx]->timestamp;
 #endif
 
 		if (eth_data->dev_conf.rxmode.offloads &
@@ -726,7 +710,7 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __rte_unused,
 	ev->mbuf = eth_fd_to_mbuf(fd, rxq->eth_data->port_id);
 
 	dqrr_index = qbman_get_dqrr_idx(dq);
-	*dpaa2_seqn(ev->mbuf) = dqrr_index + 1;
+	ev->mbuf->seqn = dqrr_index + 1;
 	DPAA2_PER_LCORE_DQRR_SIZE++;
 	DPAA2_PER_LCORE_DQRR_HELD |= 1 << dqrr_index;
 	DPAA2_PER_LCORE_DQRR_MBUF(dqrr_index) = ev->mbuf;
@@ -752,9 +736,9 @@ dpaa2_dev_process_ordered_event(struct qbman_swp *swp,
 
 	ev->mbuf = eth_fd_to_mbuf(fd, rxq->eth_data->port_id);
 
-	*dpaa2_seqn(ev->mbuf) = DPAA2_ENQUEUE_FLAG_ORP;
-	*dpaa2_seqn(ev->mbuf) |= qbman_result_DQ_odpid(dq) << DPAA2_EQCR_OPRID_SHIFT;
-	*dpaa2_seqn(ev->mbuf) |= qbman_result_DQ_seqnum(dq) << DPAA2_EQCR_SEQNUM_SHIFT;
+	ev->mbuf->seqn = DPAA2_ENQUEUE_FLAG_ORP;
+	ev->mbuf->seqn |= qbman_result_DQ_odpid(dq) << DPAA2_EQCR_OPRID_SHIFT;
+	ev->mbuf->seqn |= qbman_result_DQ_seqnum(dq) << DPAA2_EQCR_SEQNUM_SHIFT;
 
 	qbman_swp_dqrr_consume(swp, dq);
 }
@@ -772,9 +756,6 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	const struct qbman_fd *fd;
 	struct qbman_pull_desc pulldesc;
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
-#if defined(RTE_LIBRTE_IEEE1588)
-	struct dpaa2_dev_priv *priv = eth_data->dev_private;
-#endif
 
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
 		ret = dpaa2_affine_qbman_swp();
@@ -861,13 +842,6 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				bufs[num_rx] = eth_fd_to_mbuf(fd,
 							eth_data->port_id);
 
-#if defined(RTE_LIBRTE_IEEE1588)
-		if (bufs[num_rx]->ol_flags & PKT_RX_IEEE1588_TMST) {
-			priv->rx_timestamp =
-				*dpaa2_timestamp_dynfield(bufs[num_rx]);
-		}
-#endif
-
 		if (eth_data->dev_conf.rxmode.offloads &
 				DEV_RX_OFFLOAD_VLAN_STRIP) {
 			rte_vlan_strip(bufs[num_rx]);
@@ -903,8 +877,6 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 	struct dpaa2_annot_hdr *annotation;
-	void *v_addr;
-	struct rte_mbuf *mbuf;
 #endif
 
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
@@ -989,16 +961,10 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 			num_tx_conf++;
 			num_pulled++;
 #if defined(RTE_LIBRTE_IEEE1588)
-			v_addr = DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd));
-			mbuf = DPAA2_INLINE_MBUF_FROM_BUF(v_addr,
-				rte_dpaa2_bpid_info[DPAA2_GET_FD_BPID(fd)].meta_data_size);
-
-			if (mbuf->ol_flags & PKT_TX_IEEE1588_TMST) {
-				annotation = (struct dpaa2_annot_hdr *)((size_t)
-					DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd)) +
-					DPAA2_FD_PTA_SIZE);
-				priv->tx_timestamp = annotation->word2;
-			}
+			annotation = (struct dpaa2_annot_hdr *)((size_t)
+				DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd)) +
+				DPAA2_FD_PTA_SIZE);
+			priv->tx_timestamp = annotation->word2;
 #endif
 		} while (pending);
 
@@ -1073,11 +1039,8 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	 * corresponding to last packet transmitted for reading
 	 * the timestamp
 	 */
-	if ((*bufs)->ol_flags & PKT_TX_IEEE1588_TMST) {
-		priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
-		dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
-		priv->tx_timestamp = 0;
-	}
+	priv->next_tx_conf_queue = dpaa2_q->tx_conf_queue;
+	dpaa2_dev_tx_conf(dpaa2_q->tx_conf_queue);
 #endif
 
 	/*Prepare enqueue descriptor*/
@@ -1100,14 +1063,14 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			dpaa2_eqcr_size : nb_pkts;
 
 		for (loop = 0; loop < frames_to_send; loop++) {
-			if (*dpaa2_seqn(*bufs)) {
-				uint8_t dqrr_index = *dpaa2_seqn(*bufs) - 1;
+			if ((*bufs)->seqn) {
+				uint8_t dqrr_index = (*bufs)->seqn - 1;
 
 				flags[loop] = QBMAN_ENQUEUE_FLAG_DCA |
 						dqrr_index;
 				DPAA2_PER_LCORE_DQRR_SIZE--;
 				DPAA2_PER_LCORE_DQRR_HELD &= ~(1 << dqrr_index);
-				*dpaa2_seqn(*bufs) = DPAA2_INVALID_MBUF_SEQN;
+				(*bufs)->seqn = DPAA2_INVALID_MBUF_SEQN;
 			}
 
 			if (likely(RTE_MBUF_DIRECT(*bufs))) {
@@ -1267,10 +1230,10 @@ dpaa2_set_enqueue_descriptor(struct dpaa2_queue *dpaa2_q,
 
 	qbman_eq_desc_set_fq(eqdesc, dpaa2_q->fqid);
 
-	if (*dpaa2_seqn(m) & DPAA2_ENQUEUE_FLAG_ORP) {
-		orpid = (*dpaa2_seqn(m) & DPAA2_EQCR_OPRID_MASK) >>
+	if (m->seqn & DPAA2_ENQUEUE_FLAG_ORP) {
+		orpid = (m->seqn & DPAA2_EQCR_OPRID_MASK) >>
 			DPAA2_EQCR_OPRID_SHIFT;
-		seqnum = (*dpaa2_seqn(m) & DPAA2_EQCR_SEQNUM_MASK) >>
+		seqnum = (m->seqn & DPAA2_EQCR_SEQNUM_MASK) >>
 			DPAA2_EQCR_SEQNUM_SHIFT;
 
 		if (!priv->en_loose_ordered) {
@@ -1292,12 +1255,12 @@ dpaa2_set_enqueue_descriptor(struct dpaa2_queue *dpaa2_q,
 			qbman_eq_desc_set_orp(eqdesc, 0, orpid, seqnum, 0);
 		}
 	} else {
-		dq_idx = *dpaa2_seqn(m) - 1;
+		dq_idx = m->seqn - 1;
 		qbman_eq_desc_set_dca(eqdesc, 1, dq_idx, 0);
 		DPAA2_PER_LCORE_DQRR_SIZE--;
 		DPAA2_PER_LCORE_DQRR_HELD &= ~(1 << dq_idx);
 	}
-	*dpaa2_seqn(m) = DPAA2_INVALID_MBUF_SEQN;
+	m->seqn = DPAA2_INVALID_MBUF_SEQN;
 }
 
 /* Callback to handle sending ordered packets through WRIOP based interface */
@@ -1351,7 +1314,7 @@ dpaa2_dev_tx_ordered(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			dpaa2_eqcr_size : nb_pkts;
 
 		if (!priv->en_loose_ordered) {
-			if (*dpaa2_seqn(*bufs) & DPAA2_ENQUEUE_FLAG_ORP) {
+			if ((*bufs)->seqn & DPAA2_ENQUEUE_FLAG_ORP) {
 				num_free_eq_desc = dpaa2_free_eq_descriptors();
 				if (num_free_eq_desc < frames_to_send)
 					frames_to_send = num_free_eq_desc;
@@ -1362,10 +1325,10 @@ dpaa2_dev_tx_ordered(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			/*Prepare enqueue descriptor*/
 			qbman_eq_desc_clear(&eqdesc[loop]);
 
-			if (*dpaa2_seqn(*bufs)) {
+			if ((*bufs)->seqn) {
 				/* Use only queue 0 for Tx in case of atomic/
 				 * ordered packets as packets can get unordered
-				 * when being transmitted out from the interface
+				 * when being tranmitted out from the interface
 				 */
 				dpaa2_set_enqueue_descriptor(order_sendq,
 							     (*bufs),
@@ -1592,7 +1555,7 @@ dpaa2_dev_loopback_rx(void *queue,
 	rte_prefetch0((void *)(size_t)(dq_storage + 1));
 
 	/* Prepare next pull descriptor. This will give space for the
-	 * prefetching done on DQRR entries
+	 * prefething done on DQRR entries
 	 */
 	q_storage->toggle ^= 1;
 	dq_storage1 = q_storage->dq_storage[q_storage->toggle];

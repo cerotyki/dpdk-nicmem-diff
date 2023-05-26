@@ -22,13 +22,6 @@
 
 #define VIRTIO_USER_MEM_EVENT_CLB_NAME "virtio_user_mem_event_clb"
 
-const char * const virtio_user_backend_strings[] = {
-	[VIRTIO_USER_BACKEND_UNKNOWN] = "VIRTIO_USER_BACKEND_UNKNOWN",
-	[VIRTIO_USER_BACKEND_VHOST_USER] = "VHOST_USER",
-	[VIRTIO_USER_BACKEND_VHOST_KERNEL] = "VHOST_NET",
-	[VIRTIO_USER_BACKEND_VHOST_VDPA] = "VHOST_VDPA",
-};
-
 static int
 virtio_user_create_queue(struct virtio_user_dev *dev, uint32_t queue_sel)
 {
@@ -119,41 +112,20 @@ virtio_user_queue_setup(struct virtio_user_dev *dev,
 }
 
 int
-virtio_user_dev_set_features(struct virtio_user_dev *dev)
+is_vhost_user_by_type(const char *path)
 {
-	uint64_t features;
-	int ret = -1;
+	struct stat sb;
 
-	pthread_mutex_lock(&dev->mutex);
+	if (stat(path, &sb) == -1)
+		return 0;
 
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER &&
-			dev->vhostfd < 0)
-		goto error;
-
-	/* Step 0: tell vhost to create queues */
-	if (virtio_user_queue_setup(dev, virtio_user_create_queue) < 0)
-		goto error;
-
-	features = dev->features;
-
-	/* Strip VIRTIO_NET_F_MAC, as MAC address is handled in vdev init */
-	features &= ~(1ull << VIRTIO_NET_F_MAC);
-	/* Strip VIRTIO_NET_F_CTRL_VQ, as devices do not really need to know */
-	features &= ~(1ull << VIRTIO_NET_F_CTRL_VQ);
-	features &= ~(1ull << VIRTIO_NET_F_STATUS);
-	ret = dev->ops->send_request(dev, VHOST_USER_SET_FEATURES, &features);
-	if (ret < 0)
-		goto error;
-	PMD_DRV_LOG(INFO, "set features: %" PRIx64, features);
-error:
-	pthread_mutex_unlock(&dev->mutex);
-
-	return ret;
+	return S_ISSOCK(sb.st_mode);
 }
 
 int
 virtio_user_start_device(struct virtio_user_dev *dev)
 {
+	uint64_t features;
 	int ret;
 
 	/*
@@ -172,9 +144,26 @@ virtio_user_start_device(struct virtio_user_dev *dev)
 	rte_mcfg_mem_read_lock();
 	pthread_mutex_lock(&dev->mutex);
 
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER &&
-			dev->vhostfd < 0)
+	if (is_vhost_user_by_type(dev->path) && dev->vhostfd < 0)
 		goto error;
+
+	/* Step 0: tell vhost to create queues */
+	if (virtio_user_queue_setup(dev, virtio_user_create_queue) < 0)
+		goto error;
+
+	/* Step 1: negotiate protocol features & set features */
+	features = dev->features;
+
+
+	/* Strip VIRTIO_NET_F_MAC, as MAC address is handled in vdev init */
+	features &= ~(1ull << VIRTIO_NET_F_MAC);
+	/* Strip VIRTIO_NET_F_CTRL_VQ, as devices do not really need to know */
+	features &= ~(1ull << VIRTIO_NET_F_CTRL_VQ);
+	features &= ~(1ull << VIRTIO_NET_F_STATUS);
+	ret = dev->ops->send_request(dev, VHOST_USER_SET_FEATURES, &features);
+	if (ret < 0)
+		goto error;
+	PMD_DRV_LOG(INFO, "set features: %" PRIx64, features);
 
 	/* Step 2: share memory regions */
 	ret = dev->ops->send_request(dev, VHOST_USER_SET_MEM_TABLE, NULL);
@@ -276,7 +265,6 @@ virtio_user_dev_init_notify(struct virtio_user_dev *dev)
 		}
 		kickfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 		if (kickfd < 0) {
-			close(callfd);
 			PMD_DRV_LOG(ERR, "kickfd error, %s", strerror(errno));
 			break;
 		}
@@ -285,7 +273,7 @@ virtio_user_dev_init_notify(struct virtio_user_dev *dev)
 	}
 
 	if (i < VIRTIO_MAX_VIRTQUEUES) {
-		for (j = 0; j < i; ++j) {
+		for (j = 0; j <= i; ++j) {
 			close(dev->callfds[j]);
 			close(dev->kickfds[j]);
 		}
@@ -312,7 +300,7 @@ virtio_user_fill_intr_handle(struct virtio_user_dev *dev)
 	}
 
 	for (i = 0; i < dev->max_queue_pairs; ++i)
-		eth_dev->intr_handle->efds[i] = dev->callfds[2 * i];
+		eth_dev->intr_handle->efds[i] = dev->callfds[i];
 	eth_dev->intr_handle->nb_efd = dev->max_queue_pairs;
 	eth_dev->intr_handle->max_intr = dev->max_queue_pairs + 1;
 	eth_dev->intr_handle->type = RTE_INTR_HANDLE_VDEV;
@@ -372,16 +360,16 @@ virtio_user_dev_setup(struct virtio_user_dev *dev)
 	dev->tapfds = NULL;
 
 	if (dev->is_server) {
-		if (dev->backend_type != VIRTIO_USER_BACKEND_VHOST_USER) {
-			PMD_DRV_LOG(ERR, "Server mode only supports vhost-user!");
+		if (access(dev->path, F_OK) == 0 &&
+		    !is_vhost_user_by_type(dev->path)) {
+			PMD_DRV_LOG(ERR, "Server mode doesn't support vhost-kernel!");
 			return -1;
 		}
 		dev->ops = &virtio_ops_user;
 	} else {
-		if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER) {
+		if (is_vhost_user_by_type(dev->path)) {
 			dev->ops = &virtio_ops_user;
-		} else if (dev->backend_type ==
-					VIRTIO_USER_BACKEND_VHOST_KERNEL) {
+		} else {
 			dev->ops = &virtio_ops_kernel;
 
 			dev->vhostfds = malloc(dev->max_queue_pairs *
@@ -397,12 +385,6 @@ virtio_user_dev_setup(struct virtio_user_dev *dev)
 				dev->vhostfds[q] = -1;
 				dev->tapfds[q] = -1;
 			}
-		} else if (dev->backend_type ==
-				VIRTIO_USER_BACKEND_VHOST_VDPA) {
-			dev->ops = &virtio_ops_vdpa;
-		} else {
-			PMD_DRV_LOG(ERR, "Unknown backend type");
-			return -1;
 		}
 	}
 
@@ -440,19 +422,14 @@ virtio_user_dev_setup(struct virtio_user_dev *dev)
 	 1ULL << VIRTIO_F_RING_PACKED		|	\
 	 1ULL << VHOST_USER_F_PROTOCOL_FEATURES)
 
-#define VHOST_USER_SUPPORTED_PROTOCOL_FEATURES		\
+#define VIRTIO_USER_SUPPORTED_PROTOCOL_FEATURES		\
 	(1ULL << VHOST_USER_PROTOCOL_F_MQ |		\
-	 1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK |	\
-	 1ULL << VHOST_USER_PROTOCOL_F_STATUS)
+	 1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK)
 
-#define VHOST_VDPA_SUPPORTED_PROTOCOL_FEATURES		\
-	(1ULL << VHOST_BACKEND_F_IOTLB_MSG_V2	|	\
-	1ULL << VHOST_BACKEND_F_IOTLB_BATCH)
 int
 virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 		     int cq, int queue_size, const char *mac, char **ifname,
-		     int server, int mrg_rxbuf, int in_order, int packed_vq,
-		     enum virtio_user_backend_type backend_type)
+		     int server, int mrg_rxbuf, int in_order, int packed_vq)
 {
 	uint64_t protocol_features = 0;
 
@@ -466,13 +443,7 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 	dev->mac_specified = 0;
 	dev->frontend_features = 0;
 	dev->unsupported_features = ~VIRTIO_USER_SUPPORTED_FEATURES;
-	dev->backend_type = backend_type;
-
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER)
-		dev->protocol_features = VHOST_USER_SUPPORTED_PROTOCOL_FEATURES;
-	else if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_VDPA)
-		dev->protocol_features = VHOST_VDPA_SUPPORTED_PROTOCOL_FEATURES;
-
+	dev->protocol_features = VIRTIO_USER_SUPPORTED_PROTOCOL_FEATURES;
 	parse_mac(dev, mac);
 
 	if (*ifname) {
@@ -485,7 +456,7 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 		return -1;
 	}
 
-	if (dev->backend_type != VIRTIO_USER_BACKEND_VHOST_USER)
+	if (!is_vhost_user_by_type(dev->path))
 		dev->unsupported_features |=
 			(1ULL << VHOST_USER_F_PROTOCOL_FEATURES);
 
@@ -505,8 +476,8 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 		}
 
 
-		if ((dev->device_features & (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)) ||
-				(dev->backend_type == VIRTIO_USER_BACKEND_VHOST_VDPA)) {
+		if (dev->device_features &
+				(1ULL << VHOST_USER_F_PROTOCOL_FEATURES)) {
 			if (dev->ops->send_request(dev,
 					VHOST_USER_GET_PROTOCOL_FEATURES,
 					&protocol_features))
@@ -531,12 +502,6 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 		 * later.
 		 */
 		dev->device_features = VIRTIO_USER_SUPPORTED_FEATURES;
-
-		/* We cannot assume VHOST_USER_PROTOCOL_F_STATUS is supported
-		 * until it's negotiated
-		 */
-		dev->protocol_features &=
-			~(1ULL << VHOST_USER_PROTOCOL_F_STATUS);
 	}
 
 
@@ -573,7 +538,7 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 	}
 
 	/* The backend will not report this feature, we add it explicitly */
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER)
+	if (is_vhost_user_by_type(dev->path))
 		dev->frontend_features |= (1ull << VIRTIO_NET_F_STATUS);
 
 	/*
@@ -599,12 +564,6 @@ void
 virtio_user_dev_uninit(struct virtio_user_dev *dev)
 {
 	uint32_t i;
-	struct rte_eth_dev *eth_dev = &rte_eth_devices[dev->port_id];
-
-	if (eth_dev->intr_handle) {
-		free(eth_dev->intr_handle);
-		eth_dev->intr_handle = NULL;
-	}
 
 	virtio_user_stop_device(dev);
 
@@ -823,83 +782,4 @@ virtio_user_handle_cq(struct virtio_user_dev *dev, uint16_t queue_idx)
 
 		__atomic_add_fetch(&vring->used->idx, 1, __ATOMIC_RELAXED);
 	}
-}
-
-int
-virtio_user_dev_set_status(struct virtio_user_dev *dev, uint8_t status)
-{
-	int ret;
-	uint64_t arg = status;
-
-	pthread_mutex_lock(&dev->mutex);
-	dev->status = status;
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER)
-		ret = dev->ops->send_request(dev,
-				VHOST_USER_SET_STATUS, &arg);
-	else if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_VDPA)
-		ret = dev->ops->send_request(dev,
-				VHOST_USER_SET_STATUS, &status);
-	else
-		ret = -ENOTSUP;
-
-	if (ret && ret != -ENOTSUP) {
-		PMD_INIT_LOG(ERR, "VHOST_USER_SET_STATUS failed (%d): %s", ret,
-			     strerror(errno));
-	}
-
-	pthread_mutex_unlock(&dev->mutex);
-	return ret;
-}
-
-int
-virtio_user_dev_update_status(struct virtio_user_dev *dev)
-{
-	uint64_t ret;
-	uint8_t status;
-	int err;
-
-	pthread_mutex_lock(&dev->mutex);
-	if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_USER) {
-		err = dev->ops->send_request(dev, VHOST_USER_GET_STATUS, &ret);
-		if (!err && ret > UINT8_MAX) {
-			PMD_INIT_LOG(ERR, "Invalid VHOST_USER_GET_STATUS "
-					"response 0x%" PRIx64 "\n", ret);
-			err = -1;
-			goto error;
-		}
-
-		status = ret;
-	} else if (dev->backend_type == VIRTIO_USER_BACKEND_VHOST_VDPA) {
-		err = dev->ops->send_request(dev, VHOST_USER_GET_STATUS,
-				&status);
-	} else {
-		err = -ENOTSUP;
-	}
-
-	if (!err) {
-		dev->status = status;
-		PMD_INIT_LOG(DEBUG, "Updated Device Status(0x%08x):\n"
-			"\t-RESET: %u\n"
-			"\t-ACKNOWLEDGE: %u\n"
-			"\t-DRIVER: %u\n"
-			"\t-DRIVER_OK: %u\n"
-			"\t-FEATURES_OK: %u\n"
-			"\t-DEVICE_NEED_RESET: %u\n"
-			"\t-FAILED: %u\n",
-			dev->status,
-			(dev->status == VIRTIO_CONFIG_STATUS_RESET),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_ACK),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_DRIVER),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_DRIVER_OK),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_FEATURES_OK),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_DEV_NEED_RESET),
-			!!(dev->status & VIRTIO_CONFIG_STATUS_FAILED));
-	} else if (err != -ENOTSUP) {
-		PMD_INIT_LOG(ERR, "VHOST_USER_GET_STATUS failed (%d): %s", err,
-			     strerror(errno));
-	}
-
-error:
-	pthread_mutex_unlock(&dev->mutex);
-	return err;
 }

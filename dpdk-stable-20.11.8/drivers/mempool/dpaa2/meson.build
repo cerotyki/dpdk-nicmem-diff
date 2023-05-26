@@ -3,10 +3,10 @@
 
 if not is_linux
 	build = false
-	reason = 'only supported on Linux'
+	reason = 'only supported on linux'
 endif
 
 deps += ['bus_fslmc']
 sources = files('dpaa2_hw_mempool.c')
 
-headers = files('rte_dpaa2_mempool.h')
+install_headers('rte_dpaa2_mempool.h')

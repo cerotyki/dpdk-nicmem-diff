@@ -18,8 +18,6 @@
 #include "mlx5_prm.h"
 #include "mlx5_devx_cmds.h"
 
-/* Reported driver name. */
-#define MLX5_DRIVER_NAME "mlx5_pci"
 
 /* Bit-field manipulation. */
 #define BITFIELD_DECLARE(bf, type, size) \
@@ -131,11 +129,9 @@ enum {
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6 = 0x101b,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6VF = 0x101c,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6DX = 0x101d,
-	PCI_DEVICE_ID_MELLANOX_CONNECTXVF = 0x101e,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX6DXVF = 0x101e,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF = 0xa2d6,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6LX = 0x101f,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX7 = 0x1021,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX7BF = 0Xa2dc,
 };
 
 /* Maximum number of simultaneous unicast MAC addresses. */
@@ -153,7 +149,6 @@ enum mlx5_nl_phys_port_name_type {
 	MLX5_PHYS_PORT_NAME_TYPE_UPLINK, /* p0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_PFVF, /* pf0vf0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_PFHPF, /* pf0, kernel ver >= 5.7, HPF rep */
-	MLX5_PHYS_PORT_NAME_TYPE_PFSF, /* pf0sf0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_UNKNOWN, /* Unrecognized. */
 };
 
@@ -162,7 +157,6 @@ struct mlx5_switch_info {
 	uint32_t master:1; /**< Master device. */
 	uint32_t representor:1; /**< Representor device. */
 	enum mlx5_nl_phys_port_name_type name_type; /** < Port name type. */
-	int32_t ctrl_num; /**< Controller number (valid for c#pf#vf# format). */
 	int32_t pf_num; /**< PF number (valid for pfxvfx format only). */
 	int32_t port_name; /**< Representor port name. */
 	uint64_t switch_id; /**< Switch identifier. */
@@ -199,12 +193,7 @@ check_cqe(volatile struct mlx5_cqe *cqe, const uint16_t cqes_n,
 
 	if (unlikely((op_owner != (!!(idx))) || (op_code == MLX5_CQE_INVALID)))
 		return MLX5_CQE_STATUS_HW_OWN;
-
-	/* Prevent speculative reading of other fields in CQE until
-	 * CQE is valid.
-	 */
-	rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
-
+	rte_cio_rmb();
 	if (unlikely(op_code == MLX5_CQE_RESP_ERR ||
 		     op_code == MLX5_CQE_REQ_ERR))
 		return MLX5_CQE_STATUS_ERR;
@@ -268,29 +257,9 @@ int64_t mlx5_get_dbr(void *ctx,  struct mlx5_dbr_page_list *head,
 __rte_internal
 int32_t mlx5_release_dbr(struct mlx5_dbr_page_list *head, uint32_t umem_id,
 			 uint64_t offset);
-__rte_internal
-void *mlx5_devx_alloc_uar(void *ctx, int mapping);
 extern uint8_t haswell_broadwell_cpu;
 
 __rte_internal
 void mlx5_common_init(void);
-
-/* mlx5 PMD wrapped MR struct. */
-struct mlx5_pmd_wrapped_mr {
-	uint32_t	     lkey;
-	void		     *addr;
-	size_t		     len;
-	void		     *obj; /* verbs mr object or devx umem object. */
-	void		     *imkey; /* DevX indirect mkey object. */
-};
-
-__rte_internal
-int
-mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
-			    size_t length, struct mlx5_pmd_wrapped_mr *pmd_mr);
-
-__rte_internal
-void
-mlx5_os_wrapped_mkey_destroy(struct mlx5_pmd_wrapped_mr *pmd_mr);
 
 #endif /* RTE_PMD_MLX5_COMMON_H_ */

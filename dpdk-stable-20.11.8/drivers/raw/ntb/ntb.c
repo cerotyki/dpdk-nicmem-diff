@@ -25,7 +25,6 @@
 
 static const struct rte_pci_id pci_id_ntb_map[] = {
 	{ RTE_PCI_DEVICE(NTB_INTEL_VENDOR_ID, NTB_INTEL_DEV_ID_B2B_SKX) },
-	{ RTE_PCI_DEVICE(NTB_INTEL_VENDOR_ID, NTB_INTEL_DEV_ID_B2B_ICX) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -245,28 +244,19 @@ ntb_dev_intr_handler(void *param)
 		hw->peer_dev_up = 0;
 		return;
 	}
-
-	/* Clear other received doorbells. */
-	(*hw->ntb_ops->db_clear)(dev, db_bits);
 }
 
-static int
+static void
 ntb_queue_conf_get(struct rte_rawdev *dev,
 		   uint16_t queue_id,
-		   rte_rawdev_obj_t queue_conf,
-		   size_t conf_size)
+		   rte_rawdev_obj_t queue_conf)
 {
 	struct ntb_queue_conf *q_conf = queue_conf;
 	struct ntb_hw *hw = dev->dev_private;
 
-	if (conf_size != sizeof(*q_conf))
-		return -EINVAL;
-
 	q_conf->tx_free_thresh = hw->tx_queues[queue_id]->tx_free_thresh;
 	q_conf->nb_desc = hw->rx_queues[queue_id]->nb_rx_desc;
 	q_conf->rx_mp = hw->rx_queues[queue_id]->mpool;
-
-	return 0;
 }
 
 static void
@@ -304,15 +294,11 @@ ntb_rxq_release(struct ntb_rx_queue *rxq)
 static int
 ntb_rxq_setup(struct rte_rawdev *dev,
 	      uint16_t qp_id,
-	      rte_rawdev_obj_t queue_conf,
-	      size_t conf_size)
+	      rte_rawdev_obj_t queue_conf)
 {
 	struct ntb_queue_conf *rxq_conf = queue_conf;
 	struct ntb_hw *hw = dev->dev_private;
 	struct ntb_rx_queue *rxq;
-
-	if (conf_size != sizeof(*rxq_conf))
-		return -EINVAL;
 
 	/* Allocate the rx queue data structure */
 	rxq = rte_zmalloc_socket("ntb rx queue",
@@ -389,16 +375,12 @@ ntb_txq_release(struct ntb_tx_queue *txq)
 static int
 ntb_txq_setup(struct rte_rawdev *dev,
 	      uint16_t qp_id,
-	      rte_rawdev_obj_t queue_conf,
-	      size_t conf_size)
+	      rte_rawdev_obj_t queue_conf)
 {
 	struct ntb_queue_conf *txq_conf = queue_conf;
 	struct ntb_hw *hw = dev->dev_private;
 	struct ntb_tx_queue *txq;
 	uint16_t i, prev;
-
-	if (conf_size != sizeof(*txq_conf))
-		return -EINVAL;
 
 	/* Allocate the TX queue data structure. */
 	txq = rte_zmalloc_socket("ntb tx queue",
@@ -457,8 +439,7 @@ ntb_txq_setup(struct rte_rawdev *dev,
 static int
 ntb_queue_setup(struct rte_rawdev *dev,
 		uint16_t queue_id,
-		rte_rawdev_obj_t queue_conf,
-		size_t conf_size)
+		rte_rawdev_obj_t queue_conf)
 {
 	struct ntb_hw *hw = dev->dev_private;
 	int ret;
@@ -466,11 +447,11 @@ ntb_queue_setup(struct rte_rawdev *dev,
 	if (queue_id >= hw->queue_pairs)
 		return -EINVAL;
 
-	ret = ntb_txq_setup(dev, queue_id, queue_conf, conf_size);
+	ret = ntb_txq_setup(dev, queue_id, queue_conf);
 	if (ret < 0)
 		return ret;
 
-	ret = ntb_rxq_setup(dev, queue_id, queue_conf, conf_size);
+	ret = ntb_rxq_setup(dev, queue_id, queue_conf);
 
 	return ret;
 }
@@ -819,17 +800,11 @@ end_of_rx:
 	return nb_rx;
 }
 
-static int
-ntb_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info,
-		size_t dev_info_size)
+static void
+ntb_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info)
 {
 	struct ntb_hw *hw = dev->dev_private;
 	struct ntb_dev_info *info = dev_info;
-
-	if (dev_info_size != sizeof(*info)) {
-		NTB_LOG(ERR, "Invalid size parameter to %s", __func__);
-		return -EINVAL;
-	}
 
 	info->mw_cnt = hw->mw_cnt;
 	info->mw_size = hw->mw_size;
@@ -843,7 +818,7 @@ ntb_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info,
 
 	if (!hw->queue_size || !hw->queue_pairs) {
 		NTB_LOG(ERR, "No queue size and queue num assigned.");
-		return -EAGAIN;
+		return;
 	}
 
 	hw->hdr_size_per_queue = RTE_ALIGN(sizeof(struct ntb_header) +
@@ -851,21 +826,15 @@ ntb_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info,
 				hw->queue_size * sizeof(struct ntb_used),
 				RTE_CACHE_LINE_SIZE);
 	info->ntb_hdr_size = hw->hdr_size_per_queue * hw->queue_pairs;
-
-	return 0;
 }
 
 static int
-ntb_dev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config,
-		size_t config_size)
+ntb_dev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config)
 {
 	struct ntb_dev_config *conf = config;
 	struct ntb_hw *hw = dev->dev_private;
 	uint32_t xstats_num;
 	int ret;
-
-	if (conf == NULL || config_size != sizeof(*conf))
-		return -EINVAL;
 
 	hw->queue_pairs	= conf->num_queues;
 	hw->queue_size = conf->queue_size;
@@ -923,11 +892,6 @@ ntb_dev_start(struct rte_rawdev *dev)
 
 	hw->peer_mw_base = rte_zmalloc("ntb_peer_mw_base", hw->mw_cnt *
 					sizeof(uint64_t), 0);
-	if (hw->peer_mw_base == NULL) {
-		NTB_LOG(ERR, "Cannot allocate memory for peer mw base.");
-		ret = -ENOMEM;
-		goto err_q_init;
-	}
 
 	if (hw->ntb_ops->spad_read == NULL) {
 		ret = -ENOTSUP;
@@ -1085,10 +1049,6 @@ ntb_attr_set(struct rte_rawdev *dev, const char *attr_name,
 		if (hw->ntb_ops->spad_write == NULL)
 			return -ENOTSUP;
 		index = atoi(&attr_name[NTB_SPAD_USER_LEN]);
-		if (index < 0 || index >= NTB_SPAD_USER_MAX_NUM) {
-			NTB_LOG(ERR, "Invalid attribute (%s)", attr_name);
-			return -EINVAL;
-		}
 		(*hw->ntb_ops->spad_write)(dev, hw->spad_user_list[index],
 					   1, attr_value);
 		NTB_LOG(DEBUG, "Set attribute (%s) Value (%" PRIu64 ")",
@@ -1183,10 +1143,6 @@ ntb_attr_get(struct rte_rawdev *dev, const char *attr_name,
 		if (hw->ntb_ops->spad_read == NULL)
 			return -ENOTSUP;
 		index = atoi(&attr_name[NTB_SPAD_USER_LEN]);
-		if (index < 0 || index >= NTB_SPAD_USER_MAX_NUM) {
-			NTB_LOG(ERR, "Attribute (%s) out of range", attr_name);
-			return -EINVAL;
-		}
 		*attr_value = (*hw->ntb_ops->spad_read)(dev,
 				hw->spad_user_list[index], 0);
 		NTB_LOG(DEBUG, "Attribute (%s) Value (%" PRIu64 ")",
@@ -1377,7 +1333,6 @@ ntb_init_hw(struct rte_rawdev *dev, struct rte_pci_device *pci_dev)
 
 	switch (pci_dev->id.device_id) {
 	case NTB_INTEL_DEV_ID_B2B_SKX:
-	case NTB_INTEL_DEV_ID_B2B_ICX:
 		hw->ntb_ops = &intel_ntb_ops;
 		break;
 	default:
@@ -1401,10 +1356,6 @@ ntb_init_hw(struct rte_rawdev *dev, struct rte_pci_device *pci_dev)
 
 	/* Init doorbell. */
 	hw->db_valid_mask = RTE_LEN2MASK(hw->db_cnt, uint64_t);
-	/* Clear all valid doorbell bits before registering intr handler */
-	if (hw->ntb_ops->db_clear == NULL)
-		return -ENOTSUP;
-	(*hw->ntb_ops->db_clear)(dev, hw->db_valid_mask);
 
 	intr_handle = &pci_dev->intr_handle;
 	/* Register callback func to eal lib */

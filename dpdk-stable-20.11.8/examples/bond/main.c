@@ -41,10 +41,6 @@
 #include <rte_tcp.h>
 #include <rte_arp.h>
 #include <rte_spinlock.h>
-#include <rte_devargs.h>
-#include <rte_byteorder.h>
-#include <rte_cpuflags.h>
-#include <rte_eth_bond.h>
 
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
@@ -56,6 +52,13 @@
 #include <cmdline.h>
 
 #include "main.h"
+
+#include <rte_devargs.h>
+
+
+#include "rte_byteorder.h"
+#include "rte_cpuflags.h"
+#include "rte_eth_bond.h"
 
 #define RTE_LOGTYPE_DCB RTE_LOGTYPE_USER1
 
@@ -233,7 +236,7 @@ bond_port_init(struct rte_mempool *mbuf_pool)
 			0 /*SOCKET_ID_ANY*/);
 	if (retval < 0)
 		rte_exit(EXIT_FAILURE,
-				"Failed to create bond port\n");
+				"Faled to create bond port\n");
 
 	BOND_PORT = retval;
 
@@ -376,7 +379,7 @@ static int lcore_main(__rte_unused void *arg1)
 	bond_ip = BOND_IP_1 | (BOND_IP_2 << 8) |
 				(BOND_IP_3 << 16) | (BOND_IP_4 << 24);
 
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 
 	while (global_flag_stru_p->LcoreMainIsRunning) {
 		rte_spinlock_unlock(&global_flag_stru_p->lock);
@@ -408,7 +411,7 @@ static int lcore_main(__rte_unused void *arg1)
 						struct rte_ether_hdr *);
 			ether_type = eth_hdr->ether_type;
 			if (ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN))
-				printf("VLAN tagged frame, offset:");
+				printf("VLAN taged frame, offset:");
 			offset = get_vlan_offset(eth_hdr, &ether_type);
 			if (offset > 0)
 				printf("%d\n", offset);
@@ -457,7 +460,7 @@ static int lcore_main(__rte_unused void *arg1)
 			if (is_free == 0)
 				rte_pktmbuf_free(pkts[i]);
 		}
-		rte_spinlock_lock(&global_flag_stru_p->lock);
+		rte_spinlock_trylock(&global_flag_stru_p->lock);
 	}
 	rte_spinlock_unlock(&global_flag_stru_p->lock);
 	printf("BYE lcore_main\n");
@@ -570,9 +573,9 @@ static void cmd_start_parsed(__rte_unused void *parsed_result,
 			       struct cmdline *cl,
 			       __rte_unused void *data)
 {
-	int worker_core_id = rte_lcore_id();
+	int slave_core_id = rte_lcore_id();
 
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 	if (global_flag_stru_p->LcoreMainIsRunning == 0) {
 		if (rte_eal_get_lcore_state(global_flag_stru_p->LcoreMainCore)
 		    != WAIT) {
@@ -587,19 +590,19 @@ static void cmd_start_parsed(__rte_unused void *parsed_result,
 		return;
 	}
 
-	/* start lcore main on core != main_core - ARP response thread */
-	worker_core_id = rte_get_next_lcore(rte_lcore_id(), 1, 0);
-	if ((worker_core_id >= RTE_MAX_LCORE) || (worker_core_id == 0))
+	/* start lcore main on core != master_core - ARP response thread */
+	slave_core_id = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+	if ((slave_core_id >= RTE_MAX_LCORE) || (slave_core_id == 0))
 		return;
 
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 	global_flag_stru_p->LcoreMainIsRunning = 1;
 	rte_spinlock_unlock(&global_flag_stru_p->lock);
 	cmdline_printf(cl,
 			"Starting lcore_main on core %d:%d "
 			"Our IP:%d.%d.%d.%d\n",
-			worker_core_id,
-			rte_eal_remote_launch(lcore_main, NULL, worker_core_id),
+			slave_core_id,
+			rte_eal_remote_launch(lcore_main, NULL, slave_core_id),
 			BOND_IP_1,
 			BOND_IP_2,
 			BOND_IP_3,
@@ -660,7 +663,7 @@ static void cmd_stop_parsed(__rte_unused void *parsed_result,
 			    struct cmdline *cl,
 			    __rte_unused void *data)
 {
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 	if (global_flag_stru_p->LcoreMainIsRunning == 0)	{
 		cmdline_printf(cl,
 					"lcore_main not running on core:%d\n",
@@ -701,7 +704,7 @@ static void cmd_quit_parsed(__rte_unused void *parsed_result,
 			    struct cmdline *cl,
 			    __rte_unused void *data)
 {
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 	if (global_flag_stru_p->LcoreMainIsRunning == 0)	{
 		cmdline_printf(cl,
 					"lcore_main not running on core:%d\n",
@@ -763,7 +766,7 @@ static void cmd_show_parsed(__rte_unused void *parsed_result,
 		printf("\n");
 	}
 
-	rte_spinlock_lock(&global_flag_stru_p->lock);
+	rte_spinlock_trylock(&global_flag_stru_p->lock);
 	cmdline_printf(cl,
 			"Active_slaves:%d "
 			"packets received:Tot:%d Arp:%d IPv4:%d\n",
@@ -799,7 +802,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	NULL,
 };
 
-/* prompt function, called from main on MAIN lcore */
+/* prompt function, called from main on MASTER lcore */
 static void prompt(__rte_unused void *arg1)
 {
 	struct cmdline *cl;
@@ -815,7 +818,7 @@ static void prompt(__rte_unused void *arg1)
 int
 main(int argc, char *argv[])
 {
-	int ret, worker_core_id;
+	int ret, slave_core_id;
 	uint16_t nb_ports, i;
 
 	/* init EAL */
@@ -849,23 +852,23 @@ main(int argc, char *argv[])
 	rte_spinlock_init(&global_flag_stru_p->lock);
 
 	/* check state of lcores */
-	RTE_LCORE_FOREACH_WORKER(worker_core_id) {
-		if (rte_eal_get_lcore_state(worker_core_id) != WAIT)
+	RTE_LCORE_FOREACH_SLAVE(slave_core_id) {
+		if (rte_eal_get_lcore_state(slave_core_id) != WAIT)
 			return -EBUSY;
 	}
 
-	/* start lcore main on core != main_core - ARP response thread */
-	worker_core_id = rte_get_next_lcore(rte_lcore_id(), 1, 0);
-	if ((worker_core_id >= RTE_MAX_LCORE) || (worker_core_id == 0))
+	/* start lcore main on core != master_core - ARP response thread */
+	slave_core_id = rte_get_next_lcore(rte_lcore_id(), 1, 0);
+	if ((slave_core_id >= RTE_MAX_LCORE) || (slave_core_id == 0))
 		return -EPERM;
 
 	global_flag_stru_p->LcoreMainIsRunning = 1;
-	global_flag_stru_p->LcoreMainCore = worker_core_id;
+	global_flag_stru_p->LcoreMainCore = slave_core_id;
 	printf("Starting lcore_main on core %d:%d Our IP:%d.%d.%d.%d\n",
-			worker_core_id,
+			slave_core_id,
 			rte_eal_remote_launch((lcore_function_t *)lcore_main,
 					NULL,
-					worker_core_id),
+					slave_core_id),
 			BOND_IP_1,
 			BOND_IP_2,
 			BOND_IP_3,
@@ -876,9 +879,5 @@ main(int argc, char *argv[])
 	prompt(NULL);
 
 	rte_delay_ms(100);
-
-	/* clean up the EAL */
-	rte_eal_cleanup();
-
 	return 0;
 }

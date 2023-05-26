@@ -78,7 +78,7 @@ __rte_stack_lf_pop_elems(struct rte_stack_lf_list *list,
 			 struct rte_stack_lf_elem **last)
 {
 	struct rte_stack_lf_head old_head;
-	int success = 0;
+	int success;
 
 	/* Reserve num elements, if available */
 	while (1) {
@@ -128,10 +128,8 @@ __rte_stack_lf_pop_elems(struct rte_stack_lf_list *list,
 		/* If NULL was encountered, the list was modified while
 		 * traversing it. Retry.
 		 */
-		if (i != num) {
-			old_head = list->head;
+		if (i != num)
 			continue;
-		}
 
 		new_head.top = tmp;
 		new_head.cnt = old_head.cnt + 1;

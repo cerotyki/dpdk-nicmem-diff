@@ -230,8 +230,8 @@ static void hinic_rq_prepare_ctxt(struct hinic_rq *rq,
 	wq_block_pfn_hi = upper_32_bits(wq_block_pfn);
 	wq_block_pfn_lo = lower_32_bits(wq_block_pfn);
 
-	/* config as ceq disable, but must set msix state disable */
-	rq_ctxt->ceq_attr = RQ_CTXT_CEQ_ATTR_SET(0, EN) |
+	/* must config as ceq enable but do not generate ceq */
+	rq_ctxt->ceq_attr = RQ_CTXT_CEQ_ATTR_SET(1, EN) |
 			    RQ_CTXT_CEQ_ATTR_SET(1, OWNER);
 
 	rq_ctxt->pi_intr_attr = RQ_CTXT_PI_SET(pi_start, IDX) |
@@ -664,6 +664,7 @@ err_init_nic_hwdev:
 static void hinic_free_nic_hwdev(struct hinic_hwdev *hwdev)
 {
 	hinic_vf_func_free(hwdev);
+	hwdev->nic_io = NULL;
 }
 
 int hinic_rx_tx_flush(struct hinic_hwdev *hwdev)
@@ -758,6 +759,11 @@ static int hinic_alloc_nicio(struct hinic_hwdev *hwdev)
 	int err;
 
 	max_qps = hinic_func_max_qnum(hwdev);
+	if ((max_qps & (max_qps - 1))) {
+		PMD_DRV_LOG(ERR, "Wrong number of max_qps: %d",
+			max_qps);
+		return -EINVAL;
+	}
 
 	nic_io->max_qps = max_qps;
 	nic_io->num_qps = max_qps;

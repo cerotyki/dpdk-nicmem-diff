@@ -157,27 +157,6 @@ error:
 	} while (i--);
 	return -rte_errno;
 }
-
-void
-mlx4_tx_uar_uninit_secondary(struct rte_eth_dev *dev)
-{
-	struct mlx4_proc_priv *ppriv =
-			(struct mlx4_proc_priv *)dev->process_private;
-	const size_t page_size = sysconf(_SC_PAGESIZE);
-	void *addr;
-	size_t i;
-
-	if (page_size == (size_t)-1) {
-		ERROR("Failed to get mem page size");
-		return;
-	}
-	for (i = 0; i < ppriv->uar_table_sz; i++) {
-		addr = ppriv->uar_table[i];
-		if (addr)
-			munmap(RTE_PTR_ALIGN_FLOOR(addr, page_size), page_size);
-	}
-}
-
 #else
 int
 mlx4_tx_uar_init_secondary(struct rte_eth_dev *dev __rte_unused,
@@ -187,13 +166,6 @@ mlx4_tx_uar_init_secondary(struct rte_eth_dev *dev __rte_unused,
 	ERROR("UAR remap is not supported");
 	rte_errno = ENOTSUP;
 	return -rte_errno;
-}
-
-void
-mlx4_tx_uar_uninit_secondary(struct rte_eth_dev *dev __rte_unused)
-{
-	assert(rte_eal_process_type() == RTE_PROC_SECONDARY);
-	ERROR("UAR remap is not supported");
 }
 #endif
 
@@ -206,18 +178,19 @@ mlx4_tx_uar_uninit_secondary(struct rte_eth_dev *dev __rte_unused)
 static void
 mlx4_txq_free_elts(struct txq *txq)
 {
+	unsigned int elts_head = txq->elts_head;
+	unsigned int elts_tail = txq->elts_tail;
 	struct txq_elt (*elts)[txq->elts_n] = txq->elts;
-	unsigned int n = txq->elts_n;
+	unsigned int elts_m = txq->elts_n - 1;
 
-	DEBUG("%p: freeing WRs, %u", (void *)txq, n);
-	while (n--) {
-		struct txq_elt *elt = &(*elts)[n];
+	DEBUG("%p: freeing WRs", (void *)txq);
+	while (elts_tail != elts_head) {
+		struct txq_elt *elt = &(*elts)[elts_tail++ & elts_m];
 
-		if (elt->buf) {
-			rte_pktmbuf_free(elt->buf);
-			elt->buf = NULL;
-			elt->wqe = NULL;
-		}
+		MLX4_ASSERT(elt->buf != NULL);
+		rte_pktmbuf_free(elt->buf);
+		elt->buf = NULL;
+		elt->wqe = NULL;
 	}
 	txq->elts_tail = txq->elts_head;
 }

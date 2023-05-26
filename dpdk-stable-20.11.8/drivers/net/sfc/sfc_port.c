@@ -10,7 +10,6 @@
 #include "efx.h"
 
 #include "sfc.h"
-#include "sfc_debug.h"
 #include "sfc_log.h"
 #include "sfc_kvargs.h"
 
@@ -26,8 +25,7 @@
 /**
  * Update MAC statistics in the buffer.
  *
- * @param	sa		Adapter
- * @param	force_upload	Flag to upload MAC stats in any case
+ * @param	sa	Adapter
  *
  * @return Status code
  * @retval	0	Success
@@ -35,7 +33,7 @@
  * @retval	ENOMEM	Memory allocation failure
  */
 int
-sfc_port_update_mac_stats(struct sfc_adapter *sa, boolean_t force_upload)
+sfc_port_update_mac_stats(struct sfc_adapter *sa)
 {
 	struct sfc_port *port = &sa->port;
 	efsys_mem_t *esmp = &port->mac_stats_dma_mem;
@@ -44,17 +42,17 @@ sfc_port_update_mac_stats(struct sfc_adapter *sa, boolean_t force_upload)
 	unsigned int nb_attempts = 0;
 	int rc;
 
-	SFC_ASSERT(sfc_adapter_is_locked(sa));
+	SFC_ASSERT(rte_spinlock_is_locked(&port->mac_stats_lock));
 
 	if (sa->state != SFC_ADAPTER_STARTED)
-		return 0;
+		return EINVAL;
 
 	/*
 	 * If periodic statistics DMA'ing is off or if not supported,
 	 * make a manual request and keep an eye on timer if need be
 	 */
 	if (!port->mac_stats_periodic_dma_supported ||
-	    (port->mac_stats_update_period_ms == 0) || force_upload) {
+	    (port->mac_stats_update_period_ms == 0)) {
 		if (port->mac_stats_update_period_ms != 0) {
 			uint64_t timestamp = sfc_get_system_msecs();
 
@@ -104,13 +102,14 @@ sfc_port_reset_sw_stats(struct sfc_adapter *sa)
 int
 sfc_port_reset_mac_stats(struct sfc_adapter *sa)
 {
+	struct sfc_port *port = &sa->port;
 	int rc;
 
-	SFC_ASSERT(sfc_adapter_is_locked(sa));
-
+	rte_spinlock_lock(&port->mac_stats_lock);
 	rc = efx_mac_stats_clear(sa->nic);
 	if (rc == 0)
 		sfc_port_reset_sw_stats(sa);
+	rte_spinlock_unlock(&port->mac_stats_lock);
 
 	return rc;
 }
@@ -158,27 +157,6 @@ sfc_port_phy_caps_to_max_link_speed(uint32_t phy_caps)
 
 #endif
 
-static void
-sfc_port_fill_mac_stats_info(struct sfc_adapter *sa)
-{
-	unsigned int mac_stats_nb_supported = 0;
-	struct sfc_port *port = &sa->port;
-	unsigned int stat_idx;
-
-	efx_mac_stats_get_mask(sa->nic, port->mac_stats_mask,
-			       sizeof(port->mac_stats_mask));
-
-	for (stat_idx = 0; stat_idx < EFX_MAC_NSTATS; ++stat_idx) {
-		if (!EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, stat_idx))
-			continue;
-
-		port->mac_stats_by_id[mac_stats_nb_supported] = stat_idx;
-		mac_stats_nb_supported++;
-	}
-
-	port->mac_stats_nb_supported = mac_stats_nb_supported;
-}
-
 int
 sfc_port_start(struct sfc_adapter *sa)
 {
@@ -187,6 +165,7 @@ sfc_port_start(struct sfc_adapter *sa)
 	uint32_t phy_adv_cap;
 	const uint32_t phy_pause_caps =
 		((1u << EFX_PHY_CAP_PAUSE) | (1u << EFX_PHY_CAP_ASYM));
+	unsigned int i;
 
 	sfc_log_init(sa, "entry");
 
@@ -280,7 +259,12 @@ sfc_port_start(struct sfc_adapter *sa)
 		port->mac_stats_reset_pending = B_FALSE;
 	}
 
-	sfc_port_fill_mac_stats_info(sa);
+	efx_mac_stats_get_mask(sa->nic, port->mac_stats_mask,
+			       sizeof(port->mac_stats_mask));
+
+	for (i = 0, port->mac_stats_nb_supported = 0; i < EFX_MAC_NSTATS; ++i)
+		if (EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, i))
+			port->mac_stats_nb_supported++;
 
 	port->mac_stats_update_generation = 0;
 
@@ -368,8 +352,6 @@ sfc_port_stop(struct sfc_adapter *sa)
 	(void)efx_mac_stats_periodic(sa->nic, &sa->port.mac_stats_dma_mem,
 				     0, B_FALSE);
 
-	sfc_port_update_mac_stats(sa, B_TRUE);
-
 	efx_port_fini(sa->nic);
 	efx_filter_fini(sa->nic);
 
@@ -432,6 +414,8 @@ sfc_port_attach(struct sfc_adapter *sa)
 		rc = ENOMEM;
 		goto fail_mcast_addr_list_buf_alloc;
 	}
+
+	rte_spinlock_init(&port->mac_stats_lock);
 
 	rc = ENOMEM;
 	port->mac_stats_buf = rte_calloc_socket("mac_stats_buf", EFX_MAC_NSTATS,

@@ -16,33 +16,12 @@
  */
 
 #include <rte_mbuf.h>
-#include <rte_mbuf_dyn.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct rte_reorder_buffer;
-
-typedef uint32_t rte_reorder_seqn_t;
-extern int rte_reorder_seqn_dynfield_offset;
-
-/**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
- * Read reorder sequence number from mbuf.
- *
- * @param mbuf Structure to read from.
- * @return pointer to reorder sequence number.
- */
-__rte_experimental
-static inline rte_reorder_seqn_t *
-rte_reorder_seqn(struct rte_mbuf *mbuf)
-{
-	return RTE_MBUF_DYNFIELD(mbuf, rte_reorder_seqn_dynfield_offset,
-		rte_reorder_seqn_t *);
-}
 
 /**
  * Create a new reorder buffer instance
@@ -81,7 +60,6 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size);
  *   The initialized reorder buffer instance, or NULL on error
  *   On error case, rte_errno will be set appropriately:
  *    - EINVAL - invalid parameters
- *    - ENOMEM - not enough memory to register dynamic field
  */
 struct rte_reorder_buffer *
 rte_reorder_init(struct rte_reorder_buffer *b, unsigned int bufsize,
@@ -116,6 +94,8 @@ rte_reorder_reset(struct rte_reorder_buffer *b);
  *
  * @param b
  *   reorder buffer instance
+ * @return
+ *   None
  */
 void
 rte_reorder_free(struct rte_reorder_buffer *b);

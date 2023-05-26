@@ -6,12 +6,18 @@
 MVNETA Poll Mode Driver
 =======================
 
-The MVNETA PMD (**librte_net_mvneta**) provides poll mode driver support
+The MVNETA PMD (librte_pmd_mvneta) provides poll mode driver support
 for the Marvell NETA 1/2.5 Gbps adapter.
 
 Detailed information about SoCs that use PPv2 can be obtained here:
 
 * https://www.marvell.com/embedded-processors/armada-3700/
+
+.. Note::
+
+   Due to external dependencies, this driver is disabled by default. It must
+   be enabled manually by setting relevant configuration option manually.
+   Please refer to `Config File Options`_ section for further details.
 
 
 Features
@@ -75,9 +81,20 @@ Prerequisites
   Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup
   DPDK environment.
 
+Pre-Installation Configuration
+------------------------------
+
+Config File Options
+~~~~~~~~~~~~~~~~~~~
+
+The following options can be modified in the ``config`` file.
+
+- ``CONFIG_RTE_LIBRTE_MVNETA_PMD`` (default ``n``)
+
+    Toggle compilation of the librte_pmd_mvneta driver.
 
 Runtime options
----------------
+~~~~~~~~~~~~~~~
 
 The following ``devargs`` options can be enabled at runtime. They must
 be passed as part of EAL arguments.
@@ -90,7 +107,7 @@ be passed as part of EAL arguments.
 
 .. code-block:: console
 
-   ./dpdk-testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 \
+   ./testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 \
     -c 3 -- -i --p 3 -a
 
 
@@ -109,14 +126,16 @@ Driver needs precompiled MUSDK library during compilation.
 MUSDK will be installed to `usr/local` under current directory.
 For the detailed build instructions please consult ``doc/musdk_get_started.txt``.
 
-The path to the MUSDK installation directory needs to set in meson, shown in the
-following command:
+Before the DPDK build process the environmental variable ``LIBMUSDK_PATH`` with
+the path to the MUSDK installation directory needs to be exported.
 
 .. code-block:: console
 
-   meson setup build --cross-file config/arm/arm64_armada_linux_gcc
-   ninja -C build
-
+   export LIBMUSDK_PATH=<musdk>/usr/local
+   export CROSS=aarch64-linux-gnu-
+   make config T=arm64-armv8a-linux-gcc
+   sed -ri 's,(MVNETA_PMD=)n,\1y,' build/.config
+   make
 
 Usage Example
 -------------
@@ -141,7 +160,7 @@ In order to run testpmd example application following command can be used:
 
 .. code-block:: console
 
-   ./dpdk-testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- \
+   ./testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- \
      -i --p 3 -a --txd 256 --rxd 128 --rxq=1 --txq=1  --nb-cores=1
 
 
@@ -149,4 +168,4 @@ In order to run l2fwd example application following command can be used:
 
 .. code-block:: console
 
-   ./dpdk-l2fwd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- -T 1 -p 3
+   ./l2fwd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- -T 1 -p 3

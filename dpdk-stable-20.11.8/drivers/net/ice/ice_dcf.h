@@ -43,7 +43,6 @@ struct ice_dcf_hw {
 
 	uint16_t num_vfs;
 	uint16_t *vf_vsi_map;
-	uint16_t pf_vsi_id;
 
 	struct virtchnl_version_info virtchnl_version;
 	struct virtchnl_vf_resource *vf_res; /* VF resource */

@@ -361,7 +361,7 @@ ccp_find_lsb_regions(struct ccp_queue *cmd_q, uint64_t status)
 		if (ccp_get_bit(&cmd_q->lsbmask, j))
 			weight++;
 
-	CCP_LOG_DBG("Queue %d can access %d LSB regions  of mask  %lu\n",
+	printf("Queue %d can access %d LSB regions  of mask  %lu\n",
 	       (int)cmd_q->id, weight, cmd_q->lsbmask);
 
 	return weight ? 0 : -EINVAL;
@@ -546,7 +546,7 @@ ccp_add_device(struct ccp_device *dev, int type)
 						  cmd_q->qsize, SOCKET_ID_ANY);
 		cmd_q->qbase_addr = (void *)q_mz->addr;
 		cmd_q->qbase_desc = (void *)q_mz->addr;
-		cmd_q->qbase_phys_addr =  q_mz->iova;
+		cmd_q->qbase_phys_addr =  q_mz->phys_addr;
 
 		cmd_q->qcontrol = 0;
 		/* init control reg to zero */
@@ -797,7 +797,7 @@ ccp_probe_devices(const struct rte_pci_id *ccp_id)
 		snprintf(dirname, sizeof(dirname), "%s/%s",
 			     SYSFS_PCI_DEVICES, d->d_name);
 		if (is_ccp_device(dirname, ccp_id, &ccp_type)) {
-			CCP_LOG_DBG("CCP : Detected CCP device with ID = 0x%x\n",
+			printf("CCP : Detected CCP device with ID = 0x%x\n",
 			       ccp_id[ccp_type].device_id);
 			ret = ccp_probe_device(dirname, domain, bus, devid,
 					       function, ccp_type);

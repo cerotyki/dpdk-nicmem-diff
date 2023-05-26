@@ -13,4 +13,3 @@ Baseband Device Drivers
     turbo_sw
     fpga_lte_fec
     fpga_5gnr_fec
-    acc100
