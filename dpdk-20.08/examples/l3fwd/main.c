@@ -54,12 +54,8 @@
 #define MAX_LCORE_PARAMS 1024
 
 /* Static global variables used within this file. */
-/* RX and TX descriptors */
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
-
-/* Calls to function that cause overhead in route lookup */
-static uint32_t nb_calls = 0;
 
 /**< Ports set in promiscuous mode off by default. */
 static int promiscuous_on;
@@ -70,22 +66,11 @@ static int l3fwd_em_on;
 
 /* Global variables. */
 
-enum {
-	MEM_HOST_INTERNAL_PINNED,
-	MEM_HOST_PINNED,
-	MEM_NIC_PINNED,
-	MEM_BASE,
-};
-
-static int l3fwd_mem_type = MEM_HOST_INTERNAL_PINNED;
-static int g_nb_mbufs = 0; /* number of mbufs overrides NB_MBUF */
-static int g_cachesize = MEMPOOL_CACHE_SIZE;
 static int numa_on = 1; /**< NUMA is enabled by default. */
 static int parse_ptype; /**< Parse packet type using rx callback, and */
 			/**< disabled by default */
-static int per_port_pool=1; /**< Use separate buffer pools per port; enabled */
+static int per_port_pool; /**< Use separate buffer pools per port; disabled */
 			  /**< by default */
-static int g_burst = MAX_PKT_BURST;
 
 volatile bool force_quit;
 
@@ -102,7 +87,7 @@ uint32_t enabled_port_mask;
 int ipv6; /**< ipv6 is false by default. */
 uint32_t hash_entry_number = HASH_ENTRY_NUMBER_DEFAULT;
 
-struct lcore_conf lcore_conf[RTE_MAX_LCORE] = {};
+struct lcore_conf lcore_conf[RTE_MAX_LCORE];
 
 struct lcore_params {
 	uint16_t port_id;
@@ -123,10 +108,6 @@ static struct lcore_params lcore_params_array_default[] = {
 	{3, 1, 3},
 };
 
-#define MAX_SEGS_BUFFER_SPLIT (2)
-uint16_t rx_pkt_seg_lengths[MAX_SEGS_BUFFER_SPLIT] = {RTE_PKTMBUF_HEADROOM + 64, 2048};
-uint8_t  rx_pkt_nb_segs = 2; /**< Number of segments to split */
-
 static struct lcore_params * lcore_params = lcore_params_array_default;
 static uint16_t nb_lcore_params = sizeof(lcore_params_array_default) /
 				sizeof(lcore_params_array_default[0]);
@@ -136,7 +117,7 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM | DEV_RX_OFFLOAD_BUFFER_SPLIT | DEV_RX_OFFLOAD_SCATTER,
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -146,11 +127,10 @@ static struct rte_eth_conf port_conf = {
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
-		.offloads = DEV_TX_OFFLOAD_MULTI_SEGS,
 	},
 };
 
-static struct rte_mempool *pktmbuf_pool[MAX_LCORE_PARAMS][RTE_MAX_ETHPORTS][NB_SOCKETS][MAX_SEGS_BUFFER_SPLIT];
+static struct rte_mempool *pktmbuf_pool[RTE_MAX_ETHPORTS][NB_SOCKETS];
 static uint8_t lkp_per_socket[NB_SOCKETS];
 
 struct l3fwd_lkp_mode {
@@ -319,10 +299,6 @@ print_usage(const char *prgname)
 		"                 maximum packet length in decimal (64-9600)\n"
 		"  --no-numa: Disable numa awareness\n"
 		"  --hash-entry-num: Specify the hash entry number in hexadecimal to be setup\n"
-		"  --nb-rxd: Number of receive descriptors\n"
-		"  --nb-txd: Number of transmit descriptors\n"
-		"  --nb-mbufs: Number of mbufs used per core\n"
-		"  --nb-calls: Number iteration of overhead function\n"
 		"  --ipv6: Set if running ipv6 packets\n"
 		"  --parse-ptype: Set to use software to analyze packet type\n"
 		"  --per-port-pool: Use separate buffer pool per port\n"
@@ -336,20 +312,6 @@ print_usage(const char *prgname)
 		"                    Default: 1\n"
 		"                    Valid only if --mode=eventdev\n\n",
 		prgname);
-}
-
-static int
-parse_number_or_zero(const char *nb_mbufs)
-{
-	char *end = NULL;
-	unsigned long len;
-
-	/* parse decimal string */
-	len = strtoul(nb_mbufs, &end, 10);
-	if ((nb_mbufs[0] == '\0') || (end == NULL) || (*end != '\0'))
-		return 0;
-
-	return len;
 }
 
 static int
@@ -535,12 +497,7 @@ static const char short_options[] =
 #define CMD_LINE_OPT_CONFIG "config"
 #define CMD_LINE_OPT_ETH_DEST "eth-dest"
 #define CMD_LINE_OPT_NO_NUMA "no-numa"
-#define CMD_LINE_OPT_MEM_TYPE "memtype"
 #define CMD_LINE_OPT_IPV6 "ipv6"
-#define CMD_LINE_OPT_NB_MBUFS "nb-mbufs"
-#define CMD_LINE_OPT_NB_TXD "nb-txd"
-#define CMD_LINE_OPT_NB_RXD "nb-rxd"
-#define CMD_LINE_OPT_NB_CALLS "nb-calls"
 #define CMD_LINE_OPT_ENABLE_JUMBO "enable-jumbo"
 #define CMD_LINE_OPT_HASH_ENTRY_NUM "hash-entry-num"
 #define CMD_LINE_OPT_PARSE_PTYPE "parse-ptype"
@@ -548,7 +505,6 @@ static const char short_options[] =
 #define CMD_LINE_OPT_MODE "mode"
 #define CMD_LINE_OPT_EVENTQ_SYNC "eventq-sched"
 #define CMD_LINE_OPT_EVENT_ETH_RX_QUEUES "event-eth-rxqs"
-#define CMD_LINE_OPT_BURST "burst"
 enum {
 	/* long options mapped to a short option */
 
@@ -558,11 +514,6 @@ enum {
 	CMD_LINE_OPT_CONFIG_NUM,
 	CMD_LINE_OPT_ETH_DEST_NUM,
 	CMD_LINE_OPT_NO_NUMA_NUM,
-	CMD_LINE_OPT_MEM_TYPE_NUM,
-	CMD_LINE_OPT_NB_MBUFS_NUM,
-	CMD_LINE_OPT_NB_TXD_NUM,
-	CMD_LINE_OPT_NB_RXD_NUM,
-	CMD_LINE_OPT_NB_CALLS_NUM,
 	CMD_LINE_OPT_IPV6_NUM,
 	CMD_LINE_OPT_ENABLE_JUMBO_NUM,
 	CMD_LINE_OPT_HASH_ENTRY_NUM_NUM,
@@ -571,18 +522,12 @@ enum {
 	CMD_LINE_OPT_MODE_NUM,
 	CMD_LINE_OPT_EVENTQ_SYNC_NUM,
 	CMD_LINE_OPT_EVENT_ETH_RX_QUEUES_NUM,
-	CMD_LINE_OPT_BURST_NUM,
 };
 
 static const struct option lgopts[] = {
 	{CMD_LINE_OPT_CONFIG, 1, 0, CMD_LINE_OPT_CONFIG_NUM},
 	{CMD_LINE_OPT_ETH_DEST, 1, 0, CMD_LINE_OPT_ETH_DEST_NUM},
 	{CMD_LINE_OPT_NO_NUMA, 0, 0, CMD_LINE_OPT_NO_NUMA_NUM},
-	{CMD_LINE_OPT_MEM_TYPE, 1, 0, CMD_LINE_OPT_MEM_TYPE_NUM},
-	{CMD_LINE_OPT_NB_MBUFS, 1, 0, CMD_LINE_OPT_NB_MBUFS_NUM},
-	{CMD_LINE_OPT_NB_TXD, 1, 0, CMD_LINE_OPT_NB_TXD_NUM},
-	{CMD_LINE_OPT_NB_RXD, 1, 0, CMD_LINE_OPT_NB_RXD_NUM},
-	{CMD_LINE_OPT_NB_CALLS, 1, 0, CMD_LINE_OPT_NB_CALLS_NUM},
 	{CMD_LINE_OPT_IPV6, 0, 0, CMD_LINE_OPT_IPV6_NUM},
 	{CMD_LINE_OPT_ENABLE_JUMBO, 0, 0, CMD_LINE_OPT_ENABLE_JUMBO_NUM},
 	{CMD_LINE_OPT_HASH_ENTRY_NUM, 1, 0, CMD_LINE_OPT_HASH_ENTRY_NUM_NUM},
@@ -592,7 +537,6 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_EVENTQ_SYNC, 1, 0, CMD_LINE_OPT_EVENTQ_SYNC_NUM},
 	{CMD_LINE_OPT_EVENT_ETH_RX_QUEUES, 1, 0,
 					CMD_LINE_OPT_EVENT_ETH_RX_QUEUES_NUM},
-	{CMD_LINE_OPT_BURST, 1, 0, CMD_LINE_OPT_BURST_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -603,16 +547,12 @@ static const struct option lgopts[] = {
  * RTE_MAX is used to ensure that NB_MBUF never goes below a minimum
  * value of 8192
  */
-#define NB_MBUF(nports,nb_rx_queue,nb_rxd) RTE_MAX(	\
+#define NB_MBUF(nports) RTE_MAX(	\
 	(nports*nb_rx_queue*nb_rxd +		\
 	nports*nb_lcores*MAX_PKT_BURST +	\
 	nports*n_tx_queue*nb_txd +		\
 	nb_lcores*MEMPOOL_CACHE_SIZE),		\
 	(unsigned)8192)
-
-// static int NB_MBUF(nports,nb_rx_queue,nb_rxd) {
-// 	return nports * nb_rxd * nb_rx_queue * 8;
-// }
 
 /* Parse the argument given in the command line of the application */
 static int
@@ -673,33 +613,6 @@ parse_args(int argc, char **argv)
 
 		case CMD_LINE_OPT_NO_NUMA_NUM:
 			numa_on = 0;
-			break;
-
-		case CMD_LINE_OPT_MEM_TYPE_NUM:
-			if (!strcmp(optarg, "host"))
-				l3fwd_mem_type = MEM_HOST_INTERNAL_PINNED;
-			else if (!strcmp(optarg, "host-ext"))
-				l3fwd_mem_type = MEM_HOST_PINNED;
-			else if (!strcmp(optarg, "nic"))
-				l3fwd_mem_type = MEM_NIC_PINNED;
-			else if (!strcmp(optarg, "base"))
-				l3fwd_mem_type = MEM_BASE;
-			break;
-
-		case CMD_LINE_OPT_NB_MBUFS_NUM:
-			g_nb_mbufs = parse_number_or_zero(optarg);
-			break;
-
-		case CMD_LINE_OPT_NB_TXD_NUM:
-			nb_txd = parse_number_or_zero(optarg);
-			break;
-
-		case CMD_LINE_OPT_NB_RXD_NUM:
-			nb_rxd = parse_number_or_zero(optarg);
-			break;
-
-		case CMD_LINE_OPT_NB_CALLS_NUM:
-			nb_calls = parse_number_or_zero(optarg);
 			break;
 
 		case CMD_LINE_OPT_IPV6_NUM:
@@ -765,10 +678,6 @@ parse_args(int argc, char **argv)
 		case CMD_LINE_OPT_EVENT_ETH_RX_QUEUES_NUM:
 			parse_event_eth_rx_queues(optarg);
 			eth_rx_q = 1;
-			break;
-
-		case CMD_LINE_OPT_BURST_NUM:
-			g_burst = parse_number_or_zero(optarg);
 			break;
 
 		default:
@@ -838,11 +747,10 @@ init_mem(uint16_t portid, unsigned int nb_mbuf)
 {
 	struct lcore_conf *qconf;
 	int socketid;
-	unsigned lcore_id, seg_i;
+	unsigned lcore_id;
 	char s[64];
 
-	printf("init_mem port %d\n", portid);
-	for (lcore_id = 0; lcore_id < 64; lcore_id++) {
+	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
 		if (rte_lcore_is_enabled(lcore_id) == 0)
 			continue;
 
@@ -857,164 +765,28 @@ init_mem(uint16_t portid, unsigned int nb_mbuf)
 				socketid, lcore_id, NB_SOCKETS);
 		}
 
-		if (l3fwd_mem_type == MEM_BASE) {
-			if (pktmbuf_pool[lcore_id][portid][socketid][0] == NULL) {
-				snprintf(s, sizeof(s), "mbuf_pool_%d:%d:%d:%d",
-					 lcore_id, portid, socketid, 0);
-				pktmbuf_pool[lcore_id][portid][socketid][0] =
-					rte_pktmbuf_pool_create(s, nb_mbuf,
-						g_cachesize, 0,
-						RTE_MBUF_DEFAULT_BUF_SIZE,
-						socketid);
-				if (pktmbuf_pool[lcore_id][portid][socketid][0] == NULL)
-					rte_exit(EXIT_FAILURE,
-						"Cannot init mbuf pool on socket %d\n",
-						socketid);
-				printf("Allocated mbuf pool on socket %d segment %d of size %d\n",
-					socketid, 0, RTE_MBUF_DEFAULT_BUF_SIZE);
-			}
-			goto skip_mem;
-		}
-
-		/* alloc first segment for headers */
-		if (pktmbuf_pool[lcore_id][portid][socketid][0] == NULL) {
-			snprintf(s, sizeof(s), "mbuf_pool_%d:%d:%d:%d",
-				 lcore_id, portid, socketid, 0);
-			pktmbuf_pool[lcore_id][portid][socketid][0] =
+		if (pktmbuf_pool[portid][socketid] == NULL) {
+			snprintf(s, sizeof(s), "mbuf_pool_%d:%d",
+				 portid, socketid);
+			pktmbuf_pool[portid][socketid] =
 				rte_pktmbuf_pool_create(s, nb_mbuf,
-					g_cachesize, 0,
-					rx_pkt_seg_lengths[0], socketid);
-			if (pktmbuf_pool[lcore_id][portid][socketid][0] == NULL)
+					MEMPOOL_CACHE_SIZE, 0,
+					RTE_MBUF_DEFAULT_BUF_SIZE, socketid);
+			if (pktmbuf_pool[portid][socketid] == NULL)
 				rte_exit(EXIT_FAILURE,
-					"Cannot init header mbuf pool on socket %d\n",
+					"Cannot init mbuf pool on socket %d\n",
 					socketid);
 			else
-				printf("Allocated mbuf pool on socket %d segment %d of size %d\n",
-					socketid, 0, rx_pkt_seg_lengths[0]);
-		} else {
-			goto skip_mem;
-		}
-
-		/* alloc second segment for data */
-		for (seg_i = 1; seg_i < rx_pkt_nb_segs; seg_i++) {
-			struct rte_pktmbuf_extmem ext_mem[1024];
-			int ret, ext_mem_num = 1;
-
-			printf("alloc for seg %d\n", seg_i);
-			if (pktmbuf_pool[lcore_id][portid][socketid][seg_i] != NULL)
-				continue;
-
-			snprintf(s, sizeof(s), "mbuf_pool_%d:%d:%d:%d",
-				 lcore_id, portid, socketid, seg_i);
-
-			if (l3fwd_mem_type == MEM_HOST_INTERNAL_PINNED) {
-				printf("alloc internal pinned mem\n");
-				pktmbuf_pool[lcore_id][portid][socketid][seg_i] =
-					rte_pktmbuf_pool_create(s, nb_mbuf,
-						g_cachesize, 0,
-						rx_pkt_seg_lengths[seg_i], socketid);
-				if (pktmbuf_pool[lcore_id][portid][socketid][seg_i] == NULL)
-					rte_exit(EXIT_FAILURE,
-						"Cannot init internal data mbuf pool on socket %d\n",
-						socketid);
-				else
-					printf("Allocated mbuf pool on socket %d segment %d of size %d\n",
-						socketid, seg_i, rx_pkt_seg_lengths[seg_i]);
-				continue;
-			}
-
-			ext_mem[0].elt_size = rx_pkt_seg_lengths[seg_i];
-			ext_mem[0].buf_len = nb_mbuf * ext_mem[0].elt_size;
-			if (l3fwd_mem_type == MEM_HOST_PINNED) {
-host_mem_fallback:
-				printf("Alloc external pinned mem\n");
-				ext_mem[0].buf_ptr = rte_malloc_socket("extmem", ext_mem[0].buf_len, 0, socketid);
-				ext_mem[0].buf_iova = 0; // ignored in mlx5
-				ret = rte_dev_dma_map(rte_eth_devices[portid].device,
-						      ext_mem[0].buf_ptr, ext_mem[0].buf_iova,
-						      ext_mem[0].buf_len);
-				if (ret)
-					rte_exit(EXIT_FAILURE,
-						"DMA map failed type %d\n", l3fwd_mem_type);
-			} else { // MEM_NIC_PINNED
-				uint32_t totsz = 0, i = 0;
-
-				printf("Alloc nic pinned mem\n");
-				ret = rte_dev_alloc_dm(rte_eth_devices[portid].device,
-						       &ext_mem[0].buf_ptr,
-						       &ext_mem[0].buf_len);
-				if (ret || ext_mem[0].buf_len == 0) {
-					printf("[-] Failed to allocate NIC memory\n"
-					       "    Entering fallback using host memory\n");
-					/* reset ext_mem and restart with ext-host mem */
-					ext_mem[0].elt_size = rx_pkt_seg_lengths[seg_i];
-					ext_mem[0].buf_len = nb_mbuf * ext_mem[0].elt_size;
-					goto host_mem_fallback;
-				}
-				printf("[+] Allocated device memory: %p %lu %d\n",
-						       ext_mem[0].buf_ptr,
-						       ext_mem[0].buf_len,
-						       lcore_id);
-
-
-				// if (lcore_id == 0) {
-				// 	printf("[+] Registering extmem\n");
-				// 	ext_mem[0].buf_iova = RTE_BAD_IOVA;
-				// 	ret = rte_extmem_register(ext_mem[0].buf_ptr,
-				// 			    ext_mem[0].buf_len, NULL,
-				// 			    ext_mem[0].buf_iova, 4096);
-				// 	if (ret)
-				// 		rte_exit(EXIT_FAILURE,
-				// 			"Failed to register NIC memory %p %d\n",
-				// 			ext_mem[0].buf_ptr, ext_mem[0].buf_len);
-				// }
-
-				ret = rte_dev_get_dma_map(rte_eth_devices[portid].device,
-							  ext_mem[0].buf_ptr, ext_mem[0].buf_iova,
-							  ext_mem[0].buf_len);
-				if (ret)
-					rte_exit(EXIT_FAILURE,
-						 "NIC DMA map failed\n");
-
-				/* This fills external memory with repeated
-				 * instances of NIC memory to overcome the
-				 * limitation on NIC memory size
-				 */
-				totsz = ext_mem[0].buf_len / ext_mem[0].elt_size;
-				while (totsz < nb_mbuf) {
-					ext_mem[++i] = ext_mem[0];
-					totsz += (ext_mem[i].buf_len / ext_mem[i].elt_size);
-				}
-				ext_mem_num = i + 1;
-				printf("%p %lu\n", ext_mem[1].buf_ptr, ext_mem[1].buf_len);
-			}
-
-			pktmbuf_pool[lcore_id][portid][socketid][seg_i] =
-				rte_pktmbuf_pool_create_extbuf(s, nb_mbuf,
-							       g_cachesize, 0,
-							       ext_mem[0].elt_size,
-							       socketid, &ext_mem[0],
-							       ext_mem_num);
-
-				// rte_pktmbuf_pool_create(s, nb_mbuf,
-				// 	g_cachesize, 0,
-				// 	rx_pkt_seg_lengths[seg_i], socketid);
-			if (pktmbuf_pool[lcore_id][portid][socketid][seg_i] == NULL)
-				rte_exit(EXIT_FAILURE,
-					"Cannot init external data mbuf pool on socket %d\n",
+				printf("Allocated mbuf pool on socket %d\n",
 					socketid);
-			else
-				printf("Allocated mbuf pool on socket %d segment %d of size %d\n",
-					socketid, seg_i, rx_pkt_seg_lengths[seg_i]);
-		}
 
-skip_mem:
-		/* Setup either LPM or EM(f.e Hash). But, only once per
-		 * available socket.
-		 */
-		if (!lkp_per_socket[socketid]) {
-			l3fwd_lkp.setup(socketid);
-			lkp_per_socket[socketid] = 1;
+			/* Setup either LPM or EM(f.e Hash). But, only once per
+			 * available socket.
+			 */
+			if (!lkp_per_socket[socketid]) {
+				l3fwd_lkp.setup(socketid);
+				lkp_per_socket[socketid] = 1;
+			}
 		}
 		qconf = &lcore_conf[lcore_id];
 		qconf->ipv4_lookup_struct =
@@ -1151,10 +923,6 @@ l3fwd_poll_resource_setup(void)
 
 	nb_lcores = rte_lcore_count();
 
-	if (l3fwd_mem_type != MEM_BASE) {
-		nb_rxd *= 2;
-		nb_txd *= 2;
-	}
 	/* initialize all ports */
 	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_conf local_port_conf = port_conf;
@@ -1229,38 +997,23 @@ l3fwd_poll_resource_setup(void)
 		rte_ether_addr_copy(&ports_eth_addr[portid],
 			(struct rte_ether_addr *)(val_eth + portid) + 1);
 
+		/* init memory */
+		if (!per_port_pool) {
+			/* portid = 0; this is *not* signifying the first port,
+			 * rather, it signifies that portid is ignored.
+			 */
+			ret = init_mem(0, NB_MBUF(nb_ports));
+		} else {
+			ret = init_mem(portid, NB_MBUF(1));
+		}
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE, "init_mem failed\n");
+
 		/* init one TX queue per couple (lcore,port) */
 		queueid = 0;
 		for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
 			if (rte_lcore_is_enabled(lcore_id) == 0)
 				continue;
-
-			printf("\n");
-			/* init memory */
-			if (g_nb_mbufs) {
-				if (g_nb_mbufs < nb_txd || g_nb_mbufs < nb_rxd)
-					nb_rxd = g_nb_mbufs;
-				if (g_nb_mbufs <= MEMPOOL_CACHE_SIZE)
-					g_cachesize = g_nb_mbufs / 2;
-				printf("Using %d MBUFs %d cache\n", g_nb_mbufs, g_cachesize);
-				if (!per_port_pool)
-					ret = init_mem(0, g_nb_mbufs);
-				else
-					ret = init_mem(portid, g_nb_mbufs);
-			} else {
-				if (!per_port_pool) {
-					/* portid = 0; this is *not* signifying the first port,
-					 * rather, it signifies that portid is ignored.
-					 */
-					printf("Using default %d MBUFs\n", NB_MBUF(nb_ports, nb_rx_queue, nb_rxd));
-					ret = init_mem(0, NB_MBUF(nb_ports,nb_rx_queue, nb_rxd));
-				} else {
-					printf("Using default per-port %d MBUFs\n", NB_MBUF(1,nb_rx_queue,nb_rxd));
-					ret = init_mem(portid, NB_MBUF(1,nb_rx_queue, nb_rxd));
-				}
-			}
-			if (ret < 0)
-				rte_exit(EXIT_FAILURE, "init_mem failed\n");
 
 			if (numa_on)
 				socketid =
@@ -1286,7 +1039,6 @@ l3fwd_poll_resource_setup(void)
 
 			qconf->tx_port_id[qconf->n_tx_port] = portid;
 			qconf->n_tx_port++;
-			qconf->burst = g_burst; // replace MAX_PKT_BURST
 		}
 		printf("\n");
 	}
@@ -1300,8 +1052,6 @@ l3fwd_poll_resource_setup(void)
 		/* init RX queues */
 		for(queue = 0; queue < qconf->n_rx_queue; ++queue) {
 			struct rte_eth_rxconf rxq_conf;
-			struct rte_eth_rxseg rx_seg[MAX_SEGS_BUFFER_SPLIT] = {};
-			unsigned seg_i;
 
 			portid = qconf->rx_queue_list[queue].port_id;
 			queueid = qconf->rx_queue_list[queue].queue_id;
@@ -1323,40 +1073,16 @@ l3fwd_poll_resource_setup(void)
 
 			rxq_conf = dev_info.default_rxconf;
 			rxq_conf.offloads = port_conf.rxmode.offloads;
-			for (seg_i = 0; seg_i < rx_pkt_nb_segs; seg_i++) {
-				if (seg_i)
-					rx_seg[seg_i].length = rx_pkt_seg_lengths[seg_i];
-				else
-					rx_seg[0].length = rx_pkt_seg_lengths[seg_i] - RTE_PKTMBUF_HEADROOM;
-
-				if (!per_port_pool)
-					rx_seg[seg_i].mp = pktmbuf_pool[lcore_id][0][socketid][seg_i];
-				else
-					rx_seg[seg_i].mp = pktmbuf_pool[lcore_id][portid][socketid][seg_i];
-			}
-
-			if (l3fwd_mem_type == MEM_BASE) {
-				//rxq_conf.offloads &= ~(DEV_RX_OFFLOAD_BUFFER_SPLIT | DEV_RX_OFFLOAD_SCATTER);
-				if (!per_port_pool)
-					ret = rte_eth_rx_queue_setup(portid, queueid, nb_rxd,
-							socketid, &rxq_conf,
-							pktmbuf_pool[lcore_id][0][socketid][0]);
-				else
-					ret = rte_eth_rx_queue_setup(portid, queueid, nb_rxd,
-							socketid, &rxq_conf,
-							pktmbuf_pool[lcore_id][portid][socketid][0]);
-			} else {
-				if (!per_port_pool)
-					ret = rte_eth_rx_queue_setup_ex(portid, queueid,
-							nb_rxd, socketid,
-							&rxq_conf,
-							rx_seg, rx_pkt_nb_segs);
-				else
-					ret = rte_eth_rx_queue_setup_ex(portid, queueid,
-							nb_rxd, socketid,
-							&rxq_conf,
-							rx_seg, rx_pkt_nb_segs);
-			}
+			if (!per_port_pool)
+				ret = rte_eth_rx_queue_setup(portid, queueid,
+						nb_rxd, socketid,
+						&rxq_conf,
+						pktmbuf_pool[0][socketid]);
+			else
+				ret = rte_eth_rx_queue_setup(portid, queueid,
+						nb_rxd, socketid,
+						&rxq_conf,
+						pktmbuf_pool[portid][socketid]);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE,
 				"rte_eth_rx_queue_setup: err=%d, port=%d\n",
@@ -1543,7 +1269,6 @@ main(int argc, char **argv)
 			if (prepare_ptype_parser(portid, queueid) == 0)
 				rte_exit(EXIT_FAILURE, "ptype check fails\n");
 		}
-		qconf->nb_calls = nb_calls;
 	}
 
 	check_all_ports_link_status(enabled_port_mask);

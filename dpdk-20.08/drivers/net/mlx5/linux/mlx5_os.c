@@ -2198,12 +2198,10 @@ mlx5_os_read_dev_stat(struct mlx5_priv *priv, const char *ctr_name,
  */
 void
 mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb,
-		      mlx5_dereg_mr_t *dereg_mr_cb,
-		      mlx5_reg_dm_mr_t *reg_dm_mr_cb)
+		      mlx5_dereg_mr_t *dereg_mr_cb)
 {
 	*reg_mr_cb = mlx5_verbs_ops.reg_mr;
 	*dereg_mr_cb = mlx5_verbs_ops.dereg_mr;
-	*reg_dm_mr_cb = mlx5_verbs_ops.reg_dm_mr;
 }
 
 /**
@@ -2319,22 +2317,6 @@ mlx5_os_set_allmulti(struct rte_eth_dev *dev, int enable)
 				mlx5_ifindex(dev), !!enable);
 }
 
-int
-mlx5_memcpy_to_dm(struct rte_eth_dev *dev, void *src, int off, size_t len)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_dev_ctx_shared *sh = priv->sh;
-	return ibv_memcpy_to_dm(sh->dm, off, src, len);
-}
-
-int
-mlx5_memcpy_from_dm(struct rte_eth_dev *dev, void *dst, int off, size_t len)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_dev_ctx_shared *sh = priv->sh;
-	return ibv_memcpy_from_dm(dst, sh->dm, off, len);
-}
-
 const struct eth_dev_ops mlx5_os_dev_ops = {
 	.dev_configure = mlx5_dev_configure,
 	.dev_start = mlx5_dev_start,
@@ -2358,7 +2340,6 @@ const struct eth_dev_ops mlx5_os_dev_ops = {
 	.dev_supported_ptypes_get = mlx5_dev_supported_ptypes_get,
 	.vlan_filter_set = mlx5_vlan_filter_set,
 	.rx_queue_setup = mlx5_rx_queue_setup,
-	.rx_queue_setup_ex = mlx5_rx_queue_setup_ex,
 	.rx_hairpin_queue_setup = mlx5_rx_hairpin_queue_setup,
 	.tx_queue_setup = mlx5_tx_queue_setup,
 	.tx_hairpin_queue_setup = mlx5_tx_hairpin_queue_setup,
@@ -2384,10 +2365,8 @@ const struct eth_dev_ops mlx5_os_dev_ops = {
 	.filter_ctrl = mlx5_dev_filter_ctrl,
 	.rx_descriptor_status = mlx5_rx_descriptor_status,
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
-	.tx_descriptors_used = mlx5_tx_descriptors_used,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
-	.txq_set_post_send_cb = mlx5_txq_set_post_send_cb,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.rx_queue_count = mlx5_rx_queue_count,
@@ -2399,8 +2378,6 @@ const struct eth_dev_ops mlx5_os_dev_ops = {
 	.get_module_eeprom = mlx5_get_module_eeprom,
 	.hairpin_cap_get = mlx5_hairpin_cap_get,
 	.mtr_ops_get = mlx5_flow_meter_ops_get,
-	.memcpy_to_dm = mlx5_memcpy_to_dm,
-	.memcpy_from_dm = mlx5_memcpy_from_dm,
 };
 
 /* Available operations from secondary process. */
@@ -2421,7 +2398,6 @@ const struct eth_dev_ops mlx5_os_dev_sec_ops = {
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
-	.txq_set_post_send_cb = mlx5_txq_set_post_send_cb,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.get_module_info = mlx5_get_module_info,
@@ -2452,7 +2428,6 @@ const struct eth_dev_ops mlx5_os_dev_ops_isolate = {
 	.dev_supported_ptypes_get = mlx5_dev_supported_ptypes_get,
 	.vlan_filter_set = mlx5_vlan_filter_set,
 	.rx_queue_setup = mlx5_rx_queue_setup,
-	.rx_queue_setup_ex = mlx5_rx_queue_setup_ex,
 	.rx_hairpin_queue_setup = mlx5_rx_hairpin_queue_setup,
 	.tx_queue_setup = mlx5_tx_queue_setup,
 	.tx_hairpin_queue_setup = mlx5_tx_hairpin_queue_setup,
@@ -2476,7 +2451,6 @@ const struct eth_dev_ops mlx5_os_dev_ops_isolate = {
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
-	.txq_set_post_send_cb = mlx5_txq_set_post_send_cb,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.rx_queue_intr_enable = mlx5_rx_intr_enable,

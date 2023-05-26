@@ -47,7 +47,6 @@ endif
 default_cflags = machine_args
 default_cflags += ['-DALLOW_EXPERIMENTAL_API']
 default_cflags += ['-DALLOW_INTERNAL_API']
-default_cflags += ['-Wno-error=misleading-indentation']
 
 if cc.has_argument('-Wno-format-truncation')
 	default_cflags += '-Wno-format-truncation'

@@ -105,9 +105,7 @@ usage(char* progname)
 	       "(flag: 1 for RX; 2 for TX; 3 for RX and TX).\n");
 	printf("  --socket-num=N: set socket from which all memory is allocated "
 	       "in NUMA mode.\n");
-	printf("  --mbuf-size=N,[N1[,..Nn]: set the data size of mbuf to "
-	       "N bytes. If multiple numbers are specified the extra pools "
-	       "will be created to receive with packet split features\n");
+	printf("  --mbuf-size=N: set the data size of mbuf to N bytes.\n");
 	printf("  --total-num-mbufs=N: set the number of mbufs to be allocated "
 	       "in mbuf pools.\n");
 	printf("  --max-pkt-len=N: set the maximum size of packet to N bytes.\n");
@@ -181,7 +179,6 @@ usage(char* progname)
 	       "(0 <= mapping <= %d).\n", RTE_ETHDEV_QUEUE_STAT_CNTRS - 1);
 	printf("  --no-flush-rx: Don't flush RX streams before forwarding."
 	       " Used mainly with PCAP drivers.\n");
-	printf("  --rxpkts=X[,Y]*: set RX segment sizes to split.\n");
 	printf("  --txpkts=X[,Y]*: set TX segment sizes"
 		" or total packet length.\n");
 	printf("  --txonly-multi-flow: generate multiple flows in txonly mode\n");
@@ -656,7 +653,6 @@ launch_args_parse(int argc, char** argv)
 		{ "no-flush-rx",	0, 0, 0 },
 		{ "flow-isolate-all",	        0, 0, 0 },
 		{ "txpkts",			1, 0, 0 },
-		{ "rxpkts",			1, 0, 0 },
 		{ "txonly-multi-flow",		0, 0, 0 },
 		{ "disable-link-check",		0, 0, 0 },
 		{ "disable-device-start",	0, 0, 0 },
@@ -885,22 +881,12 @@ launch_args_parse(int argc, char** argv)
 				}
 			}
 			if (!strcmp(lgopts[opt_idx].name, "mbuf-size")) {
-				unsigned int mb_sz[MAX_SEGS_BUFFER_SPLIT];
-				unsigned int nb_segs, i;
-
-				nb_segs = parse_item_list(optarg, "mbuf-size",
-					MAX_SEGS_BUFFER_SPLIT, mb_sz, 0);
-				if (nb_segs <= 0)
+				n = atoi(optarg);
+				if (n > 0 && n <= 0xFFFF)
+					mbuf_data_size = (uint16_t) n;
+				else
 					rte_exit(EXIT_FAILURE,
-						 "bad mbuf-size\n");
-				for (i = 0; i < nb_segs; i++) {
-					if (mb_sz[i] <= 0 || mb_sz[i] > 0xFFFF)
-						rte_exit(EXIT_FAILURE,
-							 "mbuf-size should be "
-							 "> 0 and < 65536\n");
-					mbuf_data_size[i] = (uint16_t) mb_sz[i];
-				}
-				mbuf_data_size_n = nb_segs;
+						 "mbuf-size should be > 0 and < 65536\n");
 			}
 			if (!strcmp(lgopts[opt_idx].name, "total-num-mbufs")) {
 				n = atoi(optarg);
@@ -1258,19 +1244,6 @@ launch_args_parse(int argc, char** argv)
 					rte_exit(EXIT_FAILURE,
 						 "invalid RX queue statistics mapping config entered\n");
 				}
-			}
-			if (!strcmp(lgopts[opt_idx].name, "rxpkts")) {
-				unsigned int seg_len[MAX_SEGS_BUFFER_SPLIT];
-				unsigned int nb_segs;
-
-				nb_segs = parse_item_list
-					(optarg, "rxpkt segments",
-					 MAX_SEGS_BUFFER_SPLIT,
-					 seg_len, 0);
-				if (nb_segs > 0)
-					set_rx_pkt_segments(seg_len, nb_segs);
-				else
-					rte_exit(EXIT_FAILURE, "bad rxpkts\n");
 			}
 			if (!strcmp(lgopts[opt_idx].name, "txpkts")) {
 				unsigned seg_lengths[RTE_MAX_SEGS_PER_PKT];

@@ -180,7 +180,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show (rxq|txq) info (port_id) (queue_id)\n"
 			"    Display information for configured RX/TX queue.\n\n"
 
-			"show config (rxtx|cores|fwd|rxpkts|txpkts)\n"
+			"show config (rxtx|cores|fwd|txpkts)\n"
 			"    Display the given configuration.\n\n"
 
 			"read rxd (port_id) (queue_id) (rxd_id)\n"
@@ -284,12 +284,6 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"set burst tx delay (microseconds) retry (num)\n"
 			"    Set the transmit delay time and number of retries,"
 			" effective when retry is enabled.\n\n"
-
-			"set rxpkts (x[,y]*)\n"
-			"    Set the length of each segment to scatter"
-			" packets on receiving if split feature is engaged."
-			" Affects only the queues configured with split"
-			" offloads.\n\n"
 
 			"set txpkts (x[,y]*)\n"
 			"    Set the length of each segment of TXONLY"
@@ -870,16 +864,16 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port config <port_id> rx_offload vlan_strip|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
 			"outer_ipv4_cksum|macsec_strip|header_split|"
-			"vlan_filter|vlan_extend|jumbo_frame|scatter|"
-			"buffer_split|timestamp|security|keep_crc on|off\n"
+			"vlan_filter|vlan_extend|jumbo_frame|"
+			"scatter|timestamp|security|keep_crc on|off\n"
 			"     Enable or disable a per port Rx offloading"
 			" on all Rx queues of a port\n\n"
 
 			"port (port_id) rxq (queue_id) rx_offload vlan_strip|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
 			"outer_ipv4_cksum|macsec_strip|header_split|"
-			"vlan_filter|vlan_extend|jumbo_frame|scatter|"
-			"buffer_split|timestamp|security|keep_crc on|off\n"
+			"vlan_filter|vlan_extend|jumbo_frame|"
+			"scatter|timestamp|security|keep_crc on|off\n"
 			"    Enable or disable a per queue Rx offloading"
 			" only on a specific Rx queue\n\n"
 
@@ -2878,7 +2872,7 @@ cmd_setup_rxtx_queue_parsed(
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
 			socket_id = port->socket_id;
 
-		mp = mbuf_pool_find(socket_id, 0);
+		mp = mbuf_pool_find(socket_id);
 		if (mp == NULL) {
 			printf("Failed to setup RX queue: "
 				"No mempool allocation"
@@ -2886,12 +2880,12 @@ cmd_setup_rxtx_queue_parsed(
 				rxring_numa[res->portid]);
 			return;
 		}
-		ret = rx_queue_setup(res->portid,
-				     res->qid,
-				     port->nb_rx_desc[res->qid],
-				     socket_id,
-				     &port->rx_conf[res->qid],
-				     mp);
+		ret = rte_eth_rx_queue_setup(res->portid,
+					     res->qid,
+					     port->nb_rx_desc[res->qid],
+					     socket_id,
+					     &port->rx_conf[res->qid],
+					     mp);
 		if (ret)
 			printf("Failed to setup RX queue\n");
 	} else {
@@ -3810,53 +3804,6 @@ cmdline_parse_inst_t cmd_set_numbers = {
 		NULL,
 	},
 };
-
-/* *** SET SEGMENT LENGTHS OF RX PACKETS SPLIT *** */
-
-struct cmd_set_rxpkts_result {
-	cmdline_fixed_string_t cmd_keyword;
-	cmdline_fixed_string_t rxpkts;
-	cmdline_fixed_string_t seg_lengths;
-};
-
-static void
-cmd_set_rxpkts_parsed(void *parsed_result,
-		      __rte_unused struct cmdline *cl,
-		      __rte_unused void *data)
-{
-	struct cmd_set_rxpkts_result *res;
-	unsigned int seg_lengths[MAX_SEGS_BUFFER_SPLIT];
-	unsigned int nb_segs;
-
-	res = parsed_result;
-	nb_segs = parse_item_list(res->seg_lengths, "segment lengths",
-				  MAX_SEGS_BUFFER_SPLIT, seg_lengths, 0);
-	if (nb_segs > 0)
-		set_rx_pkt_segments(seg_lengths, nb_segs);
-}
-
-cmdline_parse_token_string_t cmd_set_rxpkts_keyword =
-TOKEN_STRING_INITIALIZER(struct cmd_set_rxpkts_result,
-			 cmd_keyword, "set");
-cmdline_parse_token_string_t cmd_set_rxpkts_name =
-TOKEN_STRING_INITIALIZER(struct cmd_set_rxpkts_result,
-			 rxpkts, "rxpkts");
-cmdline_parse_token_string_t cmd_set_rxpkts_lengths =
-TOKEN_STRING_INITIALIZER(struct cmd_set_rxpkts_result,
-			 seg_lengths, NULL);
-
-cmdline_parse_inst_t cmd_set_rxpkts = {
-	.f = cmd_set_rxpkts_parsed,
-	.data = NULL,
-	.help_str = "set rxpkts <len0[,len1]*>",
-	.tokens = {
-		(void *)&cmd_set_rxpkts_keyword,
-		(void *)&cmd_set_rxpkts_name,
-		(void *)&cmd_set_rxpkts_lengths,
-		NULL,
-	},
-};
-
 
 /* *** SET LOG LEVEL CONFIGURATION *** */
 
@@ -7528,8 +7475,6 @@ static void cmd_showcfg_parsed(void *parsed_result,
 		pkt_fwd_config_display(&cur_fwd_config);
 	else if (!strcmp(res->what, "txpkts"))
 		show_tx_pkt_segments();
-	else if (!strcmp(res->what, "rxpkts"))
-		show_rx_pkt_segments();
 	else if (!strcmp(res->what, "txtimes"))
 		show_tx_pkt_times();
 }
@@ -7540,12 +7485,12 @@ cmdline_parse_token_string_t cmd_showcfg_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showcfg_result, cfg, "config");
 cmdline_parse_token_string_t cmd_showcfg_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showcfg_result, what,
-				 "rxtx#cores#fwd#rxpkts#txpkts#txtimes");
+				 "rxtx#cores#fwd#txpkts#txtimes");
 
 cmdline_parse_inst_t cmd_showcfg = {
 	.f = cmd_showcfg_parsed,
 	.data = NULL,
-	.help_str = "show config rxtx|cores|fwd|rxpkts|txpkts|txtimes",
+	.help_str = "show config rxtx|cores|fwd|txpkts|txtimes",
 	.tokens = {
 		(void *)&cmd_showcfg_show,
 		(void *)&cmd_showcfg_port,
@@ -18299,8 +18244,7 @@ cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_offload =
 		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "header_split#vlan_filter#vlan_extend#jumbo_frame#"
-			   "scatter#buffer_split#timestamp#security#"
-			   "keep_crc#rss_hash");
+			   "scatter#timestamp#security#keep_crc#rss_hash");
 cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_rx_offload_result,
@@ -18380,8 +18324,8 @@ cmdline_parse_inst_t cmd_config_per_port_rx_offload = {
 	.help_str = "port config <port_id> rx_offload vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|header_split|vlan_filter|vlan_extend|"
-		    "jumbo_frame|scatter|buffer_split|timestamp|security|"
-		    "keep_crc|rss_hash on|off",
+		    "jumbo_frame|scatter|timestamp|security|keep_crc|rss_hash "
+		    "on|off",
 	.tokens = {
 		(void *)&cmd_config_per_port_rx_offload_result_port,
 		(void *)&cmd_config_per_port_rx_offload_result_config,
@@ -18430,7 +18374,7 @@ cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_offload =
 		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "header_split#vlan_filter#vlan_extend#jumbo_frame#"
-			   "scatter#buffer_split#timestamp#security#keep_crc");
+			   "scatter#timestamp#security#keep_crc");
 cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_queue_rx_offload_result,
@@ -18486,8 +18430,8 @@ cmdline_parse_inst_t cmd_config_per_queue_rx_offload = {
 		    "vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|header_split|vlan_filter|vlan_extend|"
-		    "jumbo_frame|scatter|buffer_split|timestamp|security|"
-		    "keep_crc on|off",
+		    "jumbo_frame|scatter|timestamp|security|keep_crc "
+		    "on|off",
 	.tokens = {
 		(void *)&cmd_config_per_queue_rx_offload_result_port,
 		(void *)&cmd_config_per_queue_rx_offload_result_port_id,
@@ -19469,7 +19413,6 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_set_numbers,
 	(cmdline_parse_inst_t *)&cmd_set_log,
 	(cmdline_parse_inst_t *)&cmd_set_txpkts,
-	(cmdline_parse_inst_t *)&cmd_set_rxpkts,
 	(cmdline_parse_inst_t *)&cmd_set_txsplit,
 	(cmdline_parse_inst_t *)&cmd_set_txtimes,
 	(cmdline_parse_inst_t *)&cmd_set_fwd_list,

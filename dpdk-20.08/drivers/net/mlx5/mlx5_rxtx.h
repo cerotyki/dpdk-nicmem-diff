@@ -150,9 +150,6 @@ struct mlx5_rxq_data {
 	rte_spinlock_t *uar_lock_cq;
 	/* CQ (UAR) access lock required for 32bit implementations */
 #endif
-	struct rte_eth_rxseg rxseg[MLX5_MAX_RXQ_NSEG];
-	/* Buffer split segment descriptions - sizes, offsets, pools. */
-	uint32_t rxseg_n; /* Number of split segment descriptions. */
 	uint32_t tunnel; /* Tunnel information. */
 	uint64_t flow_meta_mask;
 	int32_t flow_meta_offset;
@@ -391,8 +388,6 @@ struct mlx5_txq_ctrl {
 	void *bf_reg; /* BlueFlame register from Verbs. */
 	uint16_t dump_file_n; /* Number of dump files. */
 	struct rte_eth_hairpin_conf hairpin_conf; /* Hairpin configuration. */
-	rte_post_tx_callback_fn fn; /* Callback for tx completion */
-	void *user_param; /* Callback parameter for tx completion */
 	struct mlx5_txq_data txq; /* Data path structure. */
 	/* Must be the last field in the structure, contains elts[]. */
 };
@@ -416,10 +411,6 @@ int mlx5_rx_queue_stop_primary(struct rte_eth_dev *dev, uint16_t queue_id);
 int mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 			unsigned int socket, const struct rte_eth_rxconf *conf,
 			struct rte_mempool *mp);
-int mlx5_rx_queue_setup_ex
-	(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
-	 unsigned int socket, const struct rte_eth_rxconf *conf,
-	 const struct rte_eth_rxseg *rx_seg, uint16_t n_seg);
 int mlx5_rx_hairpin_queue_setup
 	(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
@@ -434,8 +425,7 @@ int mlx5_rxq_obj_verify(struct rte_eth_dev *dev);
 struct mlx5_rxq_ctrl *mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx,
 				   uint16_t desc, unsigned int socket,
 				   const struct rte_eth_rxconf *conf,
-				   const struct rte_eth_rxseg *rx_seg,
-				   uint16_t n_seg);
+				   struct rte_mempool *mp);
 struct mlx5_rxq_ctrl *mlx5_rxq_hairpin_new
 	(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
@@ -519,7 +509,6 @@ uint16_t removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts,
 			  uint16_t pkts_n);
 int mlx5_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset);
-int mlx5_tx_descriptors_used(void *tx_queue);
 uint32_t mlx5_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 void mlx5_dump_debug_information(const char *path, const char *title,
 				 const void *buf, unsigned int len);
@@ -529,8 +518,6 @@ void mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		       struct rte_eth_rxq_info *qinfo);
 void mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		       struct rte_eth_txq_info *qinfo);
-int mlx5_txq_set_post_send_cb(struct rte_eth_dev *dev, uint16_t tx_queue_id,
-			  rte_post_tx_callback_fn fn, void *user_param);
 int mlx5_rx_burst_mode_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 			   struct rte_eth_burst_mode *mode);
 int mlx5_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
@@ -549,10 +536,6 @@ uint32_t mlx5_rx_addr2mr_bh(struct mlx5_rxq_data *rxq, uintptr_t addr);
 uint32_t mlx5_tx_mb2mr_bh(struct mlx5_txq_data *txq, struct rte_mbuf *mb);
 uint32_t mlx5_tx_update_ext_mp(struct mlx5_txq_data *txq, uintptr_t addr,
 			       struct rte_mempool *mp);
-int mlx5_alloc_dm(struct rte_pci_device *pdev, void **addr,
-		  size_t *len);
-int mlx5_get_dma_map(struct rte_pci_device *pdev, void *addr, uint64_t iova,
-		     size_t len);
 int mlx5_dma_map(struct rte_pci_device *pdev, void *addr, uint64_t iova,
 		 size_t len);
 int mlx5_dma_unmap(struct rte_pci_device *pdev, void *addr, uint64_t iova,

@@ -864,7 +864,6 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
 			.byte_count = rte_cpu_to_be_32(byte_count),
 			.lkey = mlx5_rx_addr2mr(rxq, addr),
 		};
-		//printf("%lx %x %x\n", addr, byte_count, scat->lkey);
 	}
 	rxq->consumed_strd = 0;
 	rxq->decompressed = 0;
@@ -1431,8 +1430,7 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		rte_prefetch0(seg);
 		rte_prefetch0(cqe);
 		rte_prefetch0(wqe);
-		/* Allocate the buf from the same pool. */
-		rep = rte_mbuf_raw_alloc(seg->pool);
+		rep = rte_mbuf_raw_alloc(rxq->mp);
 		if (unlikely(rep == NULL)) {
 			++rxq->stats.rx_nombuf;
 			if (!pkt) {
@@ -2107,8 +2105,6 @@ mlx5_tx_free_elts(struct mlx5_txq_data *__rte_restrict txq,
 		  uint16_t tail,
 		  unsigned int olx __rte_unused)
 {
-	struct mlx5_txq_ctrl *txq_ctrl =
-		container_of(txq, struct mlx5_txq_ctrl, txq);
 	uint16_t n_elts = tail - txq->elts_tail;
 
 	MLX5_ASSERT(n_elts);
@@ -2124,9 +2120,6 @@ mlx5_tx_free_elts(struct mlx5_txq_data *__rte_restrict txq,
 		part = RTE_MIN(part, n_elts);
 		MLX5_ASSERT(part);
 		MLX5_ASSERT(part <= txq->elts_s);
-		if (txq_ctrl->fn)
-			txq_ctrl->fn(&txq->elts[txq->elts_tail & txq->elts_m],
-				     part, txq_ctrl->user_param);
 		mlx5_tx_free_mbuf(&txq->elts[txq->elts_tail & txq->elts_m],
 				  part, olx);
 		txq->elts_tail += part;
@@ -2362,16 +2355,6 @@ mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset)
 	if (offset < used)
 		return RTE_ETH_TX_DESC_FULL;
 	return RTE_ETH_TX_DESC_DONE;
-}
-
-int
-mlx5_tx_descriptors_used(void *tx_queue)
-{
-	struct mlx5_txq_data *__rte_restrict txq = tx_queue;
-	uint16_t used;
-
-	used = txq->elts_head - txq->elts_tail;
-	return used;
 }
 
 /**
@@ -2942,7 +2925,6 @@ mlx5_tx_dseg_ptr(struct mlx5_txq_data *__rte_restrict txq,
 	dseg->bcount = rte_cpu_to_be_32(len);
 	dseg->lkey = mlx5_tx_mb2mr(txq, loc->mbuf);
 	dseg->pbuf = rte_cpu_to_be_64((uintptr_t)buf);
-	//printf("%s %p %x %x\n", __func__, dseg->pbuf, dseg->bcount, dseg->lkey);
 }
 
 /**
@@ -5942,24 +5924,6 @@ mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	qinfo->conf.tx_deferred_start = txq_ctrl ? 0 : 1;
 	qinfo->conf.offloads = dev->data->dev_conf.txmode.offloads;
 }
-
-int
-mlx5_txq_set_post_send_cb(struct rte_eth_dev *dev, uint16_t tx_queue_id,
-			  rte_post_tx_callback_fn fn, void *user_param)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_txq_data *txq = (*priv->txqs)[tx_queue_id];
-	struct mlx5_txq_ctrl *txq_ctrl =
-			container_of(txq, struct mlx5_txq_ctrl, txq);
-
-	if (!txq)
-		return -EINVAL;
-
-	txq_ctrl->fn = fn;
-	txq_ctrl->user_param = user_param;
-	return 0;
-}
-
 
 /**
  * DPDK callback to get the TX packet burst mode information
